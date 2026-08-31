@@ -1,0 +1,4 @@
+/toy
+/dist/
+*.test
+.DS_Store
