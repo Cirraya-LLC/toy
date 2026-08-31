@@ -14,13 +14,17 @@ import (
 const Version = 1
 
 type Entry struct {
-	ID       string   `json:"id"`     // "Derrity/tinyserve"
-	Source   string   `json:"source"` // "github:Derrity/tinyserve" —— 真相永远是这个
-	Desc     string   `json:"desc"`
-	Tags     []string `json:"tags,omitempty"`
-	Key      string   `json:"key,omitempty"` // 作者公钥 hex，认领了才有
-	Stars    int      `json:"stars,omitempty"`
-	Installs int      `json:"installs,omitempty"`
+	ID     string   `json:"id"`     // "Derrity/tinyserve"
+	Source string   `json:"source"` // "github:Derrity/tinyserve" —— 真相永远是这个
+	Desc   string   `json:"desc"`
+	Tags   []string `json:"tags,omitempty"`
+	Key    string   `json:"key,omitempty"` // 作者公钥 hex，认领了才有
+	// Sig 是作者对 id + source + 那一份 toy.toml 原文的签名（base64），
+	// 由 `toy publish` 生成。**有 key 没 sig 等于没签名**：一把谁都能抄进来的
+	// 公钥证明不了任何事，客户端只在验过这个签名之后才敢打「✓ 已签名」（铁律 8）。
+	Sig      string `json:"sig,omitempty"`
+	Stars    int    `json:"stars,omitempty"`
+	Installs int    `json:"installs,omitempty"`
 }
 
 type Index struct {
@@ -56,11 +60,13 @@ func Load(data []byte, name string) (*Index, int, error) {
 		// 同一个 ID 出现两次的索引是有歧义的：Find 只看得到第一条，
 		// Remove 删掉第一条之后还会返回 true 而那个 ID 仍在索引里
 		// （「删了」是句假话）。第二条起一律当坏记录跳过并计数。
-		if seen[e.ID] {
+		// 按 foldID 比：Derrity/tinyserve 和 derrity/tinyserve 是同一个仓库，
+		// 留着两条等于把上面那个歧义原样保留下来。
+		if seen[foldID(e.ID)] {
 			skipped++
 			continue
 		}
-		seen[e.ID] = true
+		seen[foldID(e.ID)] = true
 		out.Packages = append(out.Packages, e)
 	}
 	return out, skipped, nil
@@ -107,9 +113,19 @@ func (i *Index) Marshal() ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
+// foldID 是 ID 的比较形式。GitHub / GitLab 的 owner 和 repo 本来就是大小写
+// 不敏感的，所以 `toy install derrity/tinyserve` 必须找得到索引里的
+// Derrity/tinyserve —— 否则用户拿到的是一句「查不到这个包」，而包就在那儿。
+//
+// 折叠只发生在比较这一侧：ref 那边必须原样保留大小写，raw URL 和 release
+// 下载地址是按原样拼的，小写化会拼出 404。
+func foldID(id string) string { return strings.ToLower(id) }
+
+// Find 按 ID 找条目，大小写不敏感（见 foldID）。
 func (i *Index) Find(id string) (Entry, bool) {
+	want := foldID(id)
 	for _, e := range i.Packages {
-		if e.ID == id {
+		if foldID(e.ID) == want {
 			return e, true
 		}
 	}
@@ -119,7 +135,7 @@ func (i *Index) Find(id string) (Entry, bool) {
 // Upsert 按 ID 插入或替换，保持 Packages 按 ID 排序（这样索引文件的 diff 才好读）。
 func (i *Index) Upsert(e Entry) {
 	for n := range i.Packages {
-		if i.Packages[n].ID == e.ID {
+		if foldID(i.Packages[n].ID) == foldID(e.ID) {
 			i.Packages[n] = e
 			return // 原地替换，位置不变，排序也就不变
 		}
@@ -129,8 +145,9 @@ func (i *Index) Upsert(e Entry) {
 }
 
 func (i *Index) Remove(id string) bool {
+	want := foldID(id)
 	for n, e := range i.Packages {
-		if e.ID == id {
+		if foldID(e.ID) == want {
 			i.Packages = append(i.Packages[:n], i.Packages[n+1:]...)
 			return true
 		}
@@ -166,13 +183,13 @@ func Search(idxs []*Index, query string, limit int) []Result {
 			continue
 		}
 		for _, e := range idx.Packages {
-			if seen[e.ID] {
+			if seen[foldID(e.ID)] {
 				continue // 靠前的索引已经给过这个 ID 了
 			}
 			// 占坑要在打分【之前】：沾不沾这次查询都算「出现过」。
 			// 放在后面的话，靠后的索引只要把 desc/tag 写得沾一点，
 			// 就能在靠前索引那条不沾的查询里把同一个 ID 换成自己的 source。
-			seen[e.ID] = true
+			seen[foldID(e.ID)] = true
 			score := scoreOf(e, q)
 			if q != "" && score == 0 {
 				continue

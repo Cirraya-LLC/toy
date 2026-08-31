@@ -596,3 +596,23 @@ x = "x.sh"
 		t.Errorf("报错应当说清是 [script] 形态的问题：%v", err)
 	}
 }
+
+// 资产名会被原样拼进下载地址，而 ? 和 # 在 URL 里会把后面切掉 ——
+// 请求到的是另一个文件，客户端却照着 toy.toml 说「来源 github.com/作者」。
+// fetch 对 file:// 早就是「宁可报错也不猜」，这条规矩两边必须一致。
+func TestRejectsQueryAndFragmentInPaths(t *testing.T) {
+	for _, body := range []string{
+		"name = \"t\"\n[bin]\nt = \"t\"\n[artifact]\n\"linux/amd64\" = \"t_{version}.tar.gz?raw=1\"\n",
+		"name = \"t\"\n[bin]\nt = \"t\"\n[artifact]\n\"linux/amd64\" = \"t#v2.tar.gz\"\n",
+		"name = \"t\"\n[script]\nt = \"t.sh?x\"\n",
+	} {
+		if _, err := Parse([]byte(body)); !errors.Is(err, ErrUnsafeTarget) {
+			t.Errorf("应该被拒（ErrUnsafeTarget），实际 err = %v\n%s", err, body)
+		}
+	}
+	// 正常的资产名一个都不能误伤
+	ok := "name = \"t\"\n[bin]\nt = \"bin/t\"\n[artifact]\n\"linux/amd64\" = \"t_{version}_linux_amd64.tar.gz\"\n"
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Errorf("正常的 toy.toml 被拒了：%v", err)
+	}
+}

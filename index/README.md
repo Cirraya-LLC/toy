@@ -27,6 +27,10 @@ toy index add local file:///root/cirraya/Private/Toy-Community/index/toy-index.j
 
 `key` 是作者的 ed25519 公钥，跑过 `toy keygen` 认领之后才有。没有它也能被搜到、被装上。
 
+`sig`（`toy publish` 一起生成）是作者对 `id + source + 那一份 toy.toml 原文` 的签名。
+**光有 key 不算已签名** —— 这个文件谁都能 fork、谁都能提 PR，抄一把公钥是零成本的。
+客户端验过 `sig` 才会打「✓ 已签名」，验不过就降级成「来源 …」并说明原因。
+
 ## 加一条
 
 ```bash

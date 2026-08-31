@@ -567,3 +567,76 @@ func TestMarshalRoundTripsThroughLoad(t *testing.T) {
 		t.Errorf("Name 该来自参数而不是文件：%q", back.Name)
 	}
 }
+
+// GitHub 的 owner/repo 本来就大小写不敏感，所以
+// `toy install derrity/tinyserve` 必须找得到索引里的 Derrity/tinyserve。
+// 原来这里是精确字符串匹配，用户拿到的是一句「查不到这个包」，而包就在索引里。
+func TestFindIsCaseInsensitive(t *testing.T) {
+	idx := &Index{Version: 1, Packages: []Entry{
+		{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve"},
+	}}
+	for _, q := range []string{"Derrity/tinyserve", "derrity/tinyserve", "DERRITY/TINYSERVE", "derrity/TinyServe"} {
+		e, ok := idx.Find(q)
+		if !ok {
+			t.Fatalf("Find(%q) 没找到", q)
+		}
+		// 找到的必须是索引里那条原样的记录：下载地址是按它的大小写拼的。
+		if e.Source != "github:Derrity/tinyserve" {
+			t.Fatalf("Find(%q) 返回了 %+v —— source 的大小写必须原样", q, e)
+		}
+	}
+	if !idx.Remove("DERRITY/tinyserve") {
+		t.Fatal("Remove 也该大小写不敏感，否则删不掉自己刚找到的那条")
+	}
+}
+
+// Upsert 也得按同一套比：不然 publish 一次大小写不同的 ID 就会插出第二条，
+// 而 Load 下次会把它当重复记录扔掉（「提交了却没生效」）。
+func TestUpsertIsCaseInsensitive(t *testing.T) {
+	idx := &Index{Version: 1, Packages: []Entry{
+		{ID: "Derrity/tinyserve", Desc: "旧的"},
+	}}
+	idx.Upsert(Entry{ID: "derrity/tinyserve", Desc: "新的"})
+	if len(idx.Packages) != 1 {
+		t.Fatalf("插出了第二条：%+v", idx.Packages)
+	}
+	if idx.Packages[0].Desc != "新的" || idx.Packages[0].ID != "derrity/tinyserve" {
+		t.Fatalf("该整条替换成新的：%+v", idx.Packages[0])
+	}
+}
+
+// 去重同理：靠后的索引不能靠改一个字母的大小写把同一个 ID 的 source 换成自己的。
+func TestSearchDedupIsCaseInsensitive(t *testing.T) {
+	first := &Index{Version: 1, Name: "官方", Packages: []Entry{
+		{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve"},
+	}}
+	second := &Index{Version: 1, Name: "野的", Packages: []Entry{
+		{ID: "derrity/tinyserve", Source: "github:evil/x"},
+	}}
+	got := Search([]*Index{first, second}, "tinyserve", 0)
+	if len(got) != 1 {
+		t.Fatalf("应该只剩一条，实际 %d 条：%+v", len(got), got)
+	}
+	if got[0].Index != "官方" {
+		t.Fatalf("赢的该是靠前那个索引，实际来自 %q", got[0].Index)
+	}
+}
+
+// 同一份索引里只差大小写的两条也是重复：留着的话 Find 只看得到第一条，
+// 而 Remove 删掉第一条之后仍然找得到第二条（「删了」是句假话）。
+func TestLoadSkipsCaseVariantDuplicateIDs(t *testing.T) {
+	data := []byte(`{"version":1,"packages":[
+		{"id":"Derrity/tinyserve","source":"github:Derrity/tinyserve","desc":"真的"},
+		{"id":"derrity/tinyserve","source":"github:evil/x","desc":"假的"}
+	]}`)
+	idx, skipped, err := Load(data, "默认")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 {
+		t.Fatalf("skipped = %d，想要 1", skipped)
+	}
+	if e, _ := idx.Find("derrity/tinyserve"); e.Desc != "真的" {
+		t.Fatalf("留下的该是第一条：%+v", e)
+	}
+}

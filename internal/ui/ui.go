@@ -4,7 +4,9 @@ package ui
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/schollz/progressbar/v3"
@@ -68,7 +70,11 @@ func isCtrl(r rune) bool { return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x
 // 换成可见的转义而不是删掉：删掉等于替攻击者把痕迹擦干净了。
 // 顺带把规格 §9 那条「非 TTY 一个 \r 都不许有」真正守住 —— 原来只有我们
 // 自己不写 \r，别人塞进来的照样能出去。
+//
+// 同一个道理，文本里带密码的 URL 也在这里抹掉（redactURLs）：这个包是
+// 一切终端输出的唯一出口，堵在这儿就不用指望每个调用方都记得。
 func safe(s string) string {
+	s = redactURLs(s)
 	if strings.IndexFunc(s, isCtrl) < 0 {
 		return s // 绝大多数时候一次扫描就走人，不分配
 	}
@@ -82,6 +88,46 @@ func safe(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// SafeURL 把一个 URL 里的密码换成 xxxxx（标准库的 URL.Redacted），
+// 顺带把控制字符转义掉。不是 URL、或者本来就没有凭据就原样返回。
+//
+// 用户完全可以写 `toy install https://u:hunter2@example.com/toy.toml`：
+// fetch 要拿原样的 URL 去认证，但那个密码不能进终端 —— 终端会被录屏、
+// 会被贴进工单、CI 日志更是全世界都看得到。
+func SafeURL(s string) string { return safe(redactURL(s)) }
+
+// redactURL 是 SafeURL 里只管凭据的那一半，不做控制字符转义。
+func redactURL(s string) string {
+	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	if _, ok := u.User.Password(); !ok {
+		return s // 只有用户名不是秘密，抹掉反而让人对不上自己写的地址
+	}
+	return u.Redacted()
+}
+
+// urlish 认出一段文本里的 URL。字符集就是 RFC 3986 允许出现在 URL 里的那些，
+// 所以它会停在中文冒号、空格、引号上 —— 报错信息长这样：
+// "fetch: 拿不到：https://u:p@x/y：HTTP 404"。
+var urlish = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*`)
+
+// redactURLs 把一段任意文本里所有带密码的 URL 抹掉密码。
+//
+// 必须在这一层做，不能只在打印 URL 的那几处做：真正会把凭据印出来的是
+// 错误信息 —— fetch 的 "%s：%w" 里那个 %s 就是原样的下载地址，
+// 而它最后是走 ui.Error("%v", err) 出去的。堵源头只要堵一次。
+func redactURLs(s string) string {
+	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
+		return s // 绝大多数输出里没有凭据，不走正则
+	}
+	return urlish.ReplaceAllStringFunc(s, redactURL)
 }
 
 // sprintf 是本包唯一的格式化入口。格式串是我们自己写的字面量，参数却常常
@@ -197,10 +243,18 @@ func (p *Progress) Add(n int64) {
 	if p.total <= 0 {
 		return
 	}
-	for b := p.bucket + 25; b <= 100 && p.cur*100 >= p.total*b; b += 25 {
-		p.bucket = b
-		line(sprintf("  %s %d%% (%s / %s)", p.name, b, humanBytes(p.cur), humanBytes(p.total)))
+	// 一次 Add 跨过好几个档位时只打最高的那一档：小文件常常一口气就读完，
+	// 把中间几档补齐会打出 "25% (148 B / 148 B)" 这种自相矛盾的行 ——
+	// 百分比和字节数说的是同一个时刻，补出来的那几行两边对不上。
+	b := p.bucket
+	for b < 100 && p.cur*100 >= p.total*(b+25) {
+		b += 25
 	}
+	if b == p.bucket {
+		return
+	}
+	p.bucket = b
+	line(sprintf("  %s %d%% (%s / %s)", p.name, b, humanBytes(p.cur), humanBytes(p.total)))
 }
 
 func (p *Progress) Done(err error) {

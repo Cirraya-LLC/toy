@@ -240,6 +240,17 @@ func checkRelPath(section, name, target string) error {
 				ErrUnsafeTarget, section, name, target)
 		}
 	}
+	// [artifact] 和 [script] 的值会被原样拼进下载地址（host.ReleaseURL / RawURL），
+	// 而 ? 和 # 在 URL 里是 query 和 fragment 的分隔符：写成 "toy.tar.gz?x" 时
+	// 真正被请求的是 "toy.tar.gz"，写成 "a#b" 时是 "a" —— 静默地取到另一个文件，
+	// 而客户端照着 toy.toml 打印的仍然是作者写的那个名字（铁律 8）。
+	// fetch 对 file:// 早就是「宁可报错也不猜」，这里把同一条规矩补齐。
+	if i := strings.IndexAny(target, "?#"); i >= 0 {
+		return fmt.Errorf("%w：[%s] 里 %q 的路径 %q 含 %q。它会被拼进下载地址，"+
+			"而 ? 和 # 在 URL 里会把后面的部分切掉，取回来的是另一个文件。"+
+			"资产名里真有这两个字符就在 release 里改个名",
+			ErrUnsafeTarget, section, name, target, string(target[i]))
+	}
 	return checkPrintable(fmt.Sprintf("[%s] 里 %q 的路径", section, name), target)
 }
 

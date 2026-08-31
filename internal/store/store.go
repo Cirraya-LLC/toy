@@ -7,11 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/Cirraya-LLC/toy/internal/host"
 )
@@ -136,40 +139,52 @@ func (s *Store) LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("store: 读不了 %s：%w", s.configPath(), err)
 	}
-	doc, err := decodeTOML(data)
-	if err != nil {
+	var c Config
+	if err := toml.Unmarshal(data, &c); err != nil {
 		return Config{}, fmt.Errorf("store: %s 不是合法的 TOML：%w", s.configPath(), err)
 	}
-
-	c := Config{Mirrors: doc.root.strs("mirrors"), Hosts: map[string]host.Host{}}
 	if c.Mirrors == nil {
 		c.Mirrors = []string{}
 	}
-	for _, t := range doc.arrs["index"] {
-		c.Indexes = append(c.Indexes, IndexRef{Name: t.str("name"), URL: t.str("url")})
+	if c.Hosts == nil {
+		c.Hosts = map[string]host.Host{}
 	}
-	for name, t := range doc.subsUnder("hosts") {
-		c.Hosts[name] = host.Host{
-			Name:    name,
-			Raw:     t.str("raw"),
-			Clone:   t.str("clone"),
-			Release: t.str("release"),
-			Web:     t.str("web"),
-		}
+	// Host.Name 是 `toml:"-"`：名字是表头那一段（[hosts.github]），不在表里面，
+	// 所以解出来是空的，这里补回去。Lookup 拿它报错时要说出是哪一家。
+	for name, h := range c.Hosts {
+		h.Name = name
+		c.Hosts[name] = h
 	}
 	return c, nil
 }
 
 func (s *Store) SaveConfig(c Config) error {
-	if err := writeFileAtomic(s.configPath(), encodeConfig(c), 0o644); err != nil {
+	data, err := encodeTOML("# toy 的配置：索引列表、镜像列表、托管方覆盖。规格 §6。", c)
+	if err != nil {
+		return fmt.Errorf("store: 序列化配置失败：%w", err)
+	}
+	if err := writeFileAtomic(s.configPath(), data, 0o644); err != nil {
 		return fmt.Errorf("store: 写不了 %s：%w", s.configPath(), err)
 	}
 	return nil
 }
 
+// encodeTOML 把 v 编码成 TOML，顶上加一行给人看的注释。
+func encodeTOML(header string, v any) ([]byte, error) {
+	body, err := toml.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(header+"\n\n"), body...), nil
+}
+
 // Manifest 是一次安装的完整记录。没有它就没法 uninstall 和 update。
 type Manifest struct {
-	ID          string   `toml:"id"` // "github:Derrity/tinyserve"
+	ID string `toml:"id"` // "github:Derrity/tinyserve"
+	// IndexID 是这个包在索引里的 id（"Derrity/tinyserve"），经索引装的才有。
+	// 没有它，`toy update` 只能拿 ID 走托管方那条路，于是作者的签名在第一次
+	// 升级之后就永远消失了 —— 一个升一次级就掉一档信任的包管理器（铁律 8）。
+	IndexID     string   `toml:"index_id"`
 	Name        string   `toml:"name"`
 	Version     string   `toml:"version"`
 	Tag         string   `toml:"tag"`
@@ -201,6 +216,12 @@ func (s *Store) manifestPath(id string) (string, error) {
 
 // safeSlug 把一段任意文本变成能安全当文件名/目录名的形式。
 // 白名单之外一律换成 _，所以 / : .. 都跑不出当前目录。
+//
+// 大写字母也一律折成小写：macOS 默认的 APFS 大小写不敏感，"Foo" 和 "foo"
+// 在那里是【同一个目录】—— 不折的话 Derrity/tinyserve 和 derrity/TinySERVE
+// 会得到两个看起来不同、实际是同一个的 pkg 目录，两个包共用一份文件，
+// 卸掉其中一个会把另一个的可执行文件一起删掉。折叠和转义一样是多对一的，
+// 唯一性由调用方缀上的原串 hash 还回来（见 safeSeg 和 manifestPath）。
 func safeSlug(s string) string {
 	if s == "" {
 		return "_"
@@ -208,7 +229,9 @@ func safeSlug(s string) string {
 	b := make([]byte, 0, len(s))
 	for _, r := range s {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+		case r >= 'A' && r <= 'Z':
+			b = append(b, byte(r)+('a'-'A'))
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9',
 			r == '.', r == '-', r == '_':
 			b = append(b, byte(r))
 		default:
@@ -226,13 +249,14 @@ func safeSlug(s string) string {
 	return string(b)
 }
 
-// safeSeg 是 safeSlug 加上「转义过就缀 hash」。
+// safeSeg 是 safeSlug 加上「动过就缀 hash」。
 //
-// 光转义是多对一的：owner "a/b" 和 "a:b" 都变成 "a_b"，超过 maxName 的两个
-// 名字截断后也一样 —— 两个不同的包于是共用一个安装目录，装后一个会盖掉前一个的
-// 文件，卸后一个会把前一个的可执行文件一起删掉。manifestPath 早就是这么解决的
-// （见那里的注释），这里用同一招。没被转义动过的段原样保留，
-// 所以常规路径仍然是 pkg/github/Derrity/tinyserve/1.2.3 这种能读的样子。
+// 转义和小写折叠都是多对一的：owner "a/b" 和 "a:b" 都变成 "a_b"，"Foo" 和
+// "foo" 都变成 "foo"，超过 maxName 的两个名字截断后也一样 —— 两个不同的包
+// 于是共用一个安装目录，装后一个会盖掉前一个的文件，卸后一个会把前一个的
+// 可执行文件一起删掉。manifestPath 早就是这么解决的（见那里的注释），
+// 这里用同一招：slug 和原串一字不差才原样保留，所以常规路径仍然是
+// pkg/github/derrity-1f0a3c7d/tinyserve/1.2.3 这种还读得懂的样子。
 func safeSeg(s string) string {
 	slug := safeSlug(s)
 	if slug == s {
@@ -242,12 +266,39 @@ func safeSeg(s string) string {
 	return slug + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
+// redactURL 把 URL 里的密码换成 xxxxx（用标准库的 URL.Redacted）。
+//
+// 用户完全可以写 `toy install https://u:hunter2@example.com/toy.toml`，
+// fetch 需要原样的 URL 去认证，但清单是长期躺在磁盘上、还会被打印出来的东西 ——
+// 一个装一次就把密码写进 ~/.toy/installed/*.toml 的包管理器不能叫安全边界。
+// 不是 URL（解析不了、或者压根没有密码）就原样返回。
+func redactURL(s string) string {
+	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
+		return s // 绝大多数地址没有凭据，不必解析
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	if _, ok := u.User.Password(); !ok {
+		return s
+	}
+	return u.Redacted()
+}
+
 func (s *Store) SaveManifest(m Manifest) error {
 	path, err := s.manifestPath(m.ID)
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(path, encodeManifest(m), 0o644); err != nil {
+	// 落盘之前把 URL 里的密码抹掉：清单是一个长期躺在磁盘上、还会被 `toy list`
+	// 打出来的文件，而 fetch 用的是内存里那份原样的 URL，不受影响。
+	m.Source = redactURL(m.Source)
+	data, err := encodeTOML("# toy 安装清单，自动生成。删了就没法 uninstall / update。", m)
+	if err != nil {
+		return fmt.Errorf("store: 序列化安装清单失败：%w", err)
+	}
+	if err := writeFileAtomic(path, data, 0o644); err != nil {
 		return fmt.Errorf("store: 写不了安装清单 %s：%w", path, err)
 	}
 	return nil
@@ -270,27 +321,11 @@ func readManifest(path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	doc, err := decodeTOML(data)
-	if err != nil {
+	var m Manifest
+	if err := toml.Unmarshal(data, &m); err != nil {
 		return Manifest{}, fmt.Errorf("store: 安装清单 %s 坏了：%w（删掉它可以恢复，但那个包就得手动清）", path, err)
 	}
-	t := doc.root
-	return Manifest{
-		ID:          t.str("id"),
-		Name:        t.str("name"),
-		Version:     t.str("version"),
-		Tag:         t.str("tag"),
-		Host:        t.str("host"),
-		Owner:       t.str("owner"),
-		Repo:        t.str("repo"),
-		Trust:       t.str("trust"),
-		Signer:      t.str("signer"),
-		SHA256:      t.str("sha256"),
-		Source:      t.str("source"),
-		PkgDir:      t.str("pkg_dir"),
-		Links:       t.strs("links"),
-		InstalledAt: t.str("installed_at"),
-	}, nil
+	return m, nil
 }
 
 // ListManifests 按 id 排序返回全部安装清单。

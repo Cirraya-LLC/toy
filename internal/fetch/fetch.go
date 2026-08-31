@@ -211,7 +211,9 @@ func Get(ctx context.Context, u string, opt Options) (Result, error) {
 			break
 		}
 	}
-	return Result{}, fmt.Errorf("%w：%s：%w", ErrAllFailed, u, errors.Join(errs...))
+	// 每条子错误自己已经带上了是哪个地址，这里不再重复一遍 u ——
+	// 没有镜像的时候那就是同一个地址连写两次，读起来像出了两次错。
+	return Result{}, fmt.Errorf("%w：%w", ErrAllFailed, errors.Join(errs...))
 }
 
 // fetchOne 从一个来源取到本地：先写临时文件，边写边算 hash，验过了才原子 rename
@@ -295,7 +297,7 @@ func GetBytes(ctx context.Context, u string, opt Options) ([]byte, error) {
 			break
 		}
 	}
-	return nil, fmt.Errorf("%w：%s：%w", ErrAllFailed, u, errors.Join(errs...))
+	return nil, fmt.Errorf("%w：%w", ErrAllFailed, errors.Join(errs...))
 }
 
 func getBytesOne(ctx context.Context, src string, opt Options) ([]byte, error) {

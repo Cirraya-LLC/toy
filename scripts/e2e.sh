@@ -86,7 +86,9 @@ check "缓存文件名就是 sha256（内容寻址）"      "ls '$TOY_HOME/cache
 check "打印了信任等级"                        "grep -qE '未签名|已签名|已钉住' '$WORK/install.log'"
 
 echo "== list / info =="
-check "list 列得出来"                         "'$TOY' list | grep -q hello"
+# 规格 §9：给人看的输出走 stderr，stdout 留给机器可读的那份（--json）。
+# 所以这里要 2>&1 —— 上面那条 install 的检查本来就是这么写的。
+check "list 列得出来"                         "'$TOY' list 2>&1 | grep -q hello"
 check "info 跑得通"                           "'$TOY' info local:test/hello"
 
 echo "== 铁律：不许遮蔽 PATH 上已有的命令 =="

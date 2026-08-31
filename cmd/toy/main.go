@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 
@@ -72,7 +73,9 @@ func main() {
 		case err == nil:
 			return
 		case errors.Is(err, errUsage):
-			fmt.Fprintf(os.Stderr, "用法: toy %s %s\n", c.name, c.usage)
+			// 不带参数的子命令（list / doctor / keygen）usage 是空串，
+			// 直接拼会留一个尾随空格。
+			fmt.Fprintln(os.Stderr, strings.TrimSpace("用法: toy "+c.name+" "+c.usage))
 			os.Exit(2)
 		case errors.Is(err, context.Canceled):
 			ui.Warn("已取消")

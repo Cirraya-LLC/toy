@@ -774,6 +774,13 @@ func TestPkgDirNeverCollides(t *testing.T) {
 		{"github", "", "n", "1"},
 		{"github", "Derrity", "tinyserve", "1.2.3"},
 		{"github", "Derrity", "tinyserve", "1.2.3+build"},
+		// 只差大小写的这几组在 macOS 默认的 APFS 上是同一个目录名，
+		// 所以它们必须靠 hash 后缀分开，而不是靠文件系统区分大小写。
+		{"github", "derrity", "tinyserve", "1.2.3"},
+		{"github", "DERRITY", "tinyserve", "1.2.3"},
+		{"github", "derrity", "TinySERVE", "1.2.3"},
+		{"github", "derrity", "tinyserve", "1.2.3-RC1"},
+		{"github", "derrity", "tinyserve", "1.2.3-rc1"},
 	}
 	seen := map[string][4]string{}
 	for _, sg := range segs {
@@ -783,10 +790,90 @@ func TestPkgDirNeverCollides(t *testing.T) {
 		}
 		seen[p] = sg
 	}
-	// 正常的段不能被 hash 后缀搞得没法读
-	want := filepath.Join(s.Root, dirPkg, "github", "Derrity", "tinyserve", "1.2.3")
-	if got := s.PkgDir("github", "Derrity", "tinyserve", "1.2.3"); got != want {
+	// 小写的段不能被 hash 后缀搞得没法读
+	want := filepath.Join(s.Root, dirPkg, "github", "derrity", "tinyserve", "1.2.3")
+	if got := s.PkgDir("github", "derrity", "tinyserve", "1.2.3"); got != want {
 		t.Errorf("普通路径 = %q，想要 %q", got, want)
+	}
+	// 带大写的段小写化之后仍然要认得出来，只是多一段 hash。
+	if got := s.PkgDir("github", "Derrity", "tinyserve", "1.2.3"); !strings.Contains(got, "/derrity-") {
+		t.Errorf("大写的 owner 应该折成 derrity-<hash>，实际 %q", got)
+	}
+}
+
+// 清单文件名同理：APFS 上只差大小写的两个 id 会写进同一个文件，
+// 后装的那个包会把先装的清单整份盖掉，于是先装的既卸不掉也升不了。
+func TestManifestPathNeverCollidesOnCaseInsensitiveFS(t *testing.T) {
+	s := newStore(t)
+	ids := []string{
+		"github:Derrity/tinyserve",
+		"github:derrity/tinyserve",
+		"github:derrity/TinyServe",
+		"https://example.com/toy.toml",
+		"https://EXAMPLE.com/toy.toml",
+	}
+	seen := map[string]string{}
+	for _, id := range ids {
+		p, err := s.manifestPath(id)
+		if err != nil {
+			t.Fatalf("manifestPath(%q): %v", id, err)
+		}
+		fold := strings.ToLower(p) // 大小写不敏感的文件系统就是这么比的
+		if prev, dup := seen[fold]; dup {
+			t.Errorf("%q 和 %q 撞到同一个清单文件 %q", id, prev, p)
+		}
+		seen[fold] = id
+	}
+}
+
+// 装一次就把密码写进 ~/.toy/installed/*.toml 的包管理器不能叫安全边界：
+// 清单长期躺在磁盘上、还会被打印出来，凭据不能跟着落进去。
+func TestManifestSourceDropsTheCredentials(t *testing.T) {
+	s := newStore(t)
+	m := sampleManifest("https://example.com/toy.toml", "toy")
+	m.Source = "https://alice:hunter2@example.com/toy_1.0_linux_amd64.tar.gz"
+	if err := s.SaveManifest(m); err != nil {
+		t.Fatal(err)
+	}
+	path, err := s.manifestPath(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "hunter2") {
+		t.Fatalf("密码落到磁盘上了：\n%s", raw)
+	}
+	got, err := s.LoadManifest(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://alice:xxxxx@example.com/toy_1.0_linux_amd64.tar.gz"
+	if got.Source != want {
+		t.Fatalf("source = %q，想要 %q", got.Source, want)
+	}
+}
+
+// redactURL 只该动带密码的 URL，别的一律原样 —— 它也会被用在
+// 「实际下载成功的那个地址」上，改坏了就是对用户说谎。
+func TestRedactURLLeavesEverythingElseAlone(t *testing.T) {
+	for _, s := range []string{
+		"",
+		"https://example.com/toy.toml",
+		"https://alice@example.com/toy.toml", // 只有用户名，没有密码
+		"file:///tmp/toy.toml",
+		"github:Derrity/tinyserve",
+		"不是 URL 的一句话 @ ://",
+	} {
+		if got := redactURL(s); got != s {
+			t.Errorf("redactURL(%q) = %q，应该原样返回", s, got)
+		}
+	}
+	const in = "https://u:p@example.com/x"
+	if got := redactURL(in); got != "https://u:xxxxx@example.com/x" {
+		t.Errorf("redactURL(%q) = %q", in, got)
 	}
 }
 
@@ -887,5 +974,62 @@ func TestDiskFormatResistsTOMLInjection(t *testing.T) {
 	}
 	if len(back.Hosts) != 1 || back.Hosts[evil].Raw != "r" {
 		t.Fatalf("hosts = %+v", back.Hosts)
+	}
+}
+
+// 旧版手写编码器写出来的文件（没有 [hosts] 父表头、没有缩进）必须照常读得回来 ——
+// 换成 BurntSushi 不需要任何迁移。
+func TestReadsTheOldHandWrittenFormat(t *testing.T) {
+	s := newStore(t)
+	old := `# toy 的配置：索引列表、镜像列表、托管方覆盖。规格 §6。
+
+mirrors = ["https://m.example.com"]
+
+[[index]]
+name = "default"
+url = "file:///tmp/i.json"
+
+[hosts.gitea]
+raw = "https://g/{owner}/{repo}/raw/tag/{ref}/{path}"
+clone = "https://g/{owner}/{repo}"
+release = "https://g/{owner}/{repo}/releases/download/{tag}/{asset}"
+web = "https://g/{owner}/{repo}"
+`
+	if err := os.WriteFile(filepath.Join(s.Root, configName), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Indexes) != 1 || c.Indexes[0].Name != "default" || c.Indexes[0].URL != "file:///tmp/i.json" {
+		t.Fatalf("index = %+v", c.Indexes)
+	}
+	if len(c.Mirrors) != 1 || c.Mirrors[0] != "https://m.example.com" {
+		t.Fatalf("mirrors = %+v", c.Mirrors)
+	}
+	h, ok := c.Hosts["gitea"]
+	if !ok || h.Name != "gitea" || h.Clone != "https://g/{owner}/{repo}" {
+		t.Fatalf("hosts = %+v", c.Hosts)
+	}
+
+	oldManifest := `# toy 安装清单，自动生成。
+
+id = "github:a/b"
+name = "b"
+version = "1.0.0"
+links = ["/x/bin/b"]
+trust = "host"
+`
+	p := filepath.Join(s.Root, dirInstalled, "x.toml")
+	if err := os.WriteFile(p, []byte(oldManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ID != "github:a/b" || m.Trust != "host" || len(m.Links) != 1 {
+		t.Fatalf("manifest = %+v", m)
 	}
 }

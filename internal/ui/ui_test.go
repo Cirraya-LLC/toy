@@ -189,14 +189,13 @@ func TestProgressNonTTYNeverWritesCR(t *testing.T) {
 			},
 		},
 		{
-			name:  "一口气到底也要把四个档位补齐",
+			// 一次读完就只报最高那一档：补出来的 "25% (100 B / 100 B)" 里
+			// 百分比和字节数说的是同一个时刻，两边对不上，读起来像出了错。
+			name:  "一口气到底只报最高那一档",
 			total: 100,
 			adds:  []int64{100},
 			want: []string{
 				"下载 tinyserve (100 B)\n",
-				"  tinyserve 25% (100 B / 100 B)\n",
-				"  tinyserve 50% (100 B / 100 B)\n",
-				"  tinyserve 75% (100 B / 100 B)\n",
 				"  tinyserve 100% (100 B / 100 B)\n",
 				"✓ tinyserve 完成 (100 B)\n",
 			},
@@ -225,7 +224,6 @@ func TestProgressNonTTYNeverWritesCR(t *testing.T) {
 			err:   errors.New("sha256 校验失败"),
 			want: []string{
 				"下载 tinyserve (100 B)\n",
-				"  tinyserve 25% (50 B / 100 B)\n",
 				"  tinyserve 50% (50 B / 100 B)\n",
 				"✗ tinyserve 失败: sha256 校验失败\n",
 			},
@@ -344,7 +342,7 @@ func TestNoControlCharactersReachTheTerminal(t *testing.T) {
 			p.Start(evil, 100)
 			p.Add(100)
 			p.Done(nil)
-		}, 6}, // 开始 + 四个档位 + 完成
+		}, 3}, // 开始 + 一个档位（一次读完只报最高那档）+ 完成
 		{"Progress 非 TTY 失败", func() {
 			p := newProgress(false)
 			p.Start(evil, 100)
@@ -435,5 +433,78 @@ func TestTrustHostWithoutDetailSaysUnknown(t *testing.T) {
 	got := capture(t, func() { Trust("host", "") })
 	if !strings.Contains(got, "未知") {
 		t.Errorf("来源为空要说未知，不能留一个空格糊过去：%q", got)
+	}
+}
+
+// 用户可以写 https://u:hunter2@example.com/toy.toml，fetch 要拿原样的
+// URL 去认证，但终端会被录屏、会被贴进工单、CI 日志全世界都看得到。
+func TestPrintedURLsLoseTheirPassword(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // 输出里必须出现的那一段
+	}{
+		{"https://alice:hunter2@example.com/toy.toml", "https://alice:xxxxx@example.com/toy.toml"},
+		{"http://u:p@127.0.0.1:8080/x.tar.gz", "http://u:xxxxx@127.0.0.1:8080/x.tar.gz"},
+	}
+	for _, c := range cases {
+		for name, print := range map[string]func(string){
+			"Info":  func(s string) { Info("取 %s", s) },
+			"Error": func(s string) { Error("拿不到 %s：HTTP 404", s) },
+			"Step":  func(s string) { Step("%s", s) },
+		} {
+			got := capture(t, func() { print(c.in) })
+			if strings.Contains(got, "hunter2") || strings.Contains(got, ":p@") {
+				t.Errorf("%s 把密码打出来了：%q", name, got)
+			}
+			if !strings.Contains(got, c.want) {
+				t.Errorf("%s 输出 %q，里面应该有 %q", name, got, c.want)
+			}
+		}
+	}
+}
+
+// 错误信息是真正会把凭据带出来的那条路：fetch 把原样的地址写进 "%s：%w"，
+// 最后走 ui.Error("%v", err)。所以抹掉必须发生在这一层，而不是指望
+// 每个调用方都记得先 SafeURL 一下。
+func TestErrorTextWithAURLBuriedInItIsRedacted(t *testing.T) {
+	err := errors.New("fetch: 原始地址和所有镜像都拿不到：" +
+		"https://bob:s3cret@example.com/a.tar.gz：HTTP 403 Forbidden")
+	got := capture(t, func() { Error("%v", err) })
+	if strings.Contains(got, "s3cret") {
+		t.Fatalf("密码从错误信息里漏出来了：%q", got)
+	}
+	if !strings.Contains(got, "https://bob:xxxxx@example.com/a.tar.gz") {
+		t.Fatalf("地址被改坏了，用户对不上自己写的东西：%q", got)
+	}
+	// 后面那半句必须还在：正则不能把中文冒号之后的内容一起吃掉。
+	if !strings.Contains(got, "HTTP 403 Forbidden") {
+		t.Fatalf("正则吃掉了 URL 后面的话：%q", got)
+	}
+}
+
+// 没有凭据的地址一个字都不许改 —— 改了用户就对不上自己敲的命令。
+func TestSafeURLLeavesInnocentTextAlone(t *testing.T) {
+	for _, s := range []string{
+		"https://example.com/toy.toml",
+		"https://alice@example.com/toy.toml",
+		"file:///tmp/toy.toml",
+		"github:Derrity/tinyserve",
+		"装好了：tinyserve 1.2.3",
+		"",
+	} {
+		if got := SafeURL(s); got != s {
+			t.Errorf("SafeURL(%q) = %q，应该原样返回", s, got)
+		}
+		if got := capture(t, func() { Info("%s", s) }); got != s+"\n" {
+			t.Errorf("Info(%q) 打出了 %q", s, got)
+		}
+	}
+}
+
+// SafeURL 也要守住铁律 8 那条：URL 里塞控制字符能把信任等级那一行盖掉重写。
+func TestSafeURLStillEscapesControlChars(t *testing.T) {
+	got := SafeURL("https://example.com/a\r\x1b[2K✓ 已签名")
+	if strings.ContainsAny(got, "\r\x1b") {
+		t.Fatalf("控制字符漏出去了：%q", got)
 	}
 }
