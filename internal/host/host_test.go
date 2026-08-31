@@ -412,13 +412,17 @@ func TestTagsAgainstLocalRepo(t *testing.T) {
 
 // gitea 那条是「形状」不是托管方：直接用会打到一个 RFC 2606 的保留域名上，
 // 报出来只是一句 DNS 错误 —— 用户根本看不出自己该去配什么。必须在这里拦住，
-// 并且把可以直接抄的四行模板给他。
+// 并且把可以直接抄的模板给他。
+//
+// 这里只断言「模板里有 host 名字和四个键」。模板长什么样（[hosts.x] 段落还是
+// hosts.x = {…} 行内表）是排版，不是这条测试要钉的东西 —— 真正该钉的是
+// 「抄回去能不能用」，那条在 hint_test.go 里，它把这一行喂回 TOML 解析器。
 func TestLookupRefusesPlaceholder(t *testing.T) {
 	_, err := Lookup("gitea", nil)
 	if !errors.Is(err, ErrUnknownHost) {
 		t.Fatalf("想要 ErrUnknownHost，拿到 %v", err)
 	}
-	for _, want := range []string{"config.toml", "[hosts.gitea]", "raw", "clone", "release", "web"} {
+	for _, want := range []string{"config.toml", "hosts.gitea", "raw", "clone", "release", "web"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("报错里没有 %q: %v", want, err)
 		}
@@ -644,5 +648,34 @@ func writeFakeGit(t *testing.T, dir, script string, args ...any) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Ctrl-C 打在 ls-remote 上时，错误必须还带得住 context.Canceled ——
+// runUpdate 的 `case errors.Is(err, context.Canceled): return err` 全靠它，
+// 吃掉了就会在用户按下 Ctrl-C 之后接着把剩下每个包都跑一遍。
+// 顺带钉住超时那条：它仍然要说"超时"、并且能被 errors.Is 认成 DeadlineExceeded。
+func TestTagsPropagatesContextError(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "git")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Tags(canceled, "https://example.com/o/r"); !errors.Is(err, context.Canceled) {
+		t.Errorf("取消后的错误认不出 context.Canceled，上层会把 Ctrl-C 当普通失败继续跑：%v", err)
+	}
+
+	timeout, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer stop()
+	_, err := Tags(timeout, "https://example.com/o/r")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("超时的错误认不出 context.DeadlineExceeded：%v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "超时") {
+		t.Errorf("超时了却没说是超时：%v", err)
 	}
 }

@@ -66,7 +66,7 @@ func IsArchive(name string) bool { return formatOf(name) != kindNone }
 //   - 每个成员的最终路径 filepath.Clean 之后仍在 destDir 内，否则 ErrTraversal
 //   - 拒绝绝对路径成员
 //   - 符号链接：目标解析后逃出 destDir 就拒绝整个包
-//   - 跳过设备文件、FIFO、socket 这些非常规成员
+//   - 跳过设备文件、FIFO、socket 这些没有内容的非常规成员；不认识又声明了内容的一律拒绝
 //   - 累计字节数超过 MaxTotalBytes 就中止并清理
 //
 // 返回写出来的相对路径列表。
@@ -419,7 +419,12 @@ func (e *extractor) untar(r io.Reader) error {
 			if err := e.mkdirAll(full); err != nil {
 				return err
 			}
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeGNUSparse:
+			// GNU 稀疏文件（`tar --sparse`）是【有内容的普通文件】，只是内容按稀疏段
+			// 编码。Go 的 reader 已经把 tr 包成 sparseFileReader，读出来就是展开后的
+			// 完整内容，但它【保留】Typeflag == 'S' 交给我们（PAX 格式的稀疏文件才会
+			// 归一成 TypeReg）。落进 default 就是静默少一个文件、Extract 还返回成功。
+			// 展开后可以非常大，writeFile 的字节上限正好兜住。
 			if err := e.writeFile(full, rel, tr, safeMode(hdr.FileInfo().Mode())); err != nil {
 				return err
 			}
@@ -431,9 +436,19 @@ func (e *extractor) untar(r io.Reader) error {
 			if err := e.writeHardlink(full, rel, hdr.Linkname); err != nil {
 				return err
 			}
-		default:
-			// 设备文件、FIFO、socket、各种扩展头：跳过，不报错。
+		case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			// 设备文件、FIFO：本来就没有内容，跳过不报错。
 			// 二进制包里出现这些只可能是打包工具带进来的噪音，不值得让整次安装失败。
+			continue
+		default:
+			// 其余类型（PAX 全局头、GNU 卷标之类）本身不带内容，同样跳过。
+			// 但只要它声明了内容就不能默默扔掉：Go 的 reader 会把这些字节从流里解出来
+			// 丢掉，MaxTotalBytes 数不到（几 KiB 的包能烧掉几百 MiB 的解压），而
+			// "少一个文件却安装成功"比装不上更难查。
+			if hdr.Size > 0 {
+				return fmt.Errorf("%w：成员 %s 的类型 %q 不认识，它却声明了 %d 字节内容，不能当噪音扔掉",
+					ErrUnsupported, rel, hdr.Typeflag, hdr.Size)
+			}
 			continue
 		}
 	}

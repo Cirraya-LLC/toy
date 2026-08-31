@@ -139,13 +139,13 @@ func TestPkgDirIsAlwaysInsideRoot(t *testing.T) {
 func TestConfigRoundTrip(t *testing.T) {
 	s := newStore(t)
 
-	// 全新的 store 读出来就是内置默认。
+	// 全新的 store 读出来就是内置默认（索引条数由 DefaultIndexURL 决定，见 DefaultConfig）。
 	got, err := s.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if len(got.Indexes) != 1 || got.Indexes[0].URL == "" {
-		t.Fatalf("全新 store 应该有一个内置索引，拿到 %+v", got.Indexes)
+	if fresh := DefaultConfig(); len(got.Indexes) != len(fresh.Indexes) {
+		t.Fatalf("全新 store 应该读出内置默认 %+v，拿到 %+v", fresh.Indexes, got.Indexes)
 	}
 
 	want := Config{
@@ -701,11 +701,20 @@ func TestInPathHandlesRelativeEntries(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	c := DefaultConfig()
-	if len(c.Indexes) != 1 {
-		t.Fatalf("想要一个内置索引，拿到 %d 个", len(c.Indexes))
-	}
-	if c.Indexes[0].Name == "" || c.Indexes[0].URL == "" {
-		t.Fatalf("内置索引 %+v 少东西", c.Indexes[0])
+	// 默认配置里的索引条数由 DefaultIndexURL 一个常量决定：空串（现在这样）
+	// 就一个都不预置，填了地址就预置那一个。这条断言钉住的是「不许出现一条
+	// 名字或地址是空的索引」—— 一个 url 为空的条目会让每次 search 都警告一次。
+	if DefaultIndexURL == "" {
+		if len(c.Indexes) != 0 {
+			t.Fatalf("DefaultIndexURL 是空的，不该预置任何索引，拿到 %+v", c.Indexes)
+		}
+	} else {
+		if len(c.Indexes) != 1 {
+			t.Fatalf("想要一个内置索引，拿到 %d 个", len(c.Indexes))
+		}
+		if c.Indexes[0].Name == "" || c.Indexes[0].URL == "" {
+			t.Fatalf("内置索引 %+v 少东西", c.Indexes[0])
+		}
 	}
 	if len(c.Mirrors) != 0 {
 		t.Fatalf("镜像列表默认应该是空的，拿到 %v", c.Mirrors)

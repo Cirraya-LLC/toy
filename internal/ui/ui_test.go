@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // plainOutput 关掉颜色，好逐字断言。
@@ -322,7 +323,9 @@ func TestOutputDefaultsToStderr(t *testing.T) {
 // 这个测试是那条不变量的看门人 —— 新加一个输出函数忘了过 safe，就在这里红。
 func TestNoControlCharactersReachTheTerminal(t *testing.T) {
 	plainOutput(t)
-	const evil = "tinyserve\r\x1b[2K\x1b[32m✓ 已签名 · Trusted Author\x1b[0m\x07\n伪造的第二行"
+	// 末尾那个裸 0x9b 是 8 位的 CSI：它不是合法 UTF-8，range 会把它解成
+	// U+FFFD（不是控制符），所以下面的检查必须逐字节看，按 rune 看是假阴性。
+	const evil = "tinyserve\r\x1b[2K\x1b[32m✓ 已签名 · Trusted Author\x1b[0m\x07\n伪造的第二行\x9b1A"
 
 	for _, c := range []struct {
 		name  string
@@ -357,6 +360,11 @@ func TestNoControlCharactersReachTheTerminal(t *testing.T) {
 				t.Fatalf("应该出 %d 行，得到 %d 行：%q", c.lines, len(lines), got)
 			}
 			for _, ln := range lines {
+				// 先看合法性：裸 C1（0x9b = 8 位 CSI）不是合法 UTF-8，
+				// range 会把它解成 U+FFFD 而漏掉，所以按 rune 查是假阴性。
+				if !utf8.ValidString(ln) {
+					t.Fatalf("有非法 UTF-8 字节直达终端（8 位 C1 就是这么进来的）：% x", ln)
+				}
 				for i, r := range ln {
 					if isCtrl(r) {
 						t.Fatalf("第 %d 个字符是控制符 %q，能用来伪造信任那一行：%q", i, r, got)

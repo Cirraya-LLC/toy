@@ -37,8 +37,11 @@ type resolved struct {
 	Toyfile  *toyfile.Toyfile
 	Raw      []byte       // toy.toml 的原始字节，作者签名覆盖的就是它（见 autSignMessage）
 	Entry    *index.Entry // 经索引来的才有，否则 nil
-	Trust    string       // store.TrustSigned / TrustHost / TrustUnverified
-	Signer   string       // 公钥指纹，未签名为空
+	// IndexName 是这条记录来自哪个索引。签名只由那个索引背书（谁能改那份 JSON
+	// 谁就能换掉这把公钥），所以信任那一行必须说得出是哪一份索引在背书。
+	IndexName string
+	Trust     string // store.TrustSigned / TrustHost / TrustUnverified
+	Signer    string // 公钥指纹，未签名为空
 }
 
 // rsvTagsTimeout 是 `git ls-remote` 的上限。主进程的 ctx 只在 Ctrl-C 时取消，
@@ -115,7 +118,7 @@ func loadIndexes(ctx context.Context, st *store.Store, cfg store.Config) ([]*ind
 		// 静默跳过等于骗人：用户搜不到某个包时，得知道是索引里那条记录坏了。
 		if skipped > 0 {
 			ui.Warn("索引 %s 里有 %d 条记录不合法，已跳过（id 不是 owner/repo 形态、"+
-				"source 解析不了或者又指回索引、id 重复）", name, skipped)
+				"source 解析不了 / 又指回索引 / 不是 https:// 的裸地址、id 重复）", name, skipped)
 		}
 		out = append(out, idx)
 	}
@@ -217,6 +220,13 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 		return nil, err
 	}
 	id := r.ID()
+	// 一个索引都没配（默认状态，见 store.DefaultIndexURL）时说「索引里查不到」
+	// 是假的 —— 我们根本没找过任何地方（铁律 8）。
+	if len(cfg.Indexes) == 0 {
+		return nil, fmt.Errorf("还没配任何索引，所以 %s 查不出来。"+
+			"`toy index add <名字> <地址>` 加一个（地址可以是 https://…，也可以是本地那个 json 的路径）；"+
+			"知道仓库在哪的话，`toy install github:%s` 本来就不需要索引", id, id)
+	}
 	for _, idx := range idxs {
 		e, ok := idx.Find(id)
 		if !ok {
@@ -250,7 +260,7 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 			return nil, err
 		}
 
-		res.Entry = &e
+		res.Entry, res.IndexName = &e, idx.Name
 		rsvApplySignature(idx.Name, e, res)
 		return res, nil
 	}

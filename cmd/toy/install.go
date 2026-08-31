@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -30,12 +32,22 @@ import (
 const insNoVersion = "unversioned"
 
 // runInstall 是核心流程，规格 §2：
+//
+// 两个开关，两件事，不许再合并：
+//
+//	--reinstall  已经装了这一版，再装一次。日常操作，不放行任何检查。
+//	--force      接受安全检查报出的变化（哈希 / 公钥 / 遮蔽 / 信任降级 / 来源）。
+//	             真的放行时逐条打印放行了什么。
+//
 // 解析 ref → (索引查 source) → git ls-remote 拿 tag → 挑最高 semver →
 // raw URL 取 toy.toml → 按 os/arch 挑资产 → 下载(带镜像回退) → 验 sha256 →
 // TOFU 检查 → 解压或 chmod+x → 软链(拒绝遮蔽) → 写清单 → 打印信任等级
 func runInstall(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
-	force := fs.Bool("force", false, "覆盖已有的命令、接受变了的哈希/公钥、重装同一个版本")
+	// 两个开关说的是两件事，别再合并回一个（见 insPerform 上面那段注释）：
+	// --reinstall 是日常操作，--force 是「我核对过，放行安全检查报出的变化」。
+	reinstall := fs.Bool("reinstall", false, "已经装了这一版，再装一次（不放行任何安全检查）")
+	force := fs.Bool("force", false, "接受安全检查报出的变化：哈希变了 / 作者公钥换了 / 命令名遮蔽 / 信任等级降级 / 来源变了")
 	version := fs.String("version", "", "装指定的版本，而不是最高的那个 tag")
 	if err := insParseFlags(fs, args); err != nil {
 		return err
@@ -77,14 +89,30 @@ func runInstall(ctx context.Context, args []string) error {
 		return err
 	}
 
-	old, err := insExisting(st, insPackageID(res))
+	old, err := insExisting(st, res)
 	if err != nil {
 		return err
 	}
-	// 已经是这一版就别再下一遍。--force 是「我知道，重装」。
-	if old != nil && !*force && res.Tag != "" && old.Tag == res.Tag {
-		ui.Info("%s 已经是 %s 了，没什么可做的（要重装加 --force）", old.Name, old.Tag)
+	// 已经是这一版就别再下一遍。--reinstall 是「我知道，再装一次」。
+	// old.ID 和这次解析出来的不一样时不能走这条捷径 —— 那说明来源变了，
+	// tag 撞上了也不代表装的是同一个东西。
+	if old != nil && old.ID == insPackageID(res) && !*reinstall && res.Tag != "" && old.Tag == res.Tag {
+		hint := "要重装加 --reinstall"
+		if *force {
+			// --force 不再顺带触发一次重装。光给 --force 就在这里静默返回的话，
+			// 用户会以为他放行的那件事已经生效了。
+			hint = "--force 只放行安全检查报出的变化，它自己不会触发一次重装 —— 要重装再加 --reinstall"
+		}
+		ui.Info("%s 已经是 %s 了，没什么可做的（%s）", old.Name, old.Tag, hint)
 		return nil
+	}
+	// 降级是合法的 —— `toy install foo@v1.0.0` 装 v1.0.0 是用户明说的，不拦。
+	// 但不能一声不吭：上游把最新那个 tag 删掉（账号被接管、release 被撤、
+	// 自建 host 被换掉）时走的是同一条路，而那时输出里只有一句「已安装 t 1.0.0」。
+	// 铁律 8 —— 如实说，让用户自己判断这次降级是不是他要的。
+	if old != nil && insIsOlder(*old, res) {
+		ui.Warn("这是一次降级：%s 已经装着 %s，这次要装的 %s 比它旧。"+
+			"要是你没打算降级，先确认上游那个新 tag 是不是被撤掉了", old.Name, old.Tag, res.Tag)
 	}
 	return insPerform(ctx, st, cfg, res, old, *force)
 }
@@ -236,6 +264,20 @@ func insIsNewer(m store.Manifest, res *resolved) bool {
 	return semver.Compare(newV, oldV) > 0
 }
 
+// insIsOlder 判断这次要装的 tag 是不是比已装的那一版旧。
+//
+// 和 insIsNewer 不是互为反面：两边只要有一个不是合法 semver 就没有大小可言，
+// 那时候一句「这是一次降级」是猜的，而猜错了比不说更糟 —— 所以这里返回 false，
+// 而 insIsNewer 在同样的情况下按「tag 变了就是有新版」放行。
+func insIsOlder(m store.Manifest, res *resolved) bool {
+	newV, nerr := semver.Parse(res.Tag)
+	oldV, oerr := semver.Parse(m.Tag)
+	if nerr != nil || oerr != nil {
+		return false
+	}
+	return semver.Compare(newV, oldV) < 0
+}
+
 // insItem 是这次安装要下的一个文件。[artifact] 形态只有一项（可能是压缩包），
 // [script] 形态是每个条目一项。
 type insItem struct {
@@ -250,11 +292,30 @@ type insItem struct {
 
 // insPerform 是 install 和 update 共用的那一段：下载 → TOFU → 落盘 → 软链 →
 // 写清单 → 钉住 → 打印信任等级。old 非 nil 表示这是在替换一个已经装上的版本。
+//
+// force 只有一个含义：「安全检查报出的变化，我核对过了，放行」。
+// 「重装同一个版本」是 --reinstall，它到不了这里 —— 那是日常操作，不该逼用户
+// 举起一把同时能放行「这个版本换了内容」和「作者换了钥匙」的锤子，
+// 而那两件正是 TOFU 存在的全部意义（规格 §4、铁律 4/6）。
+//
+// force 真的放行了什么，必须逐条打印（铁律 8）：一次静默的放行等于没有检查。
 func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *resolved, old *store.Manifest, force bool) error {
-	if !force && insTrustDowngraded(old, res) {
-		return fmt.Errorf("上一次装 %s 的时候它是已签名的（key %s），这次却验不出签名 —— "+
-			"索引里那条记录可能被摘掉了 sig，也可能你这次是从别的路径装的。"+
-			"上面那行警告说了具体原因；自己核对过再加 --force 继续", old.Name, old.Signer)
+	if insTrustDowngraded(old, res) {
+		if !force {
+			return fmt.Errorf("上一次装 %s 的时候它是已签名的（key %s），这次却验不出签名 —— "+
+				"索引里那条记录可能被摘掉了 sig，也可能你这次是从别的路径装的。"+
+				"上面那行警告说了具体原因；自己核对过再加 --force 继续", old.Name, old.Signer)
+		}
+		ui.Warn("--force 放行：%s 上一次是已签名的（key %s），这次验不出签名，信任等级降了一档",
+			old.Name, old.Signer)
+	}
+	if insSourceChanged(old, res) {
+		if !force {
+			return fmt.Errorf("%s 上一次是从 %s 装的，这次解析出来的来源是 %s —— "+
+				"索引条目只是个指针，改一行 source 就能把已装的命令换成另一个仓库的内容。"+
+				"确认过这次的来源是你要的，再加 --force 继续", old.Name, old.ID, insPackageID(res))
+		}
+		ui.Warn("--force 放行：%s 的来源从 %s 换成了 %s", old.Name, old.ID, insPackageID(res))
 	}
 	tf := res.Toyfile
 	items, err := insItems(res)
@@ -288,6 +349,15 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 			return err
 		}
 		it.path, it.sum, it.source = dl.Path, dl.SHA256, dl.Source
+		// 原始地址挂了、字节是从镜像拿到的时候必须说一声（铁律 8）。内容是 hash
+		// 寻址的，所以镜像不需要被信任（规格 §8）—— 但「不需要信任」不等于
+		// 「不需要知道」，用户有权知道这些字节到底是从哪来的。
+		// fetch 只在有 sha256 可比的时候才会去试镜像，所以走到这里必然已经比过了。
+		if dl.Source != it.url && !dl.FromCache {
+			// 镜像地址的最后一段就是 sha256，不必再把它重复一遍。
+			ui.Info("%s：原始地址没拿到，这份字节来自镜像 %s（sha256 已核对，和 toy.toml 声明的一致）",
+				it.name, dl.Source)
+		}
 
 		id := trustID
 		if len(items) > 1 {
@@ -302,30 +372,41 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	// 首次安装都要钉）。换了一把钥匙就是换了一个"作者"，那正是要拦的事。
 	if res.Entry != nil && res.Signer != "" {
 		key := strings.TrimSpace(res.Entry.Key)
-		if err := insTOFU(ring, insPackageID(res), "key", key, "作者公钥", force); err != nil {
+		if err := insTOFU(ring, insKeyID(res), "key", key, "作者公钥", force); err != nil {
 			return err
 		}
-		pins = append(pins, pin{insPackageID(res), "key", key})
+		pins = append(pins, pin{insKeyID(res), "key", key})
 	}
 
-	pkgDir := st.PkgDir(insHostSeg(res), insOwnerSeg(res), tf.Name, insDirVersion(res))
-	if err := insRemovePkgDir(st, pkgDir); err != nil {
+	// 解压和软链全部成功才动正在服役的那一版：先解压进兄弟目录，成了再把旧的
+	// 挪开、新的顶上去，软链失败就把旧的挪回来。就地 RemoveAll 再解压的话，
+	// 一个投毒或者损坏的上游配上一次很正常的 --force 重装，就是一条「拆掉用户
+	// 手上那个命令」的原语：包目录空了、软链悬空，而清单还在、toy list 照样列它。
+	pkgDir := st.PkgDir(insHostSeg(res), insOwnerSeg(res), insNameSeg(res, tf), insDirVersion(res))
+	staged := pkgDir + ".new"
+	if err := insRemovePkgDir(st, staged); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		return fmt.Errorf("建不出包目录 %s：%w", pkgDir, err)
+	if err := os.MkdirAll(staged, 0o755); err != nil {
+		return fmt.Errorf("建不出包目录 %s：%w", staged, err)
 	}
 	for _, it := range items {
-		if err := insUnpack(tf, it, pkgDir); err != nil {
-			os.RemoveAll(pkgDir) // 半个包比没有包更难查
+		if err := insUnpack(tf, it, staged); err != nil {
+			os.RemoveAll(staged) // 半个包比没有包更难查
 			return err
 		}
+	}
+	backup, err := insSwapIn(st, staged, pkgDir)
+	if err != nil {
+		return err
 	}
 
 	links, err := insLink(st, tf, pkgDir, old, force)
 	if err != nil {
+		insRestore(st, backup, pkgDir)
 		return err
 	}
+	_ = insRemovePkgDir(st, backup)
 
 	m := store.Manifest{
 		ID: insPackageID(res), IndexID: insIndexID(res), Name: tf.Name,
@@ -338,6 +419,14 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	}
 	if err := st.SaveManifest(m); err != nil {
 		return err
+	}
+	// 来源变了的话新清单是另一个 id，旧的那份不删就会变成一条指着已删目录的
+	// 幽灵记录：`toy list` 里同一个包出现两次，`toy uninstall <名字>` 报
+	// 「对上了 2 个已装的包」，而 doctor 给的修复建议会把搬走的那个仓库再装一遍。
+	if old != nil && old.ID != m.ID {
+		if err := st.RemoveManifest(old.ID); err != nil && !errors.Is(err, store.ErrNotInstalled) {
+			ui.Warn("旧清单 %s 删不掉：%v（`toy list` 会重复列出这个包）", old.ID, err)
+		}
 	}
 	// 装成了才钉。失败还钉住的话，下一次安装会拿一个坏值当"首次安装钉住的"。
 	for _, p := range pins {
@@ -520,7 +609,14 @@ func insLink(st *store.Store, tf *toyfile.Toyfile, pkgDir string, old *store.Man
 		if fi, err := os.Stat(target); err == nil && !fi.IsDir() && fi.Mode().Perm()&0o111 == 0 {
 			os.Chmod(target, fi.Mode().Perm()|0o755)
 		}
-		lp, err := st.Link(name, target, force || owned[name])
+		// 先按「不放行」试一次：这样 --force 到底顶掉了什么，能照着 store 自己
+		// 的措辞原样说出来，而不用在这里把遮蔽检查重抄一遍（铁律 8）。
+		// owned[name] 是我们上一次自己建的那条链，换掉它不是安全放行。
+		lp, err := st.Link(name, target, owned[name])
+		if err != nil && force && (errors.Is(err, store.ErrShadow) || errors.Is(err, store.ErrLinkExists)) {
+			ui.Warn("--force 放行：%v", err)
+			lp, err = st.Link(name, target, true)
+		}
 		if err != nil {
 			for _, done := range links {
 				if uerr := st.Unlink(done); uerr != nil {
@@ -578,20 +674,82 @@ func insTOFU(ring *sign.Ring, id, kind, value, what string, force bool) error {
 			"这次拿到的是 %s。这可能是作者重发了同一个版本，也可能是内容被人换掉了；"+
 			"自己核对过再加 --force 覆盖", sign.ErrChanged, id, what, old, value)
 	}
-	ui.Warn("%s 的 %s 变了（钉住的 %s → 这次 %s），--force 已放行", id, what, old, value)
+	ui.Warn("--force 放行：%s 的 %s 变了（钉住的 %s → 这次 %s）", id, what, old, value)
 	return nil
 }
 
 // insExisting 读这个包已经装着的那一份清单。没装过返回 nil，不是错误。
-func insExisting(st *store.Store, id string) (*store.Manifest, error) {
-	m, err := st.LoadManifest(id)
-	if errors.Is(err, store.ErrNotInstalled) {
+//
+// 先按包 id 找；找不到再按索引条目的 id 找一遍 —— 索引里的 source 一变，
+// insPackageID 跟着就变了，只按它查的话「上一次装的是什么」直接从视野里消失，
+// 于是来源变更拦不住、旧清单也没人清。
+func insExisting(st *store.Store, res *resolved) (*store.Manifest, error) {
+	m, err := st.LoadManifest(insPackageID(res))
+	if err == nil {
+		return &m, nil
+	}
+	if !errors.Is(err, store.ErrNotInstalled) {
+		return nil, err
+	}
+	idxID := insIndexID(res)
+	if idxID == "" {
 		return nil, nil
 	}
+	ms, err := st.ListManifests()
 	if err != nil {
 		return nil, err
 	}
-	return &m, nil
+	for _, m := range ms {
+		if m.IndexID == idxID {
+			return &m, nil
+		}
+	}
+	return nil, nil
+}
+
+// insSourceChanged 判断这次装的东西是不是换了一个来源。
+//
+// 索引条目是一个谁都能提 PR 的 JSON 里的一行指针。把 source 从
+// github:alice/tool 改成 github:evil/tool，`toy update` 就会照着新指针重新解析，
+// 而三道闸一道都不响：两边都没签名时 insTrustDowngraded 恒为 false，
+// TOFU 的 id 带着 source 一起变成了一条全新记录，信任那一行也照旧。
+// 所以来源变更和信任降级要一样对待 —— 一次升级不该悄悄换掉用户信的是谁。
+func insSourceChanged(old *store.Manifest, res *resolved) bool {
+	return old != nil && old.ID != "" && old.ID != insPackageID(res)
+}
+
+// insSwapIn 把解压好的 staged 顶成 pkgDir，返回被挪开的旧目录（没有就是空串）。
+func insSwapIn(st *store.Store, staged, pkgDir string) (string, error) {
+	backup := ""
+	if _, err := os.Stat(pkgDir); err == nil {
+		backup = pkgDir + ".old"
+		if err := insRemovePkgDir(st, backup); err != nil {
+			os.RemoveAll(staged)
+			return "", err
+		}
+		if err := os.Rename(pkgDir, backup); err != nil {
+			os.RemoveAll(staged)
+			return "", fmt.Errorf("挪不开旧的包目录 %s：%w", pkgDir, err)
+		}
+	}
+	if err := os.Rename(staged, pkgDir); err != nil {
+		insRestore(st, backup, pkgDir)
+		os.RemoveAll(staged)
+		return "", fmt.Errorf("装不进包目录 %s：%w", pkgDir, err)
+	}
+	return backup, nil
+}
+
+// insRestore 把 insSwapIn 挪开的那一版放回去。best-effort：这条路上已经有一个
+// 错误要报了，再报一个只会盖住真正的原因。
+func insRestore(st *store.Store, backup, pkgDir string) {
+	if backup == "" {
+		return
+	}
+	_ = insRemovePkgDir(st, pkgDir)
+	if err := os.Rename(backup, pkgDir); err != nil {
+		ui.Warn("旧的那一版放不回 %s：%v（重跑一次 `toy install` 就能补回来）", pkgDir, err)
+	}
 }
 
 // insRemovePkgDir 删一个包目录，删之前确认它真的在 ~/.toy 里面。
@@ -632,6 +790,33 @@ func insIndexID(res *resolved) string {
 		return ""
 	}
 	return res.Entry.ID
+}
+
+// insKeyID 是 TOFU 钥匙环里 "key" 那一维的 id。
+//
+// 必须用索引条目的 id：作者公钥只在索引条目里出现，而 insPackageID 是从那条
+// 记录的 source 推出来的 —— 改一行 source 就等于换了一个身份，于是「作者公钥
+// 换了一把」这件事根本不会被 Check 看到，而规格 §4 要求公钥变了必须停下来。
+func insKeyID(res *resolved) string {
+	if id := insIndexID(res); id != "" {
+		return id
+	}
+	return insPackageID(res)
+}
+
+// insNameSeg 是 pkg/<host>/<owner>/<这一段>/<version> 里的那一段。
+//
+// 不能直接用 toy.toml 里的 name：那是作者随便写的，同一个 owner 下的
+// tool-rs 和 tool-go 都写 name = "tool" 完全合法，于是两个包共用一个安装目录
+// —— 装后一个会静默删掉前一个的文件（而前一个的清单和软链都还在），
+// 卸后一个也会把前一个的目录一起删走。仓库名在一个 owner 下天然唯一；
+// 裸地址没有仓库名，只能靠地址本身的 hash 区分。
+func insNameSeg(res *resolved, tf *toyfile.Toyfile) string {
+	if res.Ref.Kind != ref.KindURL && res.Repo != "" {
+		return res.Repo
+	}
+	sum := sha256.Sum256([]byte(insPackageID(res)))
+	return tf.Name + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
 // insTrustID 是 TOFU 钥匙环里 sha256 那一维的 id。
@@ -689,14 +874,22 @@ func insOwnerSeg(res *resolved) string {
 func insTrustDetail(res *resolved) string {
 	switch res.Trust {
 	case store.TrustSigned:
-		return fmt.Sprintf("%s (key %s)", res.Owner, res.Signer)
+		// 绝不把仓库 owner 印在勾后面。签名消息是 id + source + toy.toml 原文，
+		// 三样都是公开可读的，里面没有一个字节把这把公钥和那个 owner 绑起来
+		// —— 任何人都能拿自己的钥匙签别人那条还没认领的记录，而
+		// "Derrity (key …)" 读起来就是「Derrity 签的」（铁律 8）。
+		// 这个勾能说的只有：索引里登记的这把钥匙，签过这一版的 toy.toml。
+		detail := "key " + res.Signer
+		if res.IndexName != "" {
+			detail += " · 索引 " + res.IndexName + " 登记"
+		}
+		if who := qryHostLabel(res); who != "" && who != "/" {
+			detail += "（不代表 " + who + " 本人）"
+		}
+		return detail
 	case store.TrustHost:
 		// 想要的是 "github.com/Derrity" —— 用户信的是那个托管方上的那个账号。
-		domain := res.HostName
-		if u, err := url.Parse(res.Host.WebURL(res.Owner, res.Repo)); err == nil && u.Host != "" {
-			domain = u.Host
-		}
-		return domain + "/" + res.Owner
+		return qryHostLabel(res)
 	default:
 		return ""
 	}
@@ -735,7 +928,15 @@ func insBaseNames(links []string) []string {
 func insParseFlags(fs *flag.FlagSet, args []string) error {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		if !errors.Is(err, flag.ErrHelp) {
+		if errors.Is(err, flag.ErrHelp) {
+			// -h 原来只落到 main 那一行语法串上，每个选项到底是什么意思一个字都没有。
+			// 而 install 的 --reinstall 和 --force 恰恰是必须在这儿讲清楚的一对：
+			// 一个是日常操作，一个是「我核对过，放行安全检查报出的变化」。
+			// main 紧接着会打那行用法串，所以这里只补选项。
+			fmt.Fprintf(os.Stderr, "toy %s 的选项（写在位置参数前面）:\n", fs.Name())
+			fs.SetOutput(os.Stderr)
+			fs.PrintDefaults()
+		} else {
 			ui.Error("%v", err)
 		}
 		return errUsage

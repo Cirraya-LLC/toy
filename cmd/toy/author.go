@@ -112,7 +112,7 @@ func runPublish(ctx context.Context, args []string) error {
 
 	src := strings.TrimSpace(*source)
 	if src == "" {
-		if src, err = autGitSource(ctx, dir, cfg.Hosts); err != nil {
+		if src, err = autGitSource(ctx, dir, st.BinDir(), cfg.Hosts); err != nil {
 			return err
 		}
 	}
@@ -165,8 +165,9 @@ func runPublish(ctx context.Context, args []string) error {
 }
 
 // autGitSource 从 git 的 origin 推出索引条目的 source。
-func autGitSource(ctx context.Context, dir string, overrides map[string]host.Host) (string, error) {
-	remote, err := autGitRemote(ctx, dir)
+// binDir 是 toy 自己的 bin 目录，autGitPath 要用它把那个目录排除掉。
+func autGitSource(ctx context.Context, dir, binDir string, overrides map[string]host.Host) (string, error) {
+	remote, err := autGitRemote(ctx, dir, binDir)
 	if err != nil {
 		return "", err
 	}
@@ -184,15 +185,68 @@ func autGitSource(ctx context.Context, dir string, overrides map[string]host.Hos
 	return name + ":" + owner + "/" + repo, nil
 }
 
+// autGitPath 找 git 的绝对路径，**跳过 toy 自己的 bin 目录**。
+//
+// 裸 "git" 交给 exec 就是执行 PATH 上的第一个 git，而 toy 的 bin 目录按文档就在
+// PATH 上 —— 一个装上来的包只要提供一条叫 git 的命令，`toy publish` 就会执行它。
+// 那是铁律 1 的洞，不是不方便。
+//
+// 这是 internal/host 里 lookupGit 的第二份实现（那边还没导出可用的入口）。
+// **两处的规则必须一字不差地保持一致**：走 PATH、跳过相对项、跳过 ~/.toy/bin、
+// 取第一个能跑的普通文件。这边松一格，publish 就成了绕过去的那条路。
+// internal/host 哪天把入口导出来，这里和 qryCheckGit 一起换过去，把这份删掉。
+func autGitPath(binDir string) (string, error) {
+	var inToyBin string
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		// 相对项（"." 和 PATH 里那个到处都是的空项）指的是进程当前所在的目录。
+		// 在一个别人写得进去的目录里跑 toy，不该等于把铁律 1 交出去。
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		cand := filepath.Join(dir, "git")
+		// 跟随软链：bin/ 里全是软链，pkg 里的真身才是那个普通文件。
+		if fi, err := os.Stat(cand); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		if binDir != "" && autSameDir(dir, binDir) {
+			inToyBin = cand // 只为报错时说得清楚，继续往后找真的 git
+			continue
+		}
+		return cand, nil
+	}
+	if inToyBin != "" {
+		return "", fmt.Errorf("拒绝执行 —— PATH 上唯一的 git 是 %s，它在 toy 自己的 bin 目录里，"+
+			"也就是说它来自某个装上来的包。跑它就等于让那个包拿到执行（铁律 1）。"+
+			"用 `toy list` 找出是谁装的、卸掉它，再装一个真的 git；"+
+			"或者用 --source github:owner/repo 直接指定，那条路根本不碰 git", inToyBin)
+	}
+	return "", errors.New("找不到 git 命令，推不出 source。用 --source github:owner/repo 直接指定")
+}
+
+// autSameDir / autCanonDir：先转绝对路径再解软链（/usr/bin 常常是 /bin 的软链），
+// 解不动就退回字符串比较。和 internal/host、internal/store 里的同名函数是一份东西。
+func autSameDir(a, b string) bool { return autCanonDir(a) == autCanonDir(b) }
+
+func autCanonDir(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
+}
+
 // autGitRemote 取这个目录的 origin 地址。
 // 只读一行配置，不联网、不执行仓库里的任何东西（铁律 1）。
-func autGitRemote(ctx context.Context, dir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "remote", "get-url", "origin")
+func autGitRemote(ctx context.Context, dir, binDir string) (string, error) {
+	gitPath, err := autGitPath(binDir)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, gitPath, "-C", dir, "remote", "get-url", "origin")
 	out, err := cmd.Output()
 	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return "", errors.New("找不到 git 命令，推不出 source。用 --source github:owner/repo 直接指定")
-		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}

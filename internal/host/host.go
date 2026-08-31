@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -88,14 +89,19 @@ func Builtin() map[string]Host {
 	return m
 }
 
-// selfHostedHint 是拒绝一个 host 时给出的那段可以直接抄进 config.toml 的模板。
+// selfHostedHint 是拒绝一个 host 时给出的那行可以直接抄进 config.toml 的模板。
+//
+// 写成 TOML 的**行内表**（一行，不是 [hosts.x] 那种五行段落）是有原因的：这段文本
+// 最终经 ui.Error 输出，而 ui.safe 会把所有控制字符转义成看得见的 \xNN —— 铁律 8
+// 要求信任那一行不能被别人塞进来的 \r / ESC 盖掉重写，所以那道闸不能为了排版放开。
+// 带 \n\t 的多行模板到了用户眼前就是一串字面量 "\x0a\x09"，比不给还糟。
+// 行内表是合法 TOML 1.0、BurntSushi/toml 认，而且照样能整行复制粘贴。
 func selfHostedHint(name string) string {
-	return fmt.Sprintf("在 ~/.toy/config.toml 里加一段：\n\n"+
-		"\t[hosts.%s]\n"+
-		"\traw     = \"https://你的域名/{owner}/{repo}/raw/tag/{ref}/{path}\"\n"+
-		"\tclone   = \"https://你的域名/{owner}/{repo}\"\n"+
-		"\trelease = \"https://你的域名/{owner}/{repo}/releases/download/{tag}/{asset}\"\n"+
-		"\tweb     = \"https://你的域名/{owner}/{repo}\"", name)
+	const tmpl = `hosts.%s = { raw = "https://你的域名/{owner}/{repo}/raw/tag/{ref}/{path}", ` +
+		`clone = "https://你的域名/{owner}/{repo}", ` +
+		`release = "https://你的域名/{owner}/{repo}/releases/download/{tag}/{asset}", ` +
+		`web = "https://你的域名/{owner}/{repo}" }`
+	return "在 ~/.toy/config.toml 里加一行（整行复制）：" + fmt.Sprintf(tmpl, name)
 }
 
 // Lookup 先查 overrides 再查内置表。
@@ -187,6 +193,96 @@ func (h Host) WebURL(owner, repo string) string {
 	return expand(h.Web, "{owner}", owner, "{repo}", repo)
 }
 
+// —— git 的绝对路径 ——————————————————————————————————————————————
+//
+// 铁律 1 的另一半：Tags 从 PATH 上按名字 exec git，而 ~/.toy/bin 是**包能往里
+// 写软链**的目录，也正是 doctor 教用户放在 PATH 最前面的那个。装的那一刻确实一行
+// 都没跑，但下一条 toy 命令就把那个包当 git 执行了 —— 执行只是推迟了一条命令。
+// internal/store 那一半拒绝把包的可执行文件链成 `git`；这一半保证即使真有一个
+// bin/git 躺在那儿，toy 也不会去跑它。
+
+// toyBinDir 推导 ~/.toy/bin。
+//
+// 这几行是 store.Open + Store.BinDir 的复刻：internal/store 已经 import 了
+// internal/host，反过来 import 会成环。**两边的规则必须一字不差地保持一致**
+// （root 为空 → TOY_HOME → ~/.toy，再转绝对路径，bin 子目录）——
+// 改了那边不同步改这里，这条排除会静默失效，而失效的样子和正常一模一样。
+//
+// 推不出来（既没有 TOY_HOME 也没有主目录）返回空串，调用方据此不排除任何目录。
+func toyBinDir() string {
+	root := os.Getenv("TOY_HOME")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		root = filepath.Join(home, ".toy")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(abs, dirBinName)
+}
+
+// dirBinName 和 store 里的 dirBin 是同一个值，理由同上（不能 import 过来）。
+const dirBinName = "bin"
+
+// lookupGit 自己走一遍 PATH，返回 git 的绝对路径。
+//
+// 不用 exec.LookPath：它没法排除某个目录，而"排除 ~/.toy/bin"正是这里的全部目的。
+func lookupGit() (string, error) {
+	binDir := toyBinDir()
+	var inToyBin string
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		// 相对项（"." 和 PATH 里那个到处都是的空项）指的是 toy 进程**当前所在的
+		// 目录**。在一个别人写得进去的目录里跑 toy，不该等于把铁律 1 交出去；
+		// 而一台机器上的 git 也从来不会只存在于某个相对目录里。
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		cand := filepath.Join(dir, "git")
+		if !executableFile(cand) {
+			continue
+		}
+		if binDir != "" && sameDir(dir, binDir) {
+			inToyBin = cand // 记下来只为了报错时能说清楚，继续往后找真的 git
+			continue
+		}
+		return cand, nil
+	}
+	if inToyBin != "" {
+		return "", fmt.Errorf("host: 拒绝执行 —— PATH 上唯一的 git 是 %s，"+
+			"它在 toy 自己的 bin 目录里，也就是说它来自某个装上来的包。"+
+			"toy 靠 `git ls-remote` 发现版本，跑它就等于让那个包拿到执行 —— "+
+			"**这很可能是一次攻击**。用 `toy list` 找出是谁装的、卸掉它，"+
+			"再装一个真的 git（Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install）",
+			inToyBin)
+	}
+	return "", errors.New("host: 找不到 git 命令。toy 靠 `git ls-remote` 发现版本，请先装 git" +
+		"（Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install）")
+}
+
+// executableFile 判断 p 是不是一个能跑的普通文件。跟随软链（bin/ 里全是软链）。
+func executableFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
+}
+
+// sameDir / canonDir 和 store 里的同名函数是一份东西（同样因为不能 import）：
+// 先转绝对路径，再解符号链接（/usr/bin 常常是 /bin 的软链），解不动就退回字符串比较。
+func sameDir(a, b string) bool { return canonDir(a) == canonDir(b) }
+
+func canonDir(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
+}
+
 // maxStderrLine 是从 git 那儿转述给用户的错误信息长度上限（字节）。
 const maxStderrLine = 300
 
@@ -224,7 +320,14 @@ func Tags(ctx context.Context, cloneURL string) ([]string, error) {
 		return nil, fmt.Errorf("host: 拒绝执行 —— clone 地址 %q 以 '-' 开头，"+
 			"git 会把它当成命令行选项（比如 --upload-pack=<命令>，那就是一条任意命令执行）", cloneURL)
 	}
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--refs", "--", cloneURL)
+	// 绝对路径，而且保证不来自 ~/.toy/bin —— 见上面 lookupGit。
+	// 不缓存：一次 PATH 走查是几个 stat，而它后面跟着的是一次网络往返；
+	// 缓存换不来什么，却会让「PATH 变了」这件事在一个进程里再也生效不了。
+	git, err := lookupGit()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, git, "ls-remote", "--tags", "--refs", "--", cloneURL)
 	// GIT_TERMINAL_PROMPT=0：私有仓库或打错的名字会让 git 停在交互式密码提示上永不返回，
 	// 那时候 context 超时也只能杀掉 git 本身，用户看到的是一次莫名其妙的挂起。
 	// 另外两个 ASKPASS 是防它转头去弹图形界面的密码框。
@@ -253,7 +356,14 @@ func Tags(ctx context.Context, cloneURL string) ([]string, error) {
 				"（Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install）")
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, fmt.Errorf("host: 读 %s 的 tag 超时了（%v）—— 可能是网络不通，或者这个仓库不存在/需要登录", cloneURL, ctxErr)
+			// %w 而不是 %v：上层（runUpdate / main）靠 errors.Is(err, context.Canceled)
+			// 认出 Ctrl-C 并立刻停手。吃掉这层包装，Ctrl-C 就退化成一次普通失败，
+			// 剩下的包会被挨个再跑一遍、每个立刻失败，最后打出一堆"没能更新"。
+			if errors.Is(ctxErr, context.Canceled) {
+				// 取消不是超时，别把用户自己按的 Ctrl-C 说成网络故障。
+				return nil, ctxErr
+			}
+			return nil, fmt.Errorf("host: 读 %s 的 tag 超时了（%w）—— 可能是网络不通，或者这个仓库不存在/需要登录", cloneURL, ctxErr)
 		}
 		if msg := firstLine(stderr.String()); msg != "" {
 			return nil, fmt.Errorf("host: `git ls-remote --tags %s` 失败：%s", cloneURL, msg)

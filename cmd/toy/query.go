@@ -18,7 +18,6 @@ import (
 	"maps"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -59,21 +58,43 @@ func qryFlags(name string) *flag.FlagSet {
 // tabwriter 靠 \t 和 \n 划分单元格，而 desc 是索引作者写的：一个 \t 能让这一行
 // 之后的列全部错位，一个 \n 能凭空多造一行（后面那半行长得就像一条正常记录）。
 // ui 那边最终也会转义一次，但那时列已经算完了 —— 必须在进 tabwriter 之前做。
+// 连续空白也折成一个空格：一格内容没有理由自带列间距，而那正是拿一个
+// name 在表里画出一整行假记录的原料。
 func qryCell(s string) string {
-	if strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) < 0 {
+	if strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) < 0 &&
+		!strings.Contains(s, "  ") {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 8)
+	space := false
 	for _, r := range s {
 		if r < 0x20 || r == 0x7f {
 			fmt.Fprintf(&b, `\x%02x`, r)
+			space = false
 			continue
+		}
+		if r == ' ' {
+			if space {
+				continue
+			}
+			space = true
+		} else {
+			space = false
 		}
 		b.WriteRune(r)
 	}
 	return b.String()
 }
+
+// qryCellWidth 是表格里一格的默认上限（按 rune）。
+//
+// name / desc / 索引名一路来自 toy.toml 和索引，长度和内容都没有上限。
+// tabwriter 的列宽 = 该列最宽那格 + 2，所以一格 300 列宽的 name 会把它右边
+// 所有列 —— 包括【每一行】的信任等级 —— 一起顶到屏幕外面去，而那一格里正好
+// 排得下一段自己写的 "v3.2.1  ✓ 已签名 9f3c1a20  Derrity/cowsay"。
+// 一个恶意包就能让整张表的信任列消失并伪造自己那一行（铁律 8）。
+const qryCellWidth = 24
 
 // qryTrunc 按 rune 截断，超了缀省略号。
 func qryTrunc(s string, n int) string {
@@ -92,7 +113,10 @@ func qryTrunc(s string, n int) string {
 // 用 tabwriter 的列宽是按 rune 数算的，而中日韩字符在终端上占两格 —— 所以
 // 含中文的列后面会有一两格的参差。把最自由的那一列（描述、来源）放最后就行，
 // 别为了这个自己去实现一张 East Asian Width 表。
-func qryTable(rows [][]string) {
+//
+// widths 按列给上限，缺的用 qryCellWidth，0 表示不截。最后一列默认不截：
+// 它右边没有东西可以被顶出去。
+func qryTable(rows [][]string, widths ...int) {
 	if len(rows) == 0 {
 		return
 	}
@@ -101,7 +125,14 @@ func qryTable(rows [][]string) {
 	for _, r := range rows {
 		cells := make([]string, len(r))
 		for i, c := range r {
-			cells[i] = qryCell(c)
+			limit := qryCellWidth
+			if i == len(r)-1 {
+				limit = 0
+			}
+			if i < len(widths) {
+				limit = widths[i]
+			}
+			cells[i] = qryTrunc(qryCell(c), limit)
 		}
 		fmt.Fprintln(w, strings.Join(cells, "\t"))
 	}
@@ -197,7 +228,9 @@ func runList(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	rows := [][]string{{"名字", "版本", "信任", "来源"}}
+	// 信任放第一列：它是这张表里唯一不能被挤掉的东西，而放在第一列就不存在
+	// 「被左边那格顶出屏幕」这回事（铁律 8）。
+	rows := [][]string{{"信任", "名字", "版本", "来源"}}
 	for _, m := range ms {
 		name := m.Name
 		if name == "" {
@@ -215,9 +248,10 @@ func runList(ctx context.Context, args []string) error {
 		if source == "" {
 			source = m.Source
 		}
-		rows = append(rows, []string{name, version, qryTrustLabel(m.Trust, m.Signer), source})
+		rows = append(rows, []string{qryTrustLabel(m.Trust, m.Signer), name, version, source})
 	}
-	qryTable(rows)
+	// 信任那一格要放得下完整指纹，所以它的上限比别的列宽。
+	qryTable(rows, 48, qryCellWidth, 16, 0)
 	ui.Info("")
 	ui.Info("共 %d 个。`toy info <ref>` 看详情，`toy update` 升级。", len(ms))
 	return nil
@@ -228,16 +262,21 @@ func runList(ctx context.Context, args []string) error {
 // qrySearchHit 是 --json 的一条结果。刻意不直接吐 index.Entry：
 // 索引里以后加的字段不该自动出现在我们承诺的输出格式里。
 type qrySearchHit struct {
-	ID               string   `json:"id"`
-	Source           string   `json:"source"`
-	Desc             string   `json:"desc,omitempty"`
-	Tags             []string `json:"tags,omitempty"`
-	Index            string   `json:"index"`
-	Score            int      `json:"score"`
-	Signed           bool     `json:"signed"`
-	KeyFingerprint   string   `json:"key_fingerprint,omitempty"`
-	Installed        bool     `json:"installed"`
-	InstalledVersion string   `json:"installed_version,omitempty"`
+	ID     string   `json:"id"`
+	Source string   `json:"source"`
+	Desc   string   `json:"desc,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+	Index  string   `json:"index"`
+	Score  int      `json:"score"`
+	// HasKey 只说明索引条目里有一把格式合法的 ed25519 公钥。**不是「已签名」**：
+	// search 手里没有那一版的 toy.toml（要为每条结果各发一次网络请求才拿得到），
+	// 所以它一次签名都验不了。抄一把别人的公钥是零成本的，条目里连 sig 都可以
+	// 是空的 —— 叫它 signed 等于把这三个字白送给任何一个能改索引的人（规格 §5、
+	// 铁律 8）。真正验过签名的只有 install / info 那条路。
+	HasKey           bool   `json:"has_key"`
+	KeyFingerprint   string `json:"key_fingerprint,omitempty"`
+	Installed        bool   `json:"installed"`
+	InstalledVersion string `json:"installed_version,omitempty"`
 }
 
 func runSearch(ctx context.Context, args []string) error {
@@ -258,6 +297,16 @@ func runSearch(ctx context.Context, args []string) error {
 	st, cfg, err := openStore()
 	if err != nil {
 		return err
+	}
+	// 一个索引都没配是【默认状态】，不是出错（见 store.DefaultIndexURL）。
+	// 走下去只会打出一句「索引里没有匹配 X 的包」—— 那句话是假的，我们根本
+	// 没找过任何地方（铁律 8）。
+	if len(cfg.Indexes) == 0 {
+		qryNoIndexHelp()
+		if *asJSON {
+			return qrySearchJSON(query, nil)
+		}
+		return nil
 	}
 	idxs, err := loadIndexes(ctx, st, cfg)
 	if err != nil {
@@ -284,7 +333,7 @@ func runSearch(ctx context.Context, args []string) error {
 		// 索引里那把 key 不是合法的 ed25519 公钥时，绝不能渲染成一个看起来
 		// 正常的指纹（铁律 8）—— rsvFingerprint 认不出就返回空串。
 		if fp := rsvFingerprint(r.Entry.Key); fp != "" {
-			h.Signed, h.KeyFingerprint = true, fp
+			h.HasKey, h.KeyFingerprint = true, fp
 		}
 		if m, ok := qryLookupInstalled(installed, r.Entry.Source, r.Entry.ID); ok {
 			h.Installed = true
@@ -294,14 +343,7 @@ func runSearch(ctx context.Context, args []string) error {
 	}
 
 	if *asJSON {
-		// 规格 §9：机器可读的输出走 stdout，其余一切走 stderr。
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(struct {
-			Query   string         `json:"query"`
-			Count   int            `json:"count"`
-			Results []qrySearchHit `json:"results"`
-		}{query, len(hits), hits})
+		return qrySearchJSON(query, hits)
 	}
 
 	if len(hits) == 0 {
@@ -327,7 +369,7 @@ func runSearch(ctx context.Context, args []string) error {
 		}
 		rows = append(rows, []string{h.ID, state, h.Index, qryTrunc(h.Desc, qryDescWidth)})
 	}
-	qryTable(rows)
+	qryTable(rows, 48, 16, qryCellWidth, 0)
 	ui.Info("")
 	if len(hits) == *limit {
 		ui.Info("只显示了 %d 条（--limit 可以调）。`toy info <包>` 看详情。", len(hits))
@@ -337,19 +379,64 @@ func runSearch(ctx context.Context, args []string) error {
 	return nil
 }
 
+// qrySearchJSON 是 --json 那份输出。规格 §9：机器可读的走 stdout，其余一切走 stderr。
+// 没有结果时也要吐一份合法的空结果，别让脚本对着空 stdout 猜是不是崩了。
+func qrySearchJSON(query string, hits []qrySearchHit) error {
+	if hits == nil {
+		hits = []qrySearchHit{}
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(struct {
+		Query   string         `json:"query"`
+		Count   int            `json:"count"`
+		Results []qrySearchHit `json:"results"`
+	}{query, len(hits), hits})
+}
+
+// qryNoIndexHelp 说清楚「一个索引都没配」是怎么回事，并给出照抄就能用的命令。
+//
+// 这是合法状态而不是故障：内置索引现在是空的（store.DefaultIndexURL），
+// 而 `toy install github:owner/repo` 那条路从头到尾不经过索引。所以这里只讲
+// 「怎么加一个」和「不加也能装」，一个叉都不打。
+func qryNoIndexHelp() {
+	ui.Info("还没配任何索引，所以搜不到东西 —— 这是默认状态，不是出错了。")
+	ui.Info("")
+	ui.Info("加一个（名字只在本地用，随便起）：")
+	ui.Info("    toy index add local file:///绝对路径/toy-index.json   # 本地文件")
+	ui.Info("    toy index add local ./index/toy-index.json           # 裸路径也行，会自动补成 file://")
+	ui.Info("    toy index add community https://example.com/index.json")
+	ui.Info("")
+	ui.Info("索引只是一份目录，托管方才是真相 —— 知道仓库在哪就直接装，本来也不需要索引：")
+	ui.Info("    toy install github:owner/repo")
+}
+
 // ---------------------------------------------------------------- toy info
 
 func runInfo(ctx context.Context, args []string) error {
 	if len(args) != 1 {
 		return errUsage
 	}
-	r, err := ref.Parse(args[0])
-	if err != nil {
-		return err
-	}
 	st, cfg, err := openStore()
 	if err != nil {
 		return err
+	}
+	r, err := ref.Parse(args[0])
+	if err != nil {
+		// `toy list` 和 `toy uninstall` 都认已装的那个短名字（tinyserve），而 info
+		// 只认 ref —— 于是「列表里看到的名字」在这一个子命令上报「缺少斜杠」，
+		// 同一个字符串在同一个 CLI 里有两种含义。装过的包我们手里就有它的 id，
+		// 没有理由让用户再拼一遍。找不到就把原来那条解析错误还回去：
+		// 那时它确实是个写坏了的 ref，不是一个已装的包。
+		m, ferr := st.FindByName(args[0])
+		if ferr != nil {
+			return err
+		}
+		r2, perr := ref.Parse(m.ID)
+		if perr != nil {
+			return err
+		}
+		r = r2
 	}
 	res, err := resolve(ctx, st, cfg, r)
 	if err != nil {
@@ -434,10 +521,10 @@ func runInfo(ctx context.Context, args []string) error {
 		add("已安装", "否")
 	}
 
-	qryTable(rows)
+	qryTable(rows, 16, 0)
 	ui.Info("")
 	// 信任等级走 ui.Trust，和安装完那一行是同一套措辞（规格 §4、铁律 8）。
-	ui.Trust(res.Trust, qryTrustDetail(res))
+	ui.Trust(res.Trust, insTrustDetail(res))
 	return nil
 }
 
@@ -446,25 +533,6 @@ func qryOr(s, fallback string) string {
 		return fallback
 	}
 	return s
-}
-
-// qryTrustDetail 拼 ui.Trust 那一行的后半段。
-func qryTrustDetail(res *resolved) string {
-	switch res.Trust {
-	case store.TrustSigned:
-		who := res.Owner
-		if who == "" && res.Entry != nil {
-			who = res.Entry.ID
-		}
-		if who == "" {
-			return "key " + res.Signer
-		}
-		return fmt.Sprintf("%s (key %s)", who, res.Signer)
-	case store.TrustHost:
-		return qryHostLabel(res)
-	default:
-		return ""
-	}
 }
 
 // qryHostLabel 是给人看的来源，形如 "github.com/Derrity"。
@@ -576,8 +644,9 @@ func qryIndexNames(cfg store.Config) []string {
 
 func qryIndexList(st *store.Store, cfg store.Config) error {
 	if len(cfg.Indexes) == 0 {
-		ui.Info("一个索引都没有配。`toy index add default <地址>` 加一个，")
-		ui.Info("或者删掉 %s 让 toy 重新写一份带内置索引的默认配置。", filepath.Join(st.Root, "config.toml"))
+		qryNoIndexHelp()
+		ui.Info("")
+		ui.Info("配置文件在 %s。", filepath.Join(st.Root, "config.toml"))
 		return nil
 	}
 	// 包数和缓存时间都只看本地缓存 —— 列个索引不该联网，那是 `toy doctor` 的活。
@@ -672,7 +741,7 @@ func runDoctor(ctx context.Context, args []string) error {
 		qryCheckDir("pkg 目录", filepath.Join(st.Root, "pkg"), false),
 		qryCheckDir("keys 目录", st.KeysDir(), true),
 	)
-	checks = append(checks, qryCheckGit())
+	checks = append(checks, qryCheckGit(st.BinDir()))
 	checks = append(checks, qryCheckIndexes(ctx, cfg)...)
 	checks = append(checks, qryCheckLinks(st))
 	checks = append(checks, qryCheckManifests(st)...)
@@ -757,24 +826,33 @@ func qryCheckDir(label, dir string, strict bool) qryCheck {
 }
 
 // qryCheckGit：没有 git 就没有版本发现，github:/gitlab: 那整条路都是废的（规格 §2）。
-func qryCheckGit() qryCheck {
-	path, err := exec.LookPath("git")
+//
+// 走 autGitPath 而不是 exec.LookPath：toy 真正会执行的就是它挑出来的那一个，
+// 体检报的必须是同一个。用 LookPath 的话，一个装上来的包把 git 这个名字占下时，
+// doctor 会指着 ~/.toy/bin/git 说一句「git 在：…」—— 一条如实但把攻击说成健康的话
+// （铁律 8）。
+func qryCheckGit(binDir string) qryCheck {
+	path, err := autGitPath(binDir)
 	if err == nil {
 		return qryCheck{ok: true, title: "git 在：" + path}
 	}
 	return qryCheck{
-		title: "找不到 git",
-		note:  "toy 用 `git ls-remote --tags` 发现版本，没有它就装不了任何 github:/gitlab: 形态的包",
+		title: "找不到能用的 git",
+		note:  "toy 用 `git ls-remote --tags` 发现版本，没有它就装不了任何 github:/gitlab: 形态的包。" + ui.SafeURL(err.Error()),
 		fix:   "Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install",
 	}
 }
 
 func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 	if len(cfg.Indexes) == 0 {
+		// 这不是本机的毛病：内置索引现在就是空的（store.DefaultIndexURL），
+		// 报成 ✗ 等于让每个新用户第一次体检就看见一条红叉，还以为是自己装坏了。
+		// 中性地说一句，办法照给（铁律 8：如实说，但别栽赃）。
 		return []qryCheck{{
-			title: "一个索引都没配 —— `toy search` 什么也搜不到",
-			note:  "不影响 `toy install github:owner/repo`，那条路本来就不经过索引",
-			fix:   "toy index add default <索引地址>",
+			ok:    true,
+			title: "没有配索引（`toy search` 暂时搜不到东西）",
+			note: "这是默认状态，不影响 `toy install github:owner/repo` —— 那条路本来就不经过索引。" +
+				"要开搜就 `toy index add <名字> <地址>`（地址可以是 https://…，也可以是本地那个 json 的路径）",
 		}}
 	}
 	out := make([]qryCheck, 0, len(cfg.Indexes))

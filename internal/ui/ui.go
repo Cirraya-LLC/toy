@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/schollz/progressbar/v3"
 	"golang.org/x/term"
@@ -75,17 +76,37 @@ func isCtrl(r rune) bool { return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x
 // 一切终端输出的唯一出口，堵在这儿就不用指望每个调用方都记得。
 func safe(s string) string {
 	s = redactURLs(s)
-	if strings.IndexFunc(s, isCtrl) < 0 {
+	// 快路径必须先确认整串是合法 UTF-8：IndexFunc 把非法字节解成 U+FFFD，
+	// 而 U+FFFD 不是控制符 —— 裸的 0x9b（8 位 CSI）会被当成干净的放过去。
+	if utf8.ValidString(s) && strings.IndexFunc(s, isCtrl) < 0 {
 		return s // 绝大多数时候一次扫描就走人，不分配
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 8)
-	for _, r := range s {
-		if isCtrl(r) {
-			fmt.Fprintf(&b, `\x%02x`, r)
+	for i := 0; i < len(s); {
+		if c := s[i]; c < utf8.RuneSelf {
+			if isCtrl(rune(c)) {
+				fmt.Fprintf(&b, `\x%02x`, c)
+			} else {
+				b.WriteByte(c)
+			}
+			i++
 			continue
 		}
-		b.WriteRune(r)
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && n == 1 {
+			// 非法字节按字节写出来，不写成 U+FFFD ——
+			// 换成占位符等于替对方把痕迹擦干净了。
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+			i++
+			continue
+		}
+		if isCtrl(r) {
+			fmt.Fprintf(&b, `\x%02x`, r)
+		} else {
+			b.WriteString(s[i : i+n])
+		}
+		i += n
 	}
 	return b.String()
 }

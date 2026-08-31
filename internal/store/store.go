@@ -32,10 +32,18 @@ const (
 	TrustUnverified = "unverified" // 裸 URL
 )
 
-// 内置索引。规格 §5：索引来源「实现上就是一个 URL」，v1 用 file:// 也行，
-// 以后换成平台地址只改这一行。用户可以 `toy index add/rm` 覆盖。
+// DefaultIndexURL 是内置索引的地址。**这就是那一个常量** —— 索引真的传上线之后，
+// 把地址填在这里就是全部改动，别处一个字都不用动（规格 §5：索引来源「实现上就是
+// 一个 URL」，file:// 和 https:// 走的是同一条代码路径）。
+//
+// 现在是空串，表示【不预置任何索引】。v1 的索引就是仓库里那个本地文件
+// （index/toy-index.json），还没传到任何静态托管上 —— 预置一个 404 的地址，
+// 等于每个新用户第一次 `toy doctor` / `toy search` 就吃一条红叉，而那不是他的
+// 问题（铁律 8：不许把我们自己的状态说成用户的错）。没有索引是合法状态：
+// `toy install github:owner/repo` 那条路从头到尾就不经过索引。
+const DefaultIndexURL = ""
+
 const defaultIndexName = "default"
-const defaultIndexURL = "https://raw.githubusercontent.com/Cirraya-LLC/toy-index/main/index.json"
 
 // ~/.toy 下的一级目录。规格 §6。
 const (
@@ -61,13 +69,13 @@ type IndexRef struct {
 	URL  string `toml:"url"` // file:// 或 https://，v1 用 file:// 就够，以后改一行
 }
 
-// DefaultConfig 返回内置默认：一个默认索引、空镜像列表。
+// DefaultConfig 返回内置默认：DefaultIndexURL 非空时预置那一个索引，否则一个都不预置。
 func DefaultConfig() Config {
-	return Config{
-		Indexes: []IndexRef{{Name: defaultIndexName, URL: defaultIndexURL}},
-		Mirrors: []string{},
-		Hosts:   map[string]host.Host{},
+	c := Config{Indexes: []IndexRef{}, Mirrors: []string{}, Hosts: map[string]host.Host{}}
+	if DefaultIndexURL != "" {
+		c.Indexes = append(c.Indexes, IndexRef{Name: defaultIndexName, URL: DefaultIndexURL})
 	}
+	return c
 }
 
 type Store struct{ Root string }
@@ -468,13 +476,100 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 		}
 	}
 
+	// 顶掉一条已经存在的软链 = 这个名字换了主人。别的包的清单里可能还记着它，
+	// 而那条记录会在 `toy uninstall 那个包` 时被当成「删我自己的链」执行掉 ——
+	// 删掉的其实是现在这个包的命令，新包的清单一个字没动，`toy list` 照样说它
+	// 装着，doctor 也看不出来（那不是悬空软链，是根本不存在）。所以在建链之前
+	// 先把过期的记录摘掉。放在建链【之前】：失败时什么都还没动。
+	if _, err := os.Lstat(linkPath); err == nil {
+		if err := s.disownLink(linkPath, absTarget); err != nil {
+			return "", err
+		}
+	}
+
 	if err := symlinkAtomic(absTarget, linkPath); err != nil {
 		return "", fmt.Errorf("store: 建不了软链 %s：%w", linkPath, err)
 	}
 	return linkPath, nil
 }
 
+// disownLink 把 linkPath 从所有「已经不再拥有它」的安装清单里删掉。
+// 拥有者的判据是软链此刻指向谁：目标落在哪个包的 PkgDir 里，这个名字就是谁的。
+func (s *Store) disownLink(linkPath, newTarget string) error {
+	all, err := s.ListManifests()
+	if err != nil {
+		return err
+	}
+	for _, m := range all {
+		if withinDir(m.PkgDir, newTarget) {
+			continue // 就是这个包自己在重装/升级，记录没过期
+		}
+		kept := make([]string, 0, len(m.Links))
+		for _, l := range m.Links {
+			if !sameFile(l, linkPath) {
+				kept = append(kept, l)
+			}
+		}
+		if len(kept) == len(m.Links) {
+			continue
+		}
+		m.Links = kept
+		if err := s.SaveManifest(m); err != nil {
+			return fmt.Errorf("store: %s 的软链换了主人，但改不了 %s 的安装清单 —— "+
+				"就这么装上去的话，卸载 %s 会把这条链删掉：%w", linkPath, m.ID, m.ID, err)
+		}
+	}
+	return nil
+}
+
+// sameFile 比两条路径是不是同一个文件名（软链本身不解引用，它可能是断的）。
+func sameFile(a, b string) bool {
+	if absA, err := filepath.Abs(a); err == nil {
+		a = absA
+	}
+	if absB, err := filepath.Abs(b); err == nil {
+		b = absB
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// withinDir 报告 path 是否在 dir 里面（或者就是 dir）。dir 为空一律 false。
+func withinDir(dir, path string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	dir, path = filepath.Clean(dir), filepath.Clean(path)
+	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
+}
+
+// reservedLinkNames 是 toy 自己会按【名字】从 PATH 上 exec 的程序。
+//
+// 遮蔽检查只挡「PATH 上已经存在」的同名程序（LookPath 找得到才算），所以在一台
+// 还没装 git 的机器上（macOS 没装 Xcode CLT、slim 容器、CI 基础镜像都是这样，
+// 而裸地址那条安装路径压根不需要 git），一个 toy.toml 写 [bin] git = "payload"
+// 就能干干净净地把 bin/git 占下来 —— 而 bin/ 正是 doctor 教用户放在 PATH 最前面
+// 的目录。装的那一刻确实一行都没跑（铁律 1 的字面意思成立），但下一条
+// `toy install github:…` / `toy update` / `toy publish` / `toy doctor` 就把它当
+// git 执行了，执行只是推迟了一条命令。
+//
+// --force 不放行：这跟 bin = "sudo" 不是一类风险，用户对着「确认要覆盖再加
+// --force」判断不出后果 —— 一个包没有任何正当理由要占住 toy 自己的工具链名字。
+// 以后 toy 多 exec 一个程序，这里就要多一行。
+var reservedLinkNames = map[string]bool{"git": true}
+
 func validLinkName(name string) error {
+	// 折成小写再比：macOS 的 APFS 和 Windows 都大小写不敏感，bin/GIT 在那里
+	// 就是 bin/git。
+	if reservedLinkNames[strings.ToLower(name)] {
+		return fmt.Errorf("store: 命令名 %q 是 toy 自己要执行的程序 —— 让它落进 %s 就等于"+
+			"下一条 toy 命令去跑这个包里的文件（铁律 1）。这一条 --force 也不放行", name, dirBin)
+	}
 	switch {
 	case name == "":
 		return fmt.Errorf("store: 命令名是空的（toy.toml 的 [bin] 段里 key 就是 PATH 上的名字）")

@@ -23,6 +23,29 @@ echo "== 构建 =="
 ( cd "$ROOT" && go build -o "$TOY" ./cmd/toy )
 ok "toy 构建成功"
 
+echo "== 全新的 store：一个索引都没有 =="
+# 内置索引现在是空的（store.DefaultIndexURL）。没有索引是合法状态，不是故障：
+# search 要说清楚怎么加，doctor 不许为这件事打 ✗。用一个单独的 TOY_HOME 测，
+# 免得被下面那份写死的 config.toml 影响。
+FRESH="$WORK/fresh"
+check "全新 store 的 search 说「还没配索引」而不是「没有匹配」" \
+      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q '还没配任何索引'"
+check "search 给出了 toy index add 的示例（含 file://）" \
+      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'toy index add' && \
+       TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'file://'"
+check "search 提醒 github: 那条路不需要索引" \
+      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'toy install github:owner/repo'"
+check "写出来的默认 config.toml 里没有内置索引" \
+      "! grep -q '^\[\[index\]\]' '$FRESH/config.toml'"
+# doctor 仍会因为 PATH 没配而失败，所以只断言「没配索引」这一条不是 ✗。
+# doctor 的退出码本来就是 1（PATH 没配），而 set -o pipefail 会让整条管道跟着失败 ——
+# 那不是这里要断言的东西，所以先落成文件再 grep。
+TOY_HOME="$FRESH" "$TOY" doctor >"$WORK/doctor-fresh.log" 2>&1 || true
+check "doctor 对「没配索引」不打 ✗" \
+      "grep '没有配索引' '$WORK/doctor-fresh.log' | grep -q '✓'"
+check "doctor 里没有任何一行 ✗ 是在说索引" \
+      "! grep '^✗' '$WORK/doctor-fresh.log' | grep -q 索引"
+
 echo "== 造一个假的上游仓库 =="
 UP="$WORK/upstream"
 mkdir -p "$UP/dist"
@@ -90,6 +113,66 @@ echo "== list / info =="
 # 所以这里要 2>&1 —— 上面那条 install 的检查本来就是这么写的。
 check "list 列得出来"                         "'$TOY' list 2>&1 | grep -q hello"
 check "info 跑得通"                           "'$TOY' info local:test/hello"
+# list 和 uninstall 都认已装的那个短名字，info 以前只认 ref —— 同一个字符串在同一个
+# CLI 里有两种含义，而用户是从 list 里抄的那个名字。装过的包 info 也得认。
+check "info 认 list 里印出来的那个短名字"        "'$TOY' info hello 2>&1 | grep -q hello"
+check "真的写坏的 ref 仍然报解析错误"             "! '$TOY' info 'not a ref!!' 2>&1 | grep -q '^名字'"
+
+echo "== 走镜像要如实说 =="
+# 原始地址挂掉、字节从镜像拿到时必须打印出来（铁律 8）。镜像只在 toy.toml 写了
+# [sha256] 时才会被用到 —— 没有 hash 就没法验证镜像给的是不是那个东西。
+MIRROR="$WORK/mirror"; mkdir -p "$MIRROR"
+SUM="$(sha256sum "$UP/dist/$ASSET" | cut -d' ' -f1)"
+cp "$UP/dist/$ASSET" "$MIRROR/$SUM"
+cat > "$UP/toy.toml" <<EOF
+name    = "mirrored"
+desc    = "验证镜像回退"
+license = "MIT"
+
+[bin]
+mirrored = "hello"
+
+[artifact]
+"$GOOS_/$GOARCH_" = "hello_{version}_${GOOS_}_${GOARCH_}.tar.gz"
+
+[sha256]
+"$GOOS_/$GOARCH_" = "$SUM"
+EOF
+( cd "$UP" && git add -A && git -c user.email=t@e.st -c user.name=t commit -q -m mirrored )
+# release 模板指向一个不存在的目录 → 原始地址必然失败，只剩镜像那条路。
+# mirrors 必须写在任何表头【之前】：TOML 里 [[index]] 之后的裸键值属于那张表，
+# 写在下面的话它会变成索引条目的一个字段，然后被静默忽略（镜像等于没配）。
+cat > "$TOY_HOME/config.toml" <<EOF
+mirrors = ["file://$MIRROR"]
+
+[[index]]
+name = "local"
+url  = "file://$ROOT/index/toy-index.json"
+
+[hosts.local]
+raw     = "file://$UP/{path}"
+clone   = "$UP"
+release = "file://$UP/gone/{asset}"
+web     = "file://$UP"
+EOF
+rm -f "$TOY_HOME/cache/"*
+"$TOY" install local:test/mirrored >"$WORK/mirror.log" 2>&1 || true
+check "从镜像装成功了"                        "test -L '$TOY_HOME/bin/mirrored'"
+check "说明了这份字节来自镜像"                 "grep -q '来自镜像' '$WORK/mirror.log'"
+check "说明里带着那个镜像地址"                 "grep -q '$MIRROR' '$WORK/mirror.log'"
+"$TOY" uninstall mirrored >/dev/null 2>&1 || true
+# 复原成原来那份 config，后面的用例还要用。
+cat > "$TOY_HOME/config.toml" <<EOF
+[[index]]
+name = "local"
+url  = "file://$ROOT/index/toy-index.json"
+
+[hosts.local]
+raw     = "file://$UP/{path}"
+clone   = "$UP"
+release = "file://$UP/dist/{asset}"
+web     = "file://$UP"
+EOF
 
 echo "== 铁律：不许遮蔽 PATH 上已有的命令 =="
 cat > "$UP/toy.toml" <<'EOF'
@@ -136,6 +219,11 @@ if "$TOY" install local:test/badsum >"$WORK/bad.log" 2>&1; then
 else
   ok "拒绝了哈希对不上的包"
 fi
+# 光看退出码不够：任何一处先报错（资产名拼错、tag 没找着）都能让它非零，
+# 那样这条断言就在为一件没发生的事发绿灯。必须是【因为哈希】被拒的。
+check "拒绝的理由确实是 sha256 对不上"          "grep -q 'sha256' '$WORK/bad.log'"
+check "报错里把期望值和实际值都摆出来了"          "grep -q '1111111111111111111111111111111111111111111111111111111111111111' '$WORK/bad.log' && grep -qE '实际|actual' '$WORK/bad.log'"
+check "哈希不对时什么都没装上"                   "! test -e '$TOY_HOME/bin/badsum'"
 
 echo "== 卸载 =="
 "$TOY" uninstall hello >/dev/null 2>&1 || true

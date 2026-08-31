@@ -104,9 +104,16 @@ func TestInsTrustDetail(t *testing.T) {
 	if got, want := insTrustDetail(h), "github.com/Derrity"; got != want {
 		t.Fatalf("托管方那一档的说明 = %q，想要 %q", got, want)
 	}
-	h.Trust, h.Signer = store.TrustSigned, "a3f91b2c…"
-	if got, want := insTrustDetail(h), "Derrity (key a3f91b2c…)"; got != want {
-		t.Fatalf("已签名那一档的说明 = %q，想要 %q", got, want)
+	// 已签名那一档只能说「哪把钥匙、哪个索引登记的」。签名消息是
+	// id + source + toy.toml，里面没有任何东西把公钥和仓库 owner 绑起来，
+	// 所以 "Derrity (key …)" 这种写法是在替一把无关的钥匙认领一个名字。
+	h.Trust, h.Signer, h.IndexName = store.TrustSigned, "a3f91b2c…", "default"
+	got := insTrustDetail(h)
+	if !strings.Contains(got, "a3f91b2c…") || !strings.Contains(got, "default") {
+		t.Fatalf("已签名那一档要说清楚是哪把钥匙、谁登记的，得到 %q", got)
+	}
+	if strings.HasPrefix(got, "Derrity") {
+		t.Fatalf("不能把仓库 owner 印在勾后面，那读起来就是「他签的」：%q", got)
 	}
 }
 

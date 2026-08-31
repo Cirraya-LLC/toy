@@ -28,18 +28,21 @@ type command struct {
 // errUsage 让子命令能要求打印自己的用法而不必自己排版。
 var errUsage = errors.New("usage")
 
+// 用法串里选项一律写在位置参数【前面】：flag 包在第一个非 flag 参数处就停止解析，
+// 所以 `toy install foo --force` 里的 --force 会被当成第二个位置参数（然后 usage）。
+// 这几行是用户唯一会看到的语法说明，写成 `<ref> [--force]` 就是在教一个跑不通的顺序。
 func commands() []command {
 	return []command{
-		{"install", "<ref> [--force] [--version v]", "安装一个包", runInstall},
+		{"install", "[--reinstall] [--force] [--version v] <ref>", "安装一个包", runInstall},
 		{"uninstall", "<名字>", "卸载", runUninstall},
 		{"update", "[名字]", "升级已装的包", runUpdate},
 		{"list", "", "列出已装的包", runList},
-		{"search", "<关键词>", "在索引里搜工具", runSearch},
+		{"search", "[--limit n] [--json] <关键词>", "在索引里搜工具", runSearch},
 		{"info", "<ref>", "看一个包的详情和信任状态", runInfo},
-		{"index", "add|rm|list [参数]", "管理索引", runIndex},
+		{"index", "add <名字> <地址> | rm <名字> | list", "管理索引", runIndex},
 		{"keygen", "", "生成 ed25519 密钥对", runKeygen},
-		{"publish", "[目录]", "读 toy.toml，签名，输出索引条目", runPublish},
-		{"serve", "[--addr :8080]", "把本机缓存变成一个镜像", runServe},
+		{"publish", "[--source github:owner/repo] [目录]", "读 toy.toml，签名，输出索引条目", runPublish},
+		{"serve", "[--addr host:port]", "把本机缓存变成一个镜像", runServe},
 		{"doctor", "", "检查 PATH、目录权限、索引可达性", runDoctor},
 	}
 }

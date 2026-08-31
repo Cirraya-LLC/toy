@@ -83,7 +83,18 @@ func validEntry(e Entry) bool {
 	}
 	// source 是这条记录的真相（规格 §5），必须指向一个真能去取东西的地方。
 	// 写成裸 owner/repo 会让解析回头再查一次索引 —— 那是个环，不是个来源。
-	return r.Kind != ref.KindIndex
+	if r.Kind == ref.KindIndex {
+		return false
+	}
+	// 索引本身是**远端内容**，而这一行决定客户端接下来去打开什么。放行 file://
+	// 等于让任何一份索引（谁都能 fork、谁都能提 PR）指使客户端去读本机的
+	// ~/.aws/credentials；放行明文 http 等于放行 169.254.169.254 这类只在受害者
+	// 机器上才有意义的地址，而且路上谁都能改。托管方那条路（github: 之类）不受
+	// 影响 —— 它的地址是我们自己的 host 表拼的，不是索引说了算。
+	if r.Kind == ref.KindURL && !strings.HasPrefix(strings.ToLower(r.URL), "https://") {
+		return false
+	}
+	return true
 }
 
 // validID 判断 "owner/repo" 形态。规则直接借 ref 的，不自己再抄一份白名单：

@@ -245,6 +245,18 @@ func checkRelPath(section, name, target string) error {
 	// 真正被请求的是 "toy.tar.gz"，写成 "a#b" 时是 "a" —— 静默地取到另一个文件，
 	// 而客户端照着 toy.toml 打印的仍然是作者写的那个名字（铁律 8）。
 	// fetch 对 file:// 早就是「宁可报错也不猜」，这里把同一条规矩补齐。
+	// 带 scheme 的绝对 URL 三道检查一个都不沾（不以 / 开头、没有 ".." 段、
+	// 没有 ?#），但它同样不是「包内的相对路径」：规格 §3 说得很死 ——
+	// [artifact] / [script] 里只写 release 资产名，**不写 URL**。放行的话，
+	// 裸地址那条路上 base.ResolveReference 会直接跳到另一台机器（甚至
+	// file:///etc/shadow 和 169.254.169.254），而客户端照着 toy.toml 打印的
+	// 仍然是作者写的那个来源 —— 那句话就成了假话（铁律 8）。
+	if i := strings.Index(target, "://"); i > 0 && isURLScheme(target[:i]) {
+		return fmt.Errorf("%w：[%s] 里 %q 的值 %q 是一个 URL。这里只能写 release 里的"+
+			"资产名（或包内相对路径）—— 地址由 toy 自己按托管方拼，写死 URL 会让它"+
+			"指向 toy.toml 说的来源之外的地方",
+			ErrUnsafeTarget, section, name, target)
+	}
 	if i := strings.IndexAny(target, "?#"); i >= 0 {
 		return fmt.Errorf("%w：[%s] 里 %q 的路径 %q 含 %q。它会被拼进下载地址，"+
 			"而 ? 和 # 在 URL 里会把后面的部分切掉，取回来的是另一个文件。"+
@@ -252,6 +264,23 @@ func checkRelPath(section, name, target string) error {
 			ErrUnsafeTarget, section, name, target, string(target[i]))
 	}
 	return checkPrintable(fmt.Sprintf("[%s] 里 %q 的路径", section, name), target)
+}
+
+// isURLScheme 按 RFC 3986 判断 s 是不是一个 scheme（字母开头，后跟字母数字 +-.）。
+// 严格按规范判，免得把 "a:b://c" 这种正常文件名误当成 URL 拦下来。
+func isURLScheme(s string) bool {
+	if s == "" || !(s[0] >= 'a' && s[0] <= 'z' || s[0] >= 'A' && s[0] <= 'Z') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '+' || c == '-' || c == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // checkPlatformKey：key 必须是 GOOS/GOARCH，写错了不会报错，只会永远匹配不上。

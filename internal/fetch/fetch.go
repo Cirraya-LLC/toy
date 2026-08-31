@@ -34,13 +34,26 @@ type Options struct {
 	CacheDir string   // 空表示不缓存
 	Sink     Sink     // 可为 nil
 	Name     string   // 显示用
+	// MaxBytes 是 Get 落盘的字节上限，<=0 取 DefaultMaxBytes。
+	// 判据是【实际写进来的字节数】，不是 Content-Length —— 声明 1 KiB 然后 chunked
+	// 吐到天亮的服务器正是这条上限要挡的东西，信它自报的长度等于没有上限。
+	// GetBytes 不看这个字段，它有自己更小的固定上限（maxBytes）。
+	MaxBytes int64
 }
 
 type Result struct {
 	Path      string // 落地的文件路径（缓存里或临时目录里）
 	SHA256    string // 实际算出来的
 	FromCache bool
-	Source    string // 实际成功的那个 URL，用于如实告知用户
+	// Source 是实际成功的那个 URL，用于如实告知用户（铁律 8）。
+	//
+	// 它是【原样】的地址，可能带着用户自己写在 URL 里的凭据
+	// （`toy install https://u:p@host/toy.toml` 之后 ResolveReference 会把 userinfo
+	// 带到 artifact 地址上）。这里故意不 redact：调用方要拿它和请求的原始 URL 做
+	// 等值比较来判断"这份字节是不是来自镜像"，抹掉一边就永远不相等了。
+	// 打印和落盘各自在出口处抹（ui 的 redactURLs、store 存清单时的 redactURL）。
+	// fetch 自己拼的每一条【错误信息】里的地址则一律是抹过的，见 redactURL。
+	Source string
 }
 
 const (
@@ -49,6 +62,13 @@ const (
 	maxBytes = 32 << 20
 	// maxRedirects 跟随重定向但不无限跟，避免转圈。
 	maxRedirects = 10
+	// DefaultMaxBytes 是 Get（artifact 下载）默认的落盘上限，Options.MaxBytes 可以覆盖。
+	//
+	// 取 2 GiB 是为了和 archive.MaxTotalBytes 对齐：解压【之后】的总字节都不许超过
+	// 这个数，那么压缩包本身再大也没有意义 —— 多下来的字节唯一的用途就是把用户的盘
+	// 写满。这里不 import archive 拿那个常量，是为了不让 fetch 依赖它（依赖方向朝下，
+	// 和 Sink 不依赖 ui 是同一个理由）；两处写死同一个数并互相注明。
+	DefaultMaxBytes = 2 << 30
 )
 
 var client = &http.Client{
@@ -66,9 +86,26 @@ var client = &http.Client{
 		// 规矩：算 hash 的字节必须就是线上的字节。
 		DisableCompression: true,
 	},
-	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
 			return fmt.Errorf("重定向超过 %d 次，疑似死循环", maxRedirects)
+		}
+		// https 一旦被重定向到 http 就当场拒绝（反过来是升级，放行）。
+		// 明文链路上任何人都能改字节：对有 [sha256] 的 artifact 哈希还兜得住，
+		// 但 GetBytes 拉 toy.toml 和索引的时候【没有任何哈希】—— 而那两样东西
+		// 恰恰决定了"接下来去下载什么、拿什么 hash 去比"。降级发生在那里，
+		// 后面所有的校验都是在校验攻击者说了算的那份清单。
+		//
+		// 扫整条 via 而不是只看上一跳：http→https→http 的中间那一跳会让
+		// "只比上一跳"漏掉，而链路的安全性取决于最弱的一段。
+		if req.URL.Scheme != "https" {
+			for _, prev := range via {
+				if prev.URL.Scheme == "https" {
+					return fmt.Errorf("拒绝跟随重定向：%s 把 https 降级成了 %s；"+
+						"明文链路上内容可以被中途改掉，而 toy.toml 和索引没有 sha256 可校验",
+						redactURL(prev.URL.String()), redactURL(req.URL.String()))
+				}
+			}
 		}
 		return nil
 	},
@@ -107,6 +144,27 @@ func normalize(opt *Options) error {
 		return fmt.Errorf("fetch: sha256 %q 里有非十六进制字符，检查 toy.toml 的 [sha256] 段", opt.SHA256)
 	}
 	return nil
+}
+
+// redactURL 把地址里的密码换成 xxxxx（标准库的 URL.Redacted），用户名留着 ——
+// 只有用户名不是秘密，抹掉反而让人对不上自己写的地址。
+//
+// 必须在【拼错误信息的这一刻】就抹，不能只靠 ui 那一层兜底：error 对象本身会
+// 进日志、进 `--json`、进任何不经过 ui 的路径，而 `toy install
+// https://u:hunter2@host/toy.toml` 是一个完全正常的用法。net/http 返回的 *url.Error
+// 【大多】已经抹过了（stripPassword），唯独 CheckRedirect 失败那条路没有 —— 见 open。
+//
+// 解析不了或者压根没有 userinfo 就原样返回：这条路上的"地址"也可能是 file://
+// 或者一段本来就不是 URL 的东西，不认识就别乱动。
+func redactURL(s string) string {
+	if !strings.Contains(s, "@") {
+		return s // 绝大多数地址里没有凭据，不进 url.Parse
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	return u.Redacted()
 }
 
 // sources 返回按顺序尝试的地址：原始地址在前，镜像在后。
@@ -152,6 +210,15 @@ func open(ctx context.Context, src string) (io.ReadCloser, int64, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		// net/http 自己填进 url.Error 的地址是抹过密码的（stripPassword），
+		// 唯独 CheckRedirect 失败这一条路上它把 Location 头【原样】塞回去
+		// （client.go 里那句 `ue.(*url.Error).URL = loc`）—— 于是一个把你
+		// 重定向到 https://u:p@… 的上游，能借这条路把凭据写进我们的错误里。
+		// 在这里就地抹掉，这样出 fetch 的每一个 error 都是干净的。
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			ue.URL = redactURL(ue.URL)
+		}
 		return nil, 0, err
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -206,7 +273,7 @@ func Get(ctx context.Context, u string, opt Options) (Result, error) {
 		if err == nil {
 			return res, nil
 		}
-		errs = append(errs, fmt.Errorf("%s：%w", src, err))
+		errs = append(errs, fmt.Errorf("%s：%w", redactURL(src), err))
 		if ctx.Err() != nil {
 			break
 		}
@@ -252,8 +319,23 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 	started = true
 	opt.Sink.Start(opt.Name, total)
 	h := sha256.New()
-	if _, err = io.Copy(io.MultiWriter(tmp, h, sinkWriter{opt.Sink}), body); err != nil {
+	limit := opt.MaxBytes
+	if limit <= 0 {
+		limit = DefaultMaxBytes
+	}
+	// 多读一个字节，好区分"正好到上限"和"超了"。
+	n, err := io.Copy(io.MultiWriter(tmp, h, sinkWriter{opt.Sink}), io.LimitReader(body, limit+1))
+	if err != nil {
 		return Result{}, fmt.Errorf("下载中断：%w", err)
+	}
+	// 判据是【真正写进来的字节数】，不是 total —— 那只是服务器自己说的 Content-Length，
+	// chunked 响应压根没有这个头，而报一个大得离谱的数也不要钱。半截文件由上面的
+	// defer 删掉（placed 还是 false），所以缓存目录里不会留下残骸（铁律 4 那条同样成立）。
+	if n > limit {
+		err = fmt.Errorf("下载超过 %d MiB 上限，已中止并删掉半截文件；"+
+			"服务器自报的长度不作数，这里数的是真正写进来的字节。"+
+			"确实要装更大的包就调大 Options.MaxBytes", limit>>20)
+		return Result{}, err
 	}
 	if err = tmp.Close(); err != nil {
 		return Result{}, fmt.Errorf("写临时文件失败：%w", err)
@@ -292,7 +374,7 @@ func GetBytes(ctx context.Context, u string, opt Options) ([]byte, error) {
 		if err == nil {
 			return b, nil
 		}
-		errs = append(errs, fmt.Errorf("%s：%w", src, err))
+		errs = append(errs, fmt.Errorf("%s：%w", redactURL(src), err))
 		if ctx.Err() != nil {
 			break
 		}

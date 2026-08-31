@@ -44,7 +44,7 @@ func Generate() (KeyPair, error) {
 	return KeyPair{Public: pub, Private: priv}, nil
 }
 
-// LoadKeyPair 从 dir 读 key.pub / key.sec。私钥文件权限必须是 0600，
+// LoadKeyPair 从 dir 读 key.pub / key.sec。私钥不能被同组或其他人读写，
 // 不是就拒绝加载并说明原因。
 func LoadKeyPair(dir string) (KeyPair, error) {
 	secPath := filepath.Join(dir, secFile)
@@ -56,9 +56,12 @@ func LoadKeyPair(dir string) (KeyPair, error) {
 		return KeyPair{}, fmt.Errorf("sign: 读不到 %s: %w", secPath, err)
 	}
 	// 跟 ssh 一样：私钥对别人可读就拒绝加载，并且直接告诉他怎么修。
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	// 判据是"group/other 一位都不能有"，不是"恰好 0600"：0400 比 0600 更严
+	// （备份恢复私钥之后常见就是这个权限），拒绝它没有任何安全收益，而那句
+	// "修复：chmod 600" 是在教用户把一个只读的私钥改成可写。
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		return KeyPair{}, fmt.Errorf(
-			"sign: 私钥 %s 的权限是 %04o，必须是 0600（别人也能读到它）。修复：chmod 600 %s",
+			"sign: 私钥 %s 的权限是 %04o，同组或其他人能读到它。修复：chmod 600 %s",
 			secPath, perm, secPath)
 	}
 
@@ -143,9 +146,13 @@ func writeNew(path, content string, perm os.FileMode) error {
 	return f.Close()
 }
 
-// fingerprintHexLen 是指纹取的十六进制字符数。规格里显示成 "a3f9…"，
-// 那是文档自己的省略；4 个字符只有 16 位，撞起来太容易，这里取 8 个。
-const fingerprintHexLen = 8
+// fingerprintHexLen 是指纹取的十六进制字符数。规格里显示成 "a3f9…"，那是文档
+// 自己的省略。指纹是作者身份在界面上唯一露出的东西（toy keygen 就是这么告诉
+// 作者的："别人安装时打印的就是这一串"），所以它要挡的是**原像**：攻击者反复
+// 生成 ed25519 密钥，直到前缀和真作者的指纹一样，然后拿这把钥匙去索引里冒名。
+// ed25519 keygen 每核每秒几万次，所以 32 位（8 个 hex）只值几十个 core-hour。
+// 32 个 hex = 128 位，磨不出来。
+const fingerprintHexLen = 32
 
 // Fingerprint 返回公钥的短指纹，界面上显示成 "a3f9…"。
 // 铁律 8（信任等级如实打印）：长度不对的东西根本不是 ed25519 公钥，绝不能

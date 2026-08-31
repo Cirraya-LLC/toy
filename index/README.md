@@ -3,14 +3,22 @@
 一个 JSON 文件，客户端整份下载后**本地搜索**。里面只存指针，不存实质内容 ——
 `source` 那个 git 地址永远是真相。
 
-v1 就用文件：
+v1 就用文件，而且 **toy 一个索引都不预置** —— 想搜就自己加一条：
 
 ```bash
-toy index add local file:///root/cirraya/Private/Toy-Community/index/toy-index.json
+toy index add local ./index/toy-index.json     # 裸路径会自动补成 file:///绝对路径
+toy index add local file:///绝对路径/index/toy-index.json   # 写全了也行
 ```
 
 以后传到任何静态托管（对象存储、GitHub raw、自己的服务器）只要改一行 URL，
 **客户端代码一个字节都不用动** —— 因为它从头到尾只认识"一个 URL"。
+真要把它变成所有人的默认索引，改的就是 `internal/store/store.go` 里那个
+`DefaultIndexURL` 常量，别处一行都不用碰。
+
+条目里的 `source` 只能是托管方形态（`github:owner/repo`）或者 **`https://`** 的裸地址：
+索引是远端内容，放行 `file://` 等于让任何一份索引指使客户端去读本机的文件，
+放行明文 `http://` 等于把它指向 `169.254.169.254` 这种只在受害者机器上才有意义的地址。
+不合规的条目会被静默跳过并计数（`toy search` 会警告有几条被跳过）。
 
 ## 条目长什么样
 

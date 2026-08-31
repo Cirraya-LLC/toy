@@ -185,3 +185,92 @@ func TestAutPublishedEntryLoadsIntoAnIndex(t *testing.T) {
 		t.Fatalf("sig 在路上丢了：%q", got.Sig)
 	}
 }
+
+// autGitPath 必须跳过 toy 自己的 bin 目录。
+//
+// 裸 "git" 交给 exec 就是执行 PATH 上的第一个 git，而按 README / `toy doctor`
+// 的说法 ~/.toy/bin 就在 PATH 上 —— 一个装上来的包只要提供一条叫 git 的命令，
+// `toy publish` 就会执行它。铁律 1 的洞，不是不方便。
+func TestGitPathSkipsToyOwnBinDir(t *testing.T) {
+	planted, real := t.TempDir(), t.TempDir()
+	put := func(dir string) string {
+		p := filepath.Join(dir, "git")
+		if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	fake, want := put(planted), put(real)
+
+	// toy 自己的 bin 排在最前面 —— 用户按文档就是这么加进 PATH 的。
+	t.Setenv("PATH", planted+string(os.PathListSeparator)+real)
+	got, err := autGitPath(planted)
+	if err != nil {
+		t.Fatalf("PATH 上明明有一个真的 git，却报错了：%v", err)
+	}
+	if got == fake {
+		t.Fatalf("挑中了 toy 自己 bin 目录里的 %s —— publish 会执行它（铁律 1）", fake)
+	}
+	if got != want {
+		t.Fatalf("挑中了 %s，想要 %s", got, want)
+	}
+
+	// 只剩那一个的时候必须拒绝，而且要指名道姓，用户才知道去卸谁。
+	t.Setenv("PATH", planted)
+	switch _, err := autGitPath(planted); {
+	case err == nil:
+		t.Fatal("PATH 上唯一的 git 来自一个装上来的包，autGitPath 还是把它交出去了")
+	case !strings.Contains(err.Error(), fake):
+		t.Fatalf("拒是拒了，但没说清楚是哪个文件，用户无从下手：%v", err)
+	}
+}
+
+// PATH 里的相对项（"." 和那个到处都是的空项）指的是进程**当前所在的目录**。
+// 在一个别人写得进去的目录里跑 toy，不该等于把铁律 1 交出去。
+func TestGitPathIgnoresRelativePathEntries(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	t.Setenv("PATH", "."+string(os.PathListSeparator))
+	if got, err := autGitPath(""); err == nil {
+		t.Fatalf("PATH 上只有相对项，autGitPath 却把当前目录里的 %s 交出去了", got)
+	}
+}
+
+// 走完整条路：一个装上来的包占住了 git 这个名字，`toy publish` 不该执行它。
+func TestPublishDoesNotRunGitFromToyBin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TOY_HOME", home)
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "PWNED")
+	if err := os.WriteFile(filepath.Join(bin, "git"),
+		[]byte("#!/bin/sh\n: > "+marker+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 用户按 README / `toy doctor` 说的把 ~/.toy/bin 加进 PATH，
+	// 而这台机器上还没装真的 git。
+	t.Setenv("PATH", bin)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "toy.toml"),
+		[]byte("name = \"t\"\n[script]\nt = \"t.sh\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runPublish(t.Context(), []string{dir})
+	if _, serr := os.Stat(marker); serr == nil {
+		t.Fatalf("`toy publish` 执行了 ~/.toy/bin 里那个 git（%s 出现了）—— 铁律 1 破了", marker)
+	}
+	if err == nil {
+		t.Fatal("PATH 上没有能用的 git，source 推不出来，publish 不该成功")
+	}
+	// doctor 报的必须是同一个判断，不然它会指着那个包说「git 在：…」。
+	if c := qryCheckGit(bin); c.ok {
+		t.Fatalf("`toy doctor` 把一个装上来的包当成了健康的 git：%q", c.title)
+	}
+}
