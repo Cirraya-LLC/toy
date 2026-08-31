@@ -1,0 +1,27 @@
+# 一个完整的 toy.toml 范例。放在你仓库的根目录，跟 README 并排。
+#
+# 注意这里面没有 URL、没有版本号、没有托管方名字 ——
+# 打个 tag 发个 release 就是发新版，这个文件一个字都不用改。
+
+name     = "tinyserve"
+desc     = "一个很小的静态文件服务器"
+license  = "MIT"
+homepage = "https://github.com/Derrity/tinyserve"
+
+# PATH 上出现的名字 = 解压后包内的相对路径
+[bin]
+tinyserve = "tinyserve"
+
+# key 是 GOOS/GOARCH，value 是 release 里那个资产的文件名。
+# 占位符只有两个：{version} 不带 v 前缀，{tag} 是原样的 tag。
+[artifact]
+"linux/amd64"   = "tinyserve_{version}_linux_amd64.tar.gz"
+"linux/arm64"   = "tinyserve_{version}_linux_arm64.tar.gz"
+"darwin/amd64"  = "tinyserve_{version}_darwin_amd64.tar.gz"
+"darwin/arm64"  = "tinyserve_{version}_darwin_arm64.tar.gz"
+
+# 可选。写了就强制校验，对不上一律拒绝安装。
+# 不写的话 toy 会在首次安装时钉住实际哈希（TOFU），之后变了照样会拦。
+[sha256]
+"linux/amd64"  = "0000000000000000000000000000000000000000000000000000000000000000"
+"darwin/arm64" = "0000000000000000000000000000000000000000000000000000000000000000"

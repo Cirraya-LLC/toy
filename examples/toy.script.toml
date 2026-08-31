@@ -1,0 +1,11 @@
+# 单文件脚本形态：不用编译、不用打包、不用 release 资产之外的任何东西。
+# toy 下载它、chmod +x、软链进 ~/.toy/bin，就这样。
+#
+# [artifact] 和 [script] 二选一，不能同时写。
+
+name    = "gitwip"
+desc    = "把当前改动存成一个 WIP 提交再原地弹回来"
+license = "MIT"
+
+[script]
+gitwip = "gitwip.sh"
