@@ -12,13 +12,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/Cirraya-LLC/toy/internal/archive"
 	"github.com/Cirraya-LLC/toy/internal/fetch"
+	"github.com/Cirraya-LLC/toy/internal/platform"
 	"github.com/Cirraya-LLC/toy/internal/ref"
 	"github.com/Cirraya-LLC/toy/internal/semver"
 	"github.com/Cirraya-LLC/toy/internal/sign"
@@ -359,10 +359,13 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 				it.name, dl.Source)
 		}
 
-		id := trustID
-		if len(items) > 1 {
-			id += "/" + it.name
-		}
+		// 资产名无条件拼进 TOFU id。它天然就是平台判别符 —— 不同平台的资产名
+		// 本来就不一样（linux_amd64.tar.gz vs linux_amd64_musl.tar.gz），而同一个
+		// ref@version 在 musl 机器和 glibc 机器上拿到的是两份不同的字节。不拼的话，
+		// 换一台机器（或者共享 $HOME）会被报成「内容被人换掉了」——
+		// 一个吓人的假警报，正好出现在最不该狼来了的地方。
+		// 两个平台指向同一个资产名时它们本来就该共用一条钉住记录，这里也是对的。
+		id := trustID + "/" + it.name
 		if err := insTOFU(ring, id, "sha256", it.sum, it.name+" 的 sha256", force); err != nil {
 			return err
 		}
@@ -477,15 +480,71 @@ func insItems(res *resolved) ([]insItem, error) {
 		return out, nil
 	}
 
-	asset, want, err := tf.Asset(runtime.GOOS, runtime.GOARCH, version, res.Tag)
+	cands := platform.Candidates()
+	asset, want, matched, err := tf.AssetFor(cands, version, res.Tag)
 	if err != nil {
 		return nil, err
+	}
+	// 命中的不是第一个候选 = 可能装的不是「为这台机器构建的那个」。铁律 8：如实说。
+	// 要作者声明了哪些平台才判得准，见 insFallbackNote。
+	if note := insFallbackNote(cands, matched, tf.Platforms()); note != "" {
+		ui.Warn("%s", note)
 	}
 	u, err := insAssetURL(res, asset, false)
 	if err != nil {
 		return nil, err
 	}
 	return []insItem{{name: asset, asset: asset, url: u, want: want}}, nil
+}
+
+// insFallbackNote 在命中的不是第一个候选时给出一句人话。命中第一个就返回空串。
+//
+// 铁律 8：装的不是「为这台机器构建的那个」，用户必须知道 —— 这两种回退失败起来
+// 都不像回退的错：Rosetta 装了一个默默慢一截的 Intel 版；把 glibc 构建丢进 Alpine
+// 报的是 `not found`，而文件明明就在那儿。
+//
+// 但「没命中首选候选」并不等于「没拿到为这台机器构建的东西」：在 linux 上我们
+// **总会**自己合成一段 libc 后缀当首选（gnu / musl），而绝大多数项目只发两段 key。
+// 于是每一次普通安装都会多出一句假警告，把真正要紧的 musl / Rosetta 警告一起淹掉 ——
+// 一条每次都响的警告等于没有警告。所以 declared（作者声明了哪些平台）是判据的一部分：
+// 裸 linux/amd64 差不多总是 glibc 构建，对 glibc 机器来说它就是对的那个，除非作者
+// 自己按 libc 分了档（那时通用档是什么就说不准了）。musl 机器反过来永远要说 ——
+// 裸 linux/amd64 几乎不可能是 musl 构建。
+func insFallbackNote(cands []string, matched string, declared []string) string {
+	if len(cands) == 0 || matched == "" || matched == cands[0] {
+		return ""
+	}
+	want := cands[0]
+	if want == matched+"/gnu" && !insSplitsBy(matched, declared) {
+		return ""
+	}
+	switch {
+	case want == "darwin/arm64" && matched == "darwin/amd64":
+		return "这个包没有 Apple Silicon 的构建，装的是 Intel 版（darwin/amd64）—— " +
+			"它靠 Rosetta 2 翻译运行，能跑但会慢一截。没装 Rosetta 2 的话敲下去会直接报「无法打开」，" +
+			"`softwareupdate --install-rosetta` 装上即可"
+	case want == matched+"/gnu":
+		// 走到这里说明作者确实按 libc 分了档，只是没有 glibc 那一档。
+		return "这个包按 libc 分了构建，但没有 " + want + " 这一档，装的是通用的 " + matched +
+			" —— 通用构建通常就是 glibc 版，只是作者没有明说"
+	case strings.HasSuffix(want, "/musl"):
+		return "这台机器是 musl（Alpine 这类），而这个包只有通用 Linux 构建（" + matched + "）。" +
+			"它要是动态链接的 glibc 程序，在这里根本起不来 —— 而报错会长得像「文件不存在」" +
+			"（`not found` / `no such file or directory`），那其实是找不到动态加载器，不是文件没装上"
+	default:
+		return "没有 " + want + " 的构建，退回到 " + matched + " —— 装上了但不是为这台机器专门构建的那个"
+	}
+}
+
+// insSplitsBy 判断作者有没有在 base 这个底座上按更细的一维分构建
+// （linux/amd64 之下的 linux/amd64/musl 这种）。分了才说明通用档不再是「默认那个」。
+func insSplitsBy(base string, declared []string) bool {
+	for _, p := range declared {
+		if strings.HasPrefix(p, base+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // insAssetURL 拼一个资产的下载地址。

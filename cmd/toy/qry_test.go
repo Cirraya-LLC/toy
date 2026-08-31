@@ -91,3 +91,20 @@ func TestIndexURLAcceptsBarePath(t *testing.T) {
 		t.Fatal("空地址不该被收下")
 	}
 }
+
+// info 的「当前平台」必须和 install 用同一套候选顺序判断。只比一个精确 key
+// 会把「其实能装」（Rosetta、musl 退回通用构建）报成「没有对应的构建，装不了」——
+// 用户看完那一屏就不会去装了，而它明明装得上。
+func TestQryMatchPlatformFollowsCandidateOrder(t *testing.T) {
+	cands := []string{"linux/amd64/musl", "linux/amd64"}
+	if got := qryMatchPlatform([]string{"linux/amd64", "darwin/arm64"}, cands); got != "linux/amd64" {
+		t.Fatalf("只声明了通用 key 时应该命中 linux/amd64，得到 %q", got)
+	}
+	// 更具体的那个存在就必须赢 —— 反过来会让 Alpine 用户拿到 glibc 构建。
+	if got := qryMatchPlatform([]string{"linux/amd64", "linux/amd64/musl"}, cands); got != "linux/amd64/musl" {
+		t.Fatalf("应该优先命中 linux/amd64/musl，得到 %q", got)
+	}
+	if got := qryMatchPlatform([]string{"darwin/arm64"}, cands); got != "" {
+		t.Fatalf("一个都对不上时要返回空串，得到 %q", got)
+	}
+}

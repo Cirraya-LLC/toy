@@ -107,6 +107,10 @@ check "装好的命令真的能跑"                    "hello | grep -q 'hello f
 check "写了安装清单"                          "ls '$TOY_HOME/installed'/*/*/*.toml >/dev/null 2>&1 || ls -R '$TOY_HOME/installed' | grep -q toml"
 check "缓存文件名就是 sha256（内容寻址）"      "ls '$TOY_HOME/cache' | grep -qE '^[0-9a-f]{64}'"
 check "打印了信任等级"                        "grep -qE '未签名|已签名|已钉住' '$WORK/install.log'"
+# 上面那个 toy.toml 只写了两段 key（绝大多数项目都是这样）。linux 上首选候选永远是
+# 我们自己合成的 linux/amd64/gnu，所以「没命中首选就报回退」会让每一次普通安装都
+# 多一句假警告 —— 而一条每次都响的警告会把真的 musl / Rosetta 警告一起淹掉。
+check "只发两段 key 的包不报假回退"            "! grep -q '退回' '$WORK/install.log'"
 
 echo "== list / info =="
 # 规格 §9：给人看的输出走 stderr，stdout 留给机器可读的那份（--json）。
@@ -225,6 +229,64 @@ check "拒绝的理由确实是 sha256 对不上"          "grep -q 'sha256' '$W
 check "报错里把期望值和实际值都摆出来了"          "grep -q '1111111111111111111111111111111111111111111111111111111111111111' '$WORK/bad.log' && grep -qE '实际|actual' '$WORK/bad.log'"
 check "哈希不对时什么都没装上"                   "! test -e '$TOY_HOME/bin/badsum'"
 
+echo "== toy init：从 dist 的文件名反推 toy.toml，然后真的装它 =="
+# 这条命令的价值全在「作者不用手写 [artifact]」，所以验收标准是整条链路：
+# init 生成的文件必须能被 install 原样吃下去，不是"看起来像那么回事"。
+UP2="$WORK/upstream2"
+mkdir -p "$UP2/dist"
+printf '#!/bin/sh\necho "gadget lives"\n' > "$BUILD/gadget"
+chmod +x "$BUILD/gadget"
+for P in linux_x86_64 linux_arm64 darwin_x86_64 darwin_arm64 windows_x86_64; do
+  tar -C "$BUILD" -czf "$UP2/dist/gadget_2.1.0_${P}.tar.gz" gadget
+done
+echo notanasset > "$UP2/dist/checksums.txt"
+( cd "$UP2" && "$TOY" init --name gadget >"$WORK/init.log" 2>&1 )
+check "init 退出码 0 并写出了 toy.toml"        "test -f '$UP2/toy.toml'"
+check "版本号被换成了 {version} 占位符"          "grep -q 'gadget_{version}_linux_x86_64.tar.gz' '$UP2/toy.toml'"
+check "toy.toml 里没有留下写死的版本号"          "! grep -q '2\.1\.0' '$UP2/toy.toml'"
+check "x86_64 被认成了 amd64"                  "grep -q '\"linux/amd64\"' '$UP2/toy.toml'"
+check "aarch64/arm64 也认出来了"                "grep -q '\"darwin/arm64\"' '$UP2/toy.toml'"
+check "算出了 [sha256]（铁律 4：从 TOFU 升到强制校验）" \
+      "grep -q '^\[sha256\]' '$UP2/toy.toml' && grep -qE '^\"linux/amd64\" = \"[0-9a-f]{64}\"' '$UP2/toy.toml'"
+check "Windows 被跳过且说明了原因"               "! grep -q 'windows' '$UP2/toy.toml' && grep -q 'Windows' '$WORK/init.log'"
+check "checksums.txt 这种非资产没进 [artifact]"  "! grep -q 'checksums' '$UP2/toy.toml'"
+check "明说了哪些地方是猜的"                     "grep -q '是猜的' '$WORK/init.log'"
+( cd "$UP2" && git init -q && git add -A \
+  && git -c user.email=t@e.st -c user.name=t commit -q -m init && git tag v2.1.0 )
+cat > "$TOY_HOME/config.toml" <<EOF
+[[index]]
+name = "local"
+url  = "file://$ROOT/index/toy-index.json"
+
+[hosts.local]
+raw     = "file://$UP2/{path}"
+clone   = "$UP2"
+release = "file://$UP2/dist/{asset}"
+web     = "file://$UP2"
+EOF
+if "$TOY" install local:test/gadget >"$WORK/gadget.log" 2>&1; then
+  ok "init 生成的 toy.toml 能被 install 原样装上"
+else
+  bad "init 生成的 toy.toml 装不上"; cat "$WORK/gadget.log"
+fi
+check "装出来的命令真的能跑"                    "gadget | grep -q 'gadget lives'"
+check "已存在 toy.toml 时不覆盖"                "( cd '$UP2' && ! '$TOY' init --name gadget )"
+check "--force 才覆盖"                          "( cd '$UP2' && '$TOY' init --force --name gadget )"
+check "一个都认不出来时报错而不是写空壳"          "( cd '$WORK' && mkdir -p emptydist/dist && touch emptydist/dist/README && cd emptydist && ! '$TOY' init && ! test -f toy.toml )"
+"$TOY" uninstall gadget >/dev/null 2>&1 || true
+# 复原 config，后面的用例还指着 $UP。
+cat > "$TOY_HOME/config.toml" <<EOF
+[[index]]
+name = "local"
+url  = "file://$ROOT/index/toy-index.json"
+
+[hosts.local]
+raw     = "file://$UP/{path}"
+clone   = "$UP"
+release = "file://$UP/dist/{asset}"
+web     = "file://$UP"
+EOF
+
 echo "== 卸载 =="
 "$TOY" uninstall hello >/dev/null 2>&1 || true
 check "软链没了"                              "! test -e '$TOY_HOME/bin/hello'"
@@ -232,6 +294,13 @@ check "缓存留着（内容寻址，同时是镜像目录）"    "ls '$TOY_HOME
 
 echo "== doctor / keygen / serve =="
 check "doctor 跑得通"                         "'$TOY' doctor"
+# 平台是【中性信息】不是检查项：musl 机器既不对也不错，给它一个红叉会让人去修一件没坏的事。
+# 先落成文件再 grep：`doctor | grep -q` 里 grep 一命中就退出，doctor 吃到 SIGPIPE，
+# set -o pipefail 会把整条管道判失败 —— 那和这里要断言的东西没有半点关系。
+"$TOY" doctor >"$WORK/doctor.log" 2>&1 || true
+check "doctor 打印了当前平台"                   "grep -q '^平台 ' '$WORK/doctor.log'"
+check "doctor 打印了候选顺序"                   "grep -q '候选顺序' '$WORK/doctor.log'"
+check "平台那几行不带 ✓/✗"                     "! grep -E '^[✓✗].*(候选顺序|^平台)' '$WORK/doctor.log'"
 check "keygen 生成了密钥"                     "'$TOY' keygen && test -f '$TOY_HOME/keys/key.sec'"
 check "私钥权限是 0600"                       "test \"\$(stat -c %a '$TOY_HOME/keys/key.sec' 2>/dev/null || stat -f %Lp '$TOY_HOME/keys/key.sec')\" = 600"
 check "keygen 不覆盖已有密钥"                 "! '$TOY' keygen"

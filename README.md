@@ -56,6 +56,16 @@ tinyserve = "tinyserve"
 
 打个 tag，发个 release。**完事了。**
 
+已经在用 goreleaser 的话，这个文件不用自己写：
+
+```bash
+toy init          # 读 ./dist 里的资产文件名，反推出上面那份 toy.toml
+```
+
+它会把版本号换成 `{version}` 占位符、顺手把 `[sha256]` 算好（安装侧就从
+"首次信任"升级成强制校验），并在最后明说哪几处是猜的 —— 尤其 `[bin]` 右边那个
+包内路径，压缩包里套了一层目录的话得改。已经有 `toy.toml` 时它不会覆盖。
+
 没有 URL、没有版本号、没有托管方名字 —— 所以下次发版这个文件一个字都不用改。
 不用注册、不用等审核、不用求任何人。
 
@@ -65,6 +75,27 @@ toy install github:你的名字/你的工具   # 别人现在就能装
 
 想被搜到，再把一行条目提进索引。跑一次 `toy keygen` 就能给自己的条目签名。
 **这两步都是可选的。**
+
+### 平台 key：两段就够，需要时可以更细
+
+`[artifact]` 的 key 一般就是 `GOOS/GOARCH`。但 `linux/amd64` 一个字都没说 libc，
+而 glibc 构建丢进 Alpine 报的是 `not found` —— 文件明明就在那儿。所以 key 允许
+再带一段，toy 按**从具体到通用**的顺序试，第一个命中的就装：
+
+| 你的机器 | 依次试 |
+| --- | --- |
+| 普通 Linux（glibc） | `linux/amd64/gnu` → `linux/amd64` |
+| Alpine（musl） | `linux/amd64/musl` → `linux/amd64` |
+| Apple Silicon | `darwin/arm64` → `darwin/amd64`（Rosetta 2） |
+| 树莓派 3 / Zero | `linux/armv7` / `linux/armv6` → `linux/arm` |
+
+**作为作者你不用管这些**：只写 `linux/amd64` 就行，绝大多数项目都是这样，
+裸 `linux/amd64` 差不多总是 glibc 构建。只有你**真的同时发**了 glibc 和 musl
+两份二进制时，才需要多写一行 `"linux/amd64/musl"`。
+
+**装的不是为这台机器构建的那个时，toy 会明说** —— Rosetta 会慢一截，
+musl 机器上装到 glibc 构建根本起不来。反过来，只发两段 key 的包装在普通 Linux 上
+不会有任何多余的话：那本来就是给你的那个。
 
 ## 你在信任谁，toy 会告诉你
 
@@ -119,6 +150,7 @@ toy update [名字]                                 升级，不带名字就是�
 toy list                                         已经装了什么
 toy search [--limit n] [--json] <关键词>           在索引里搜（纯本地，不联网搜）
 toy info <ref>                                   装之前先看一眼：平台、命令名、信任状态
+toy init [--dist ./dist] [--name x] [--force]    从 dist 里的资产名反推一份 toy.toml
 toy index add <名字> <地址> | rm <名字> | list       索引管理
 toy keygen                                       生成 ed25519 密钥对
 toy publish [--source github:owner/repo] [目录]   签名，输出一条能粘进索引的条目

@@ -33,6 +33,7 @@ var errUsage = errors.New("usage")
 // 这几行是用户唯一会看到的语法说明，写成 `<ref> [--force]` 就是在教一个跑不通的顺序。
 func commands() []command {
 	return []command{
+		{"init", "[--dist ./dist] [--name x] [--version v] [--force] [目录]", "从 dist 里的资产名反推一份 toy.toml", runInit},
 		{"install", "[--reinstall] [--force] [--version v] <ref>", "安装一个包", runInstall},
 		{"uninstall", "<名字>", "卸载", runUninstall},
 		{"update", "[名字]", "升级已装的包", runUpdate},

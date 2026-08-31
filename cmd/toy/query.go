@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/Cirraya-LLC/toy/internal/fetch"
 	"github.com/Cirraya-LLC/toy/internal/index"
+	"github.com/Cirraya-LLC/toy/internal/platform"
 	"github.com/Cirraya-LLC/toy/internal/ref"
 	"github.com/Cirraya-LLC/toy/internal/store"
 	"github.com/Cirraya-LLC/toy/internal/ui"
@@ -469,7 +469,12 @@ func runInfo(ctx context.Context, args []string) error {
 		add("版本", "未知 —— 裸地址里没有版本信息，装出来的就是此刻那个文件")
 	}
 
-	cur := runtime.GOOS + "/" + runtime.GOARCH
+	// 只比一个精确 key 会把「其实能装」（Rosetta、musl 退回通用构建）报成
+	// 「没有对应构建」，所以这里和 install 一样按候选顺序判断。
+	cands := platform.Candidates()
+	// 报给人看的是两段的底座，不是 cands[0] —— linux 上那个是我们自己合成的
+	// linux/amd64/gnu，把它当成「你的平台」写出来会让人去找一个不存在的资产。
+	cur, matched := platform.Base(), cands[0]
 	if tf.IsScript() {
 		add("形态", "单文件脚本：下载 + chmod +x，零解压零构建")
 		add("支持平台", "不区分平台（脚本自己决定跑不跑得起来）")
@@ -477,11 +482,24 @@ func runInfo(ctx context.Context, args []string) error {
 		add("形态", "release 二进制：下载 + 解压，一行脚本都不跑")
 		plats := tf.Platforms()
 		add("支持平台", strings.Join(plats, "  "))
-		if slices.Contains(plats, cur) {
-			add("当前平台", cur+"  ✓ 有对应的构建")
-		} else {
+		// 「是不是真的回退」只有一处判据 —— install 打的那句话就是它决定的。
+		// info 和 install 对同一个包给出不同说法，比两边都说错更糟。
+		switch hit := qryMatchPlatform(plats, cands); {
+		case hit == "":
 			add("当前平台", cur+"  ✗ 没有对应的构建，装不了")
-			add("", "去上游提个 issue，请作者在 release 里补一个 "+cur+" 的资产并在 toy.toml 里加一行")
+			add("", "试过 "+strings.Join(cands, "、")+
+				"。去上游提个 issue，请作者在 release 里补一个 "+cur+" 的资产并在 toy.toml 里加一行")
+		default:
+			matched = hit // 下面挑 sha256 要用真正命中的那个 key
+			// 装得上，但装的不是为这台机器构建的那个 —— 原因直接用 install 那句话，
+			// 别在这里另写一版：cur 和 hit 在「作者按 libc 分了档」时是同一个字符串，
+			// 拼成「回退：linux/amd64」会指着自己说自己。
+			if note := insFallbackNote(cands, hit, plats); note != "" {
+				add("当前平台", cur+"  ✓ 装得上，但不是为这台机器专门构建的那个")
+				add("", note)
+			} else {
+				add("当前平台", cur+"  ✓ 有对应的构建")
+			}
 		}
 	}
 
@@ -499,7 +517,7 @@ func runInfo(ctx context.Context, args []string) error {
 	switch {
 	case tf.IsScript():
 		add("完整性", "脚本形态没有按平台声明的 sha256，首次安装钉住哈希（TOFU），之后变了会拒绝")
-	case tf.SHA256[cur] != "":
+	case tf.SHA256[matched] != "":
 		add("完整性", "当前平台声明了 sha256，安装时强制校验，对不上一律拒绝")
 	case len(tf.SHA256) > 0:
 		add("完整性", fmt.Sprintf("作者只给了 %d 个平台的 sha256，当前平台不在其中 —— 走 TOFU 钉住", len(tf.SHA256)))
@@ -526,6 +544,18 @@ func runInfo(ctx context.Context, args []string) error {
 	// 信任等级走 ui.Trust，和安装完那一行是同一套措辞（规格 §4、铁律 8）。
 	ui.Trust(res.Trust, insTrustDetail(res))
 	return nil
+}
+
+// qryMatchPlatform 返回 candidates 里第一个被声明了的平台 key，一个都没有就是空串。
+// 和 toyfile.AssetFor 的挑选顺序必须一致 —— 不一致的话 info 会说"装得上"而 install 拒绝，
+// 或者反过来。
+func qryMatchPlatform(declared, candidates []string) string {
+	for _, c := range candidates {
+		if slices.Contains(declared, c) {
+			return c
+		}
+	}
+	return ""
 }
 
 func qryOr(s, fallback string) string {
@@ -748,6 +778,7 @@ func runDoctor(ctx context.Context, args []string) error {
 
 	ui.Info("体检 %s", st.Root)
 	ui.Info("")
+	qryPlatformInfo()
 	bad := 0
 	for _, c := range checks {
 		mark := "✓"
@@ -770,6 +801,22 @@ func runDoctor(ctx context.Context, args []string) error {
 	}
 	// 返回 error 就是退出码 1（见 main），错误信息本身也得说人话。
 	return fmt.Errorf("%d/%d 项没过，每一条上面都写了修复命令", bad, len(checks))
+}
+
+// qryPlatformInfo 打印这台机器会去要哪些构建。
+//
+// 它【不是】检查项，所以不打 ✓/✗ —— 「这台机器是 musl」既不对也不错，
+// 给它一个红叉会让人去修一件根本没坏的事。它存在的理由是：装出来的东西起不来时
+// （musl 上跑 glibc 二进制、Rosetta 没装、armv6 上跑 armv7），
+// 报错里没有一个字指向平台，而这几行是唯一能对上号的线索。
+func qryPlatformInfo() {
+	ui.Info("平台 %s", platform.Current())
+	ui.Info("    候选顺序 %s", strings.Join(platform.Candidates(), " → "))
+	if lvl := platform.CPULevelHint(); lvl != "" {
+		// 只是线索：toy 不做微架构匹配（要解析 CPUID，标准库不给，引库违反规格 §10）。
+		ui.Info("    CPU 指令集大致是 %s（只是线索，不参与挑构建）", lvl)
+	}
+	ui.Info("")
 }
 
 // qryCheckPath 是新用户第一个坑：装完了，命令却「找不到」。

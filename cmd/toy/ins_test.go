@@ -1,13 +1,17 @@
 package main
 
 import (
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/Cirraya-LLC/toy/internal/host"
+	"github.com/Cirraya-LLC/toy/internal/platform"
 	"github.com/Cirraya-LLC/toy/internal/ref"
 	"github.com/Cirraya-LLC/toy/internal/semver"
 	"github.com/Cirraya-LLC/toy/internal/store"
+	"github.com/Cirraya-LLC/toy/internal/toyfile"
 )
 
 func insTestResolved(t *testing.T, s, tag string) *resolved {
@@ -138,5 +142,97 @@ func TestInsTrustDowngradeNeedsForce(t *testing.T) {
 		if got := insTrustDowngraded(c.old, c.res); got != c.want {
 			t.Errorf("%s：insTrustDowngraded = %v，想要 %v", c.name, got, c.want)
 		}
+	}
+}
+
+// 铁律 8：命中的不是第一个候选，就是装了一个不是为这台机器构建的东西。
+// 这两种回退失败起来都不像回退的错 —— Rosetta 少装一次是「无法打开」，
+// glibc 二进制丢进 Alpine 是「文件不存在」，说明必须在安装那一刻给出来。
+func TestInsFallbackNote(t *testing.T) {
+	cases := []struct {
+		name     string
+		cands    []string
+		matched  string
+		declared []string
+		want     []string // 都要出现；空表示这次不该有任何说明
+	}{
+		{"命中第一个就不吭声", []string{"linux/amd64/gnu", "linux/amd64"}, "linux/amd64/gnu",
+			[]string{"linux/amd64", "linux/amd64/gnu"}, nil},
+		// 这条是这个函数最要紧的一条，也是它以前唯一没盖住的一条：绝大多数项目
+		// 只发两段 key，而 linux 上首选候选永远是我们自己合成的 /gnu。判据写成
+		// 「没命中首选就报警」的话，每一次普通安装都会多一句假警告 —— 而一条每次
+		// 都响的警告会把下面那两条真的一起淹掉。
+		{"glibc 机器装只发两段 key 的包：那就是对的那个，不许吭声",
+			[]string{"linux/amd64/gnu", "linux/amd64"}, "linux/amd64",
+			[]string{"linux/amd64", "linux/arm64"}, nil},
+		{"作者按 libc 分了档但没有 glibc 那一档，要说一声",
+			[]string{"linux/amd64/gnu", "linux/amd64"}, "linux/amd64",
+			[]string{"linux/amd64", "linux/amd64/musl"},
+			[]string{"libc", "linux/amd64"}},
+		{"Apple Silicon 退回 Intel 要说 Rosetta",
+			[]string{"darwin/arm64", "darwin/amd64"}, "darwin/amd64",
+			[]string{"darwin/amd64"},
+			[]string{"Rosetta", "Intel"}},
+		// musl 反过来：裸 linux/amd64 几乎不可能是 musl 构建，所以作者有没有分档
+		// 都要说 —— 沉默的代价是一句「文件不存在」，而文件明明就在那儿。
+		{"musl 机器退回通用构建要说会像文件不存在（哪怕作者没分档）",
+			[]string{"linux/amd64/musl", "linux/amd64"}, "linux/amd64",
+			[]string{"linux/amd64"},
+			[]string{"musl", "文件不存在"}},
+		{"别的回退也要说一声",
+			[]string{"linux/armv7", "linux/arm"}, "linux/arm",
+			[]string{"linux/arm"},
+			[]string{"linux/armv7", "linux/arm"}},
+		{"没有候选就无从说起", nil, "linux/amd64", []string{"linux/amd64"}, nil},
+	}
+	for _, c := range cases {
+		got := insFallbackNote(c.cands, c.matched, c.declared)
+		if len(c.want) == 0 {
+			if got != "" {
+				t.Errorf("%s：不该有说明，得到 %q", c.name, got)
+			}
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s：说明里要有 %q，得到 %q", c.name, w, got)
+			}
+		}
+	}
+}
+
+// 挑资产必须走候选顺序，不能只比一个精确的 GOOS/GOARCH。只比一个的话，
+// Alpine 上装任何一个「只发了通用 linux 构建」的包都会被判成
+// 「没有适配当前平台的构建」—— 而那个包在 Alpine 上很可能是装得上的。
+func TestInsItemsFallsBackThroughCandidates(t *testing.T) {
+	cands := platform.Candidates()
+	if len(cands) < 2 {
+		t.Skipf("这台机器只有一个候选（%v），没有回退可验", cands)
+	}
+	// 挑一个【不等于】GOOS/GOARCH 的候选：只有这样，"只比一个精确 key" 的写法
+	// 才会失败而候选顺序会成功 —— 拿 GOOS/GOARCH 本身去测，两种写法都过。
+	only := ""
+	for _, c := range cands {
+		if c != runtime.GOOS+"/"+runtime.GOARCH {
+			only = c
+			break
+		}
+	}
+	if only == "" {
+		t.Skipf("这台机器的候选全等于 GOOS/GOARCH（%v），没有回退可验", cands)
+	}
+	tf, err := toyfile.Parse(fmt.Appendf(nil,
+		"name = \"probe\"\n[bin]\nprobe = \"probe\"\n[artifact]\n%q = \"probe_{version}_x.tar.gz\"\n", only))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := insTestResolved(t, "github:o/r", "v1.0.0")
+	res.Toyfile = tf
+	items, err := insItems(res)
+	if err != nil {
+		t.Fatalf("只声明了 %q 的包应该能靠候选顺序装上，得到：%v", only, err)
+	}
+	if len(items) != 1 || items[0].asset != "probe_1.0.0_x.tar.gz" {
+		t.Fatalf("挑出来的资产不对：%+v", items)
 	}
 }

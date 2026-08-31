@@ -14,14 +14,24 @@ tinyserve = "tinyserve"
 
 # key 是 GOOS/GOARCH，value 是 release 里那个资产的文件名。
 # 占位符只有两个：{version} 不带 v 前缀，{tag} 是原样的 tag。
+#
+# 两段 key 就够用了 —— 下面那两行 /musl 是可选的，只有当你**真的同时发**了
+# glibc 和 musl 两份构建时才写。toy 装的时候按从具体到通用的顺序试：
+# Alpine 上先找 linux/amd64/musl，没有再退回 linux/amd64（并会明说退了）；
+# 普通 glibc 机器直接用 linux/amd64，不会有任何多余的话。
+# 不写 /musl 完全正常，绝大多数项目都是这样。
 [artifact]
-"linux/amd64"   = "tinyserve_{version}_linux_amd64.tar.gz"
-"linux/arm64"   = "tinyserve_{version}_linux_arm64.tar.gz"
-"darwin/amd64"  = "tinyserve_{version}_darwin_amd64.tar.gz"
-"darwin/arm64"  = "tinyserve_{version}_darwin_arm64.tar.gz"
+"linux/amd64"       = "tinyserve_{version}_linux_amd64.tar.gz"
+"linux/amd64/musl"  = "tinyserve_{version}_linux_amd64_musl.tar.gz"
+"linux/arm64"       = "tinyserve_{version}_linux_arm64.tar.gz"
+"linux/arm64/musl"  = "tinyserve_{version}_linux_arm64_musl.tar.gz"
+"darwin/amd64"      = "tinyserve_{version}_darwin_amd64.tar.gz"
+"darwin/arm64"      = "tinyserve_{version}_darwin_arm64.tar.gz"
 
 # 可选。写了就强制校验，对不上一律拒绝安装。
 # 不写的话 toy 会在首次安装时钉住实际哈希（TOFU），之后变了照样会拦。
+# 不用手写：在 dist/ 旁边跑一次 `toy init` 就会照着实际文件算好这一段。
 [sha256]
-"linux/amd64"  = "0000000000000000000000000000000000000000000000000000000000000000"
-"darwin/arm64" = "0000000000000000000000000000000000000000000000000000000000000000"
+"linux/amd64"      = "0000000000000000000000000000000000000000000000000000000000000000"
+"linux/amd64/musl" = "0000000000000000000000000000000000000000000000000000000000000000"
+"darwin/arm64"     = "0000000000000000000000000000000000000000000000000000000000000000"

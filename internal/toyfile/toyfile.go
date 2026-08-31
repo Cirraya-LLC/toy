@@ -144,26 +144,60 @@ func (t *Toyfile) IsScript() bool { return len(t.Script) > 0 }
 // Asset 按 goos/goarch 挑出资产名并展开 {version} / {tag} 占位符，
 // 同时返回该平台声明的 sha256（没有就是空串）。
 // 找不到当前平台返回 ErrNoPlatform，并在 error 里列出它支持哪些平台。
+//
+// 只试 goos/goarch 一个 key，没有回退。要 musl / Rosetta / arm 代次那几层回退
+// 就用 AssetFor（internal/platform.Candidates 生成候选）。
 func (t *Toyfile) Asset(goos, goarch, version, tag string) (asset, sha256 string, err error) {
+	a, sum, _, err := t.AssetFor([]string{goos + "/" + goarch}, version, tag)
+	return a, sum, err
+}
+
+// AssetFor 按候选顺序找第一个命中的平台，返回资产名、声明的 sha256、
+// 以及真正命中的那个候选 key —— 调用方要用它告诉用户走的是回退
+// （装 linux/amd64 的包到 Alpine 上、或在 M 系列 Mac 上装 darwin/amd64，
+// 都得说出来，铁律 8）。
+func (t *Toyfile) AssetFor(candidates []string, version, tag string) (asset, sha256, matched string, err error) {
 	if t.IsScript() {
-		return "", "", fmt.Errorf("toyfile: %q 是单文件脚本形态（[script]），没有按平台区分的资产。"+
+		return "", "", "", fmt.Errorf("toyfile: %q 是单文件脚本形态（[script]），没有按平台区分的资产。"+
 			"调用方应当先看 IsScript()，再直接用 Script 里的每一项", t.Name)
 	}
 
-	plat := goos + "/" + goarch
-	tmpl, ok := t.Artifact[plat]
-	if !ok {
-		return "", "", fmt.Errorf("%w：当前是 %s，这个 toy.toml 只声明了 %s。"+
-			"想用的话去上游提 issue，请作者在 release 里补一个 %s 的资产并在 toy.toml 里加一行",
-			ErrNoPlatform, plat, describePlatforms(t.Platforms()), plat)
+	for _, plat := range candidates {
+		tmpl, ok := t.Artifact[plat]
+		if !ok {
+			continue
+		}
+		// {version} / {tag} 是远端给的（git ls-remote 拿到的 tag、或调用方的 --version），
+		// 展开之后这一串才是真正会被拼进下载地址的东西，所以在这个唯一的出口再验一次。
+		expanded := Expand(tmpl, version, tag)
+		if err := checkRelPath("artifact", plat, expanded); err != nil {
+			return "", "", "", err
+		}
+		return expanded, t.SHA256[plat], plat, nil
 	}
-	// {version} / {tag} 是远端给的（git ls-remote 拿到的 tag、或调用方的 --version），
-	// 展开之后这一串才是真正会被拼进下载地址的东西，所以在这个唯一的出口再验一次。
-	expanded := Expand(tmpl, version, tag)
-	if err := checkRelPath("artifact", plat, expanded); err != nil {
-		return "", "", err
+
+	// 两边都列出来：用户要知道我们试过什么，作者要知道该补哪个 key。
+	// 建议补的那个 key 要取底座（两段），不能直接用首选候选：linux 上的首选候选
+	// 是我们自己合成的 linux/amd64/gnu，而没有任何人会去发布一个叫 gnu 的资产 ——
+	// 让用户拿着这句话去给作者提 issue，提的就是一个错的要求。
+	want := "当前平台"
+	if len(candidates) > 0 {
+		want = baseKey(candidates[0])
 	}
-	return expanded, t.SHA256[plat], nil
+	return "", "", "", fmt.Errorf("%w：试过 %s，这个 toy.toml 只声明了 %s。"+
+		"想用的话去上游提 issue，请作者在 release 里补一个 %s 的资产并在 toy.toml 里加一行",
+		ErrNoPlatform, describePlatforms(candidates), describePlatforms(t.Platforms()), want)
+}
+
+// baseKey 把平台 key 截到前两段（goos/goarch）。三段的 linux/amd64/musl → linux/amd64；
+// 本来就两段的原样返回。
+func baseKey(plat string) string {
+	if i := strings.Index(plat, "/"); i >= 0 {
+		if j := strings.Index(plat[i+1:], "/"); j >= 0 {
+			return plat[:i+1+j]
+		}
+	}
+	return plat
 }
 
 // Platforms 返回它声明支持的平台列表，排序稳定，报错时给用户看。
@@ -283,18 +317,27 @@ func isURLScheme(s string) bool {
 	return true
 }
 
-// checkPlatformKey：key 必须是 GOOS/GOARCH，写错了不会报错，只会永远匹配不上。
+// checkPlatformKey：key 必须是 GOOS/GOARCH，或者带一段 libc 的 GOOS/GOARCH/libc。
+// 写错了不会报错，只会永远匹配不上 —— 所以这里宁可当场拒绝：作者以为自己发布了
+// linux 版，用户被告知「没有适配的构建」，这中间没有任何地方会说话。
 func checkPlatformKey(section, plat string) error {
-	goos, goarch, ok := strings.Cut(plat, "/")
-	if !ok || goos == "" || goarch == "" || strings.Contains(goarch, "/") {
-		return fmt.Errorf("toyfile: [%s] 里的 key %q 不是 GOOS/GOARCH 形式，"+
-			`比如 "linux/amd64"、"darwin/arm64"`, section, plat)
-	}
 	// runtime.GOOS/GOARCH 永远是小写、不带空格。写成 "Linux/AMD64" 或 " linux/amd64 "
-	// 不会报错，只会永远匹配不上 —— 作者以为自己发布了 linux 版，用户被告知没有适配的构建。
+	// 不会报错，只会永远匹配不上。这条要先判，因为下面的分段比较是逐字节的。
 	if plat != strings.ToLower(plat) || strings.ContainsAny(plat, " \t") {
 		return fmt.Errorf("toyfile: [%s] 里的 key %q 必须全小写且不带空格，"+
 			"它要和 Go 的 GOOS/GOARCH 逐字节相等才匹配得上，比如 \"linux/amd64\"", section, plat)
+	}
+	parts := strings.Split(plat, "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("toyfile: [%s] 里的 key %q 不是 GOOS/GOARCH 形式，"+
+			`比如 "linux/amd64"、"darwin/arm64"，或者带一段 libc 的 "linux/amd64/musl"`, section, plat)
+	}
+	// arch 那一段不做白名单：Go 每加一个 GOARCH 都会让白名单变成一条假报错，
+	// 而 armv6 / armv7 这种「GOARCH 分不出来的代次」本来就得能写进去。
+	if len(parts) == 3 && parts[2] != "musl" && parts[2] != "gnu" {
+		return fmt.Errorf("toyfile: [%s] 里的 key %q 的第三段 %q 不认识 —— "+
+			"第三段是 libc，只能是 \"musl\"（Alpine 那类）或 \"gnu\"（glibc）。"+
+			"别的东西写在这里永远匹配不上，等于这一行没写", section, plat, parts[2])
 	}
 	return nil
 }
