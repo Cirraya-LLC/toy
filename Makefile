@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 BIN   := ./toy
 
-.PHONY: all fmt build vet test e2e e2e-inline check index-check index-gen snapshot verify-toyfile clean
+.PHONY: all fmt build vet test e2e e2e-inline check index-check index-gen site snapshot verify-toyfile clean
 
 all: check
 
@@ -44,6 +44,11 @@ index-check:
 # 不带 $GITHUB_TOKEN 只有 60 次/小时，很快就撞限流。
 index-gen:
 	go run ./cmd/toy-index gen $(ARGS)
+
+# 静态站（site/）。只做一件事：把 index/toy-index.json 复制成 site/index.json 并校验。
+# Cloudflare Pages 的构建命令就是这一行脚本，输出目录是 site。
+site:
+	bash scripts/build-site.sh
 
 # 本地按 release 的方式构建一遍（要装了 goreleaser）。
 snapshot:

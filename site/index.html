@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>toy —— 装那些没人给你打包的小工具</title>
+<meta name="description" content="toy 装那些没人给你打包的小工具。装的时候一行脚本都不跑：没有 install、postinstall、build、hook。发布只要 8 行 toml，不用求任何人批准。">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🧸</text></svg>">
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="topbar">
+  <div class="wrap bar">
+    <a class="brand" href="/">toy</a>
+    <nav aria-label="站内导航">
+      <a href="#why">为什么</a>
+      <a href="#packages">包</a>
+      <a href="#trust">信任</a>
+      <a href="#install">装 toy</a>
+      <a href="https://github.com/Cirraya-LLC/toy">源码</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero wrap">
+  <h1>装那些没人给你打包的小工具。<br><em>装的时候一行脚本都不跑。</em></h1>
+  <p class="lede">
+    没有 install、没有 postinstall、没有 build、没有 hook，一个都没有。
+    toy 只会下载、验哈希、解压、建软链。
+  </p>
+
+  <div class="split">
+    <figure>
+      <figcaption>装一个</figcaption>
+      <pre><code>$ toy install github:Derrity/tinyserve
+$ tinyserve</code></pre>
+    </figure>
+    <figure>
+      <figcaption>发一个 —— 仓库根上放 8 行 <code>toy.toml</code>，打个 tag，完事</figcaption>
+      <pre><code>name    = "tinyserve"
+desc    = "一个很小的静态文件服务器"
+license = "MIT"
+
+[bin]
+tinyserve = "tinyserve"
+
+[artifact]
+"linux/amd64"  = "tinyserve_{version}_linux_amd64.tar.gz"
+"darwin/arm64" = "tinyserve_{version}_darwin_arm64.tar.gz"</code></pre>
+    </figure>
+  </div>
+  <p class="fine">
+    没有 URL、没有版本号、没有托管方名字 —— 所以下次发版这个文件一个字都不用改。
+    已经在用 goreleaser 的话连写都不用写：<code>toy init</code> 读 <code>./dist</code> 里的资产名反推出来。
+  </p>
+</section>
+
+<section id="why" class="wrap">
+  <h2>三件事</h2>
+  <ol class="points">
+    <li>
+      <h3>一、装的时候不跑任何代码</h3>
+      <p>
+        这不是「默认关闭」也不是「沙箱里跑」，是这些概念在代码里根本没有对应物。
+        它挡掉的是一整类攻击而不是一个 CVE：吃掉 700+ 个 npm 包的 Shai-Hulud 蠕虫靠的是
+        <code>preinstall</code>；Homebrew 的 formula 是可执行 Ruby，6.0 不得不为此加了一道 Tap Trust。
+      </p>
+      <p class="fine">
+        边界也说清楚：<strong>「装的时候不跑」不等于「这个包永远拿不到执行」。</strong>
+        一个包声明 <code>[bin] git = "payload"</code>，装完 <code>~/.toy/bin/git</code> 就在 PATH 上，
+        而 toy 自己靠 <code>git ls-remote</code> 发现版本。所以 <code>git</code> 是保留名字，
+        <strong>无条件拒绝，<code>--force</code> 也不放行</strong> —— 全项目唯一一条这样的检查。
+      </p>
+    </li>
+    <li>
+      <h3>二、8 行 toml，零审批</h3>
+      <p>
+        不用注册、不用等审核、不用求任何人。打个 tag 发个 release，
+        别人就能 <code>toy install github:你的名字/你的工具</code>。
+        想被搜到再把一行条目提进索引，跑一次 <code>toy keygen</code> 就能给自己的条目签名 ——
+        <strong>这两步都是可选的</strong>。强制签名 = 强制注册 = 又一个门槛。
+      </p>
+    </li>
+    <li>
+      <h3>三、下架无害，索引可自建</h3>
+      <p>
+        索引里默认只存一个指向仓库的指针，<strong>真相永远是那个 git 地址</strong>。
+        从索引里删掉一条只是「不再被搜到」，<code>toy install github:owner/repo</code> 照样装得上 ——
+        <strong>没有人能真的封杀一个包，包括我们</strong>。任何人 fork 一份那个 JSON 就是一个完整的平行索引。
+      </p>
+      <p class="fine">
+        所以维护者要求下架就下架，不问理由：既然代价这么低，就没有任何理由跟人争。
+      </p>
+    </li>
+  </ol>
+</section>
+
+<section id="packages" class="wrap">
+  <h2>索引里现在有什么</h2>
+  <p class="lede">
+    这份索引就挂在 <a href="/index.json"><code>/index.json</code></a>，客户端整份下载后本地搜索。
+    加进去：
+  </p>
+  <pre class="cmd"><code>toy index add official https://<span data-host>this-site</span>/index.json</code><button class="copy" data-copy-host aria-label="复制 toy index add 命令">复制</button></pre>
+
+  <div class="pkg-toolbar">
+    <label class="sr-only" for="q">过滤包</label>
+    <input id="q" type="search" placeholder="过滤：名字、描述、命令名…" autocomplete="off" spellcheck="false">
+    <span id="count" class="fine" aria-live="polite"></span>
+  </div>
+
+  <div id="packages-out">
+    <noscript>
+      <p class="fallback">
+        这一块要 JavaScript 才能渲染 —— 索引本身是一个静态 JSON，
+        <a href="/index.json">直接看 /index.json</a> 是一样的。
+      </p>
+    </noscript>
+  </div>
+
+  <p class="fine">
+    <strong>这里每一条都是内联条目。</strong>装出来是第三档信任等级（<code>index-toyfile</code>）：
+    二进制取自作者自己的 release（下载地址由托管方模板 + tag 拼出来，索引说了不算），
+    但<strong>装哪个资产、软链成什么命令名由索引提供 —— 作者本人没写过 toy.toml</strong>，
+    多半也不知道我们收录了他。收录只说明「这个包装得上」，不说明我们审计过它的代码，
+    也不说明作者和我们有任何关系。安装时客户端会如实打印这一档。
+  </p>
+</section>
+
+<section id="trust" class="wrap">
+  <h2>你在信任谁，toy 会告诉你</h2>
+  <p class="lede">安装完成那一行会打印下面四种之一。<strong>读的时候要读它证明不了的那部分。</strong></p>
+
+  <div class="tablewrap" tabindex="0" role="region" aria-label="四档信任等级">
+  <table class="trust">
+    <thead>
+      <tr><th scope="col">安装完成那一行</th><th scope="col">你信的是</th><th scope="col">它证明不了什么</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code class="t-ok">✓ 已签名 · key a3f9… · 索引 X 登记（不代表 github.com/Y 本人）</code></td>
+        <td>索引里登记的那把 ed25519 公钥</td>
+        <td><strong>不证明是仓库主人签的。</strong>签名消息是 <code>id + source + toy.toml 原文</code>，
+            三样都公开可读，<strong>里面没有一个字节把这把公钥和仓库的 owner 绑起来</strong>。
+            索引谁都能 fork、谁都能提 PR，抄一把公钥零成本 —— 一个人完全可以 fork 一份、
+            用自己的密钥给同一个 <code>id</code> 重新签一条、把 <code>source</code> 指向自己的仓库。
+            它保证的是<strong>连续性</strong>（公钥首次安装即钉住，换了拒绝安装），不是身份。
+            <strong>第一次安装该看的是 <code>source</code> 指向哪里，不是有没有勾。</strong></td>
+      </tr>
+      <tr>
+        <td><code>· 来源 github.com/Y · 未签名</code></td>
+        <td>托管方的账号体系：GitHub 说这个仓库属于这个账号，TLS 说你连到的是 GitHub</td>
+        <td>没有作者签名，也不需要 —— 这是绝大多数包的默认状态，
+            而且它是一个诚实的状态，不是一个降级。</td>
+      </tr>
+      <tr>
+        <td><code class="t-warn">⚠ 打包说明来自索引</code></td>
+        <td>字节是作者的，打包说明不是</td>
+        <td>作者没写过 <code>toy.toml</code>，索引条目里内联了一份。索引能改的是「装哪个资产、
+            软链成什么命令名」，改不了下载地址。<strong>内联的 toyfile 永远到不了那个勾</strong> ——
+            签名者是提交索引记录的人，不是作者。</td>
+      </tr>
+      <tr>
+        <td><code class="t-warn">⚠ 未签名 · 首次安装，已钉住 sha256</code></td>
+        <td>裸 URL：<strong>你什么都没信</strong></td>
+        <td>但内容变了会被拦下来。TOFU 的第一次就是无条件信任 ——
+            第一次装到的如果就是坏的，toy 会忠实地把它钉住。</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="fine">
+    有 <code>[sha256]</code> 就强制校验，没有则首次安装钉住，之后变了拒绝安装（模型抄的是 SSH 的
+    <code>known_hosts</code>）。<code>--reinstall</code> 和 <code>--force</code> 是两件事：前者只是
+    「我知道已经装了这一版，再装一次」，<strong>不放行任何安全检查</strong>；后者才是「我看过了，接受这些变化」，
+    而且会逐条打印自己放行了什么。完整的威胁模型 —— 包括 <strong>toy 不防的那一栏</strong> ——
+    在 <a href="https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md">SECURITY.md</a>。
+  </p>
+</section>
+
+<section id="install" class="wrap">
+  <h2>装 toy 自己</h2>
+  <p class="lede">
+    先把话说在前面：<strong>第一个包管理器总得靠别的方式装。</strong>
+    toy 存在的理由是让你不必 <code>curl | bash</code>，而它自己没法用 toy 装 ——
+    这个循环没有出路，凡是说自己解决了的都是把它挪了个地方。所以下面两种方式都不完美，
+    区别只在于<strong>你在信谁</strong>。
+  </p>
+
+  <h3>方式一：<code>go install</code>（有 Go 工具链的话，这是最省事的）</h3>
+  <pre class="cmd"><code>go install github.com/Cirraya-LLC/toy/cmd/toy@latest</code><button class="copy" aria-label="复制 go install 命令">复制</button></pre>
+  <p class="fine">
+    你信的是 Go 的模块代理和 checksum database（<code>sum.golang.org</code>）——
+    一套公开的、可审计的透明日志。它比我们自己的任何承诺都强，所以有 Go 就用这个。
+  </p>
+
+  <h3>方式二：下载 release 二进制，自己核对哈希</h3>
+  <pre class="cmd"><code># 换成你的平台：linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64
+V=1.0.0; P=linux_amd64
+BASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V
+
+curl -fLO $BASE/toy_${V}_${P}.tar.gz
+curl -fLO $BASE/checksums.txt
+
+# 核对哈希。这一步不是可选的 —— 跳过它，你就是在无条件信任那条下载链路。
+sha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c
+
+tar -xzf toy_${V}_${P}.tar.gz
+install -m 0755 toy ~/.local/bin/toy</code><button class="copy" aria-label="复制下载并校验的命令">复制</button></pre>
+  <p class="fine">
+    <code>checksums.txt</code> 和二进制来自同一个 release，所以它挡的是「传输过程中被改了」，
+    不是「发布的人本身有问题」。这就是引导悖论的实际形状。
+  </p>
+
+  <p class="nocurl">
+    <strong>这里不会有 <code>curl | bash</code> 安装脚本。</strong>
+    那正是这个项目要反的东西 —— 把整台机器交给一个没人看过的脚本。
+  </p>
+
+  <h3>装完之后</h3>
+  <pre class="cmd"><code>export PATH="$HOME/.toy/bin:$PATH"   # 写进 ~/.bashrc / ~/.zshrc
+toy index add official https://<span data-host>this-site</span>/index.json
+toy doctor</code><button class="copy" data-copy-host aria-label="复制装完之后的三条命令">复制</button></pre>
+  <p class="fine">
+    <strong>v1 一个索引都不预置</strong> —— 与其塞一个拉不到的地址让你第一次 <code>toy doctor</code>
+    就看见一条红叉，不如老实说没有。没有索引不影响装东西：
+    <code>toy install github:owner/repo</code> 那条路本来就不经过索引。
+  </p>
+</section>
+
+<section id="arch" class="wrap">
+  <h2>底下的架构</h2>
+  <p>
+    <strong>索引是去中心化的，这是架构不是卖点。</strong>
+    它就是一个 JSON 文件，客户端整份下载后本地搜索；里面只存指针，
+    <code>source</code> 那个 git 地址永远是真相。删一条只是不再被搜到，fork 一份就是一个平行索引。
+    <span class="fine">（把「去中心化」当宣传语的 Entropic ——
+    npm 前 CTO 2019 年在 JSConf EU 发布 —— 10 个月后归档了。所以我们只讲上面那两件事。）</span>
+  </p>
+  <p>
+    版本发现用的是 <code>git ls-remote --tags</code>，一条命令、所有 git 托管方行为一致，
+    <strong>不用任何一家的 REST API</strong> —— 也就不会被任何一家的限流卡住。
+    托管方是一张配置表不是三份代码，加三行配置就多支持一家。
+  </p>
+  <p>
+    <code>toy serve</code> 把你本机的缓存变成一个镜像 —— 因为内容是哈希寻址的，
+    <strong>镜像不需要被信任</strong>，谁都可以当，五分钟的事。上游哪天没了，包还活着。
+    但「不需要信任」不等于「不需要知道」：真的走了镜像，安装时会明说是从哪拿的。
+  </p>
+  <p class="fine">
+    不做的事：不做源码构建、不做包间依赖、不做 P2P/DHT、不做 Windows（暂时）。
+    包与包之间没有依赖 —— 每个 toy 是一个自包含的二进制或单文件脚本，
+    所以不存在「我审了直接依赖，但它的第 47 个间接依赖被投毒了」这回事。
+  </p>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <p>
+    MIT ·
+    <a href="https://github.com/Cirraya-LLC/toy">GitHub</a> ·
+    <a href="https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md">安全说明</a> ·
+    <a href="/index.json">index.json</a>
+  </p>
+  <p class="fine">这个站是手写的 HTML + CSS + 一个 app.js，没有构建工具、没有字体 CDN、没有第三方请求。</p>
+</footer>
+
+<script src="/app.js" defer></script>
+</body>
+</html>
