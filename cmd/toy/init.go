@@ -55,7 +55,12 @@ var iniArch = map[string]string{
 	"arm64": "arm64", "aarch64": "arm64",
 	"armv7": "armv7", "armhf": "armv7",
 	"armv6": "armv6",
-	"386":   "386", "i386": "386",
+	// 裸 "arm" 必须在这里：GOARCH=arm 且没设 goarm 时，goreleaser 的默认
+	// name_template 产出的就是 `tool_1.2.3_linux_arm.tar.gz`。少了这一行，
+	// 树莓派那份构建会被【静默丢掉】—— 而 linux/arm 正是 platform.go 给
+	// armv6/armv7 兜底的那个候选（规格 §3.1），丢了就等于 Pi 用户装不上。
+	"arm": "arm",
+	"386": "386", "i386": "386",
 }
 
 // iniVerRe 认文件名里的版本段。只认三段式：两段式（1.2）在文件名里和
@@ -179,6 +184,15 @@ func iniScan(files []string, forceVersion string) (assets []iniAsset, skipped []
 			continue
 		}
 		if key == "" {
+			// 认不出来的【资产】要说一声。静默丢掉的下场是：作者发了六个平台，
+			// toy.toml 里只有四个，而 init 打印的「认出了 N 个平台」看起来一切正常，
+			// 症状要等到那个平台的用户来报「没有适配当前平台的构建」才出现。
+			// 只对像发布包的文件出声 —— checksums.txt / LICENSE 这些本来就不是资产，
+			// 为它们报一行会把真正要看的那条淹掉。
+			if iniLooksLikeArchive(f) {
+				skipped = append(skipped, f+"：认不出是哪个平台的（os 或 arch 没认出来），跳过。"+
+					"确实是个发布资产的话，自己往 [artifact] 里补一行")
+			}
 			continue
 		}
 		hits = append(hits, hit{f, key})
@@ -212,6 +226,19 @@ func iniScan(files []string, forceVersion string) (assets []iniAsset, skipped []
 	}
 	sort.Slice(assets, func(i, j int) bool { return assets[i].key < assets[j].key })
 	return assets, skipped
+}
+
+// iniLooksLikeArchive 判断一个文件像不像发布资产，只用来决定「认不出来时要不要
+// 出声」。宁可漏报不可错报：checksums.txt、LICENSE、README.md 都会落在 dist 里，
+// 为它们各报一行警告，等于把真正需要作者去看的那一条淹掉。
+func iniLooksLikeArchive(f string) bool {
+	l := strings.ToLower(f)
+	for _, ext := range []string{".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tar.zst", ".zip"} {
+		if strings.HasSuffix(l, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 // iniDetect 从一个文件名里认出平台 key。认不出返回空 key；

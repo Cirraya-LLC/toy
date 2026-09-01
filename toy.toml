@@ -1,0 +1,27 @@
+# toy 自己的 toy.toml —— 装 toy 用的就是这个文件：
+#
+#   toy install github:Cirraya-LLC/toy
+#
+# 资产名由 .goreleaser.yaml 的 archives.name_template 产出，两边必须逐字对得上。
+# 验一遍：make verify-toyfile（造一份假 dist 再用 toy init 反推，diff 应该是空的）。
+name     = "toy"
+desc     = "装那些没人给你打包的小工具，装的时候一行脚本都不跑"
+license  = "MIT"
+homepage = "https://github.com/Cirraya-LLC/toy"
+
+# 左边 = PATH 上的命令名，右边 = 解压后包内的相对路径。
+# goreleaser 的 wrap_in_directory 是 false，所以二进制就在包内根目录。
+[bin]
+toy = "toy"
+
+# 只有两段 key：CGO_ENABLED=0 的构建是纯静态的，glibc 和 musl 上是同一份字节，
+# 没有第二份构建可发，也就不需要 /musl 那一段（the design notes §3.1）。
+[artifact]
+"linux/amd64"  = "toy_{version}_linux_amd64.tar.gz"
+"linux/arm64"  = "toy_{version}_linux_arm64.tar.gz"
+"darwin/amd64" = "toy_{version}_darwin_amd64.tar.gz"
+"darwin/arm64" = "toy_{version}_darwin_arm64.tar.gz"
+
+# 故意没有 [sha256]：这个文件是从 tag 上读的，而 release 资产是打完 tag 之后才
+# 构建出来的 —— 提交这个文件的时候哈希还不存在。所以安装侧走 TOFU（首次安装钉住，
+# 之后变了会拦下来）。每次发版的哈希在 release 里的 checksums.txt。

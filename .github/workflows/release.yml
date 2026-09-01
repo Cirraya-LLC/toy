@@ -1,0 +1,32 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser 要完整历史才能生成 changelog，也才能算对 .Version。
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # 打完 tag 才构建，所以 toy.toml 里的资产名对不上的话，
+      # 受伤的是每一个 install 的人，而 tag 已经不能改了（铁律 6）。这里再对一遍。
+      - run: make verify-toyfile
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

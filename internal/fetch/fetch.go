@@ -223,7 +223,18 @@ func open(ctx context.Context, src string) (io.ReadCloser, int64, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, 0, fmt.Errorf("HTTP %s", resp.Status)
+		// 404 要能被调用方【按类型】认出来，不能让它去匹配错误文本：resp.Status
+		// 里的原因短语是服务器原样发来的，一台上游随便回一句
+		// `HTTP/1.1 500 HTTP 404 Not Found` 就能让任何 strings.Contains("HTTP 404")
+		// 的判断当成"不存在"。谁把 404 当成一个决策（比如"上游确实没有 toy.toml，
+		// 可以退到索引内联那份"），谁就必须拿到状态码本身。
+		// 复用 fs.ErrNotExist 而不是自造哨兵：file:// 那条路上 os.Open 给的就是它，
+		// 两条路合成同一个判断，调用方只写一个 errors.Is。
+		err := fmt.Errorf("HTTP %s", resp.Status)
+		if resp.StatusCode == http.StatusNotFound {
+			err = fmt.Errorf("%w：%w", os.ErrNotExist, err)
+		}
+		return nil, 0, err
 	}
 	return resp.Body, resp.ContentLength, nil
 }

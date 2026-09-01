@@ -19,6 +19,13 @@ ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=$((fail+1)); }
 check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
+# macOS 没有 sha256sum（只有 shasum），Linux 反过来常常没有 shasum。两边都认。
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
 echo "== 构建 =="
 ( cd "$ROOT" && go build -o "$TOY" ./cmd/toy )
 ok "toy 构建成功"
@@ -126,7 +133,7 @@ echo "== 走镜像要如实说 =="
 # 原始地址挂掉、字节从镜像拿到时必须打印出来（铁律 8）。镜像只在 toy.toml 写了
 # [sha256] 时才会被用到 —— 没有 hash 就没法验证镜像给的是不是那个东西。
 MIRROR="$WORK/mirror"; mkdir -p "$MIRROR"
-SUM="$(sha256sum "$UP/dist/$ASSET" | cut -d' ' -f1)"
+SUM="$(sha256_of "$UP/dist/$ASSET")"
 cp "$UP/dist/$ASSET" "$MIRROR/$SUM"
 cat > "$UP/toy.toml" <<EOF
 name    = "mirrored"

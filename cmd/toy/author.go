@@ -79,11 +79,19 @@ func autSignMessage(id, source string, toyTOML []byte) []byte {
 // runPublish 读目录里的 toy.toml，校验，用本机私钥签名，
 // 打印一条可以直接粘进索引 JSON 的条目。
 // 不联网、不提交 —— v1 索引是本地文件，粘过去就行（规格 §5）。
+//
+// --inline 是另一件事，给的是**索引维护者**：为一个自己不拥有的仓库写打包说明。
+// 那份 toy.toml 会原文进条目的 toyfile 字段，客户端只在上游仓库确实没有自己那份
+// 时才用它，装出来带降档标识（store.TrustIndexed）。索引冷启动靠的就是它 ——
+// 现存几千个 CLI 工具一个都没有 toy.toml。
 func runPublish(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
 	source := fs.String("source", "", "索引条目的 source，形如 github:owner/repo；不写就从 git 的 origin 推")
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+	inline := fs.Bool("inline", false, "把这份 toy.toml 原文内联进条目：给一个【不是你的】仓库写打包说明（上游自己加了 toy.toml 就会自动让位）")
+	// 借 install 那套解析：-h 才会把上面两行说明打出来，而 --inline 和普通 publish
+	// 是两件事，那个区别只写在这里。
+	if err := insParseFlags(fs, args); err != nil {
+		return err
 	}
 	if fs.NArg() > 1 {
 		return errUsage
@@ -139,6 +147,15 @@ func runPublish(ctx context.Context, args []string) error {
 		Source: r.String(),
 		Desc:   tf.Desc,
 	}
+	if *inline {
+		// 原文进条目：客户端验签名验的就是这份原文（autSignMessage），
+		// 重新序列化一遍等于换了一份文本（同 rsvGetToyfile 那条注释）。
+		entry.Toyfile = string(raw)
+		ui.Warn("这是一条【内联】条目：你在替 %s 写打包说明，而那不是你的仓库。", entry.Source)
+		ui.Info("装它的人会看到一行降档标识：二进制取自作者的 release，但装哪个资产、")
+		ui.Info("命令叫什么名字是索引说的 —— 所以 [bin] 那几个名字要照作者的本意写。")
+		ui.Info("上游哪天自己加了 toy.toml，客户端立刻改用作者那份，这条内联的自动让位。")
+	}
 
 	// 签名是可选升级不是入场券（规格 §4）：没有密钥对照样输出条目，照样能被收进索引。
 	switch kp, err := sign.LoadKeyPair(st.KeysDir()); {
@@ -151,6 +168,12 @@ func runPublish(ctx context.Context, args []string) error {
 		entry.Key = hex.EncodeToString(kp.Public)
 		entry.Sig = sign.Sign(kp.Private, autSignMessage(entry.ID, entry.Source, raw))
 		ui.Info("已用 %s 签名（签的是 id + source + 这份 toy.toml 的原文）", sign.Fingerprint(kp.Public))
+		if *inline {
+			// 内联那一档永远到不了「✓ 已签名」（规则 2）：签名者是写这条记录的人，
+			// 不是作者。这里必须说明白，否则维护者会以为签了名就等于背书。
+			ui.Info("内联条目的签名只证明这条记录没被人改过，**不会**让它显示成「✓ 已签名」——")
+			ui.Info("那个勾说的是「作者本人签的」，而这份打包说明是你写的。")
+		}
 	}
 
 	out, err := json.MarshalIndent(entry, "  ", "  ")

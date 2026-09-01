@@ -1,0 +1,57 @@
+# goreleaser 配置。产出的资产名必须和仓库根的 toy.toml 里 [artifact] 那几行
+# 逐字对得上 —— 对不上的症状是「没有适配当前平台的构建」，而两个文件各自看
+# 都没毛病。改了 name_template 就跑一次 `make verify-toyfile`。
+version: 2
+
+project_name: toy
+
+builds:
+  - id: toy
+    main: ./cmd/toy
+    binary: toy
+    # CGO_ENABLED=0 是这里唯一不能动的一行：纯静态的二进制在 glibc 和 musl 上
+    # 都能跑，所以只发两段 key（linux/amd64）就够了，不用再出一份 /musl 构建。
+    # 见 the design notes §3.1。
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    # 规格 §11：v1 不做 Windows。上面 goos 里没有它，这里不用再排除什么。
+
+archives:
+  - id: toy
+    formats:
+      - tar.gz
+    # 二进制在包内根目录（不套一层目录），所以 toy.toml 里 [bin] toy = "toy"。
+    wrap_in_directory: false
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  footer: |
+    ---
+    装它自己：`toy install github:Cirraya-LLC/toy`

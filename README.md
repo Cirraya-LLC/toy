@@ -1,5 +1,8 @@
 # toy
 
+<!-- 仓库推上去之后把 OWNER/REPO 换掉，badge 就活了。 -->
+[![ci](https://github.com/Cirraya-LLC/toy/actions/workflows/ci.yml/badge.svg)](https://github.com/Cirraya-LLC/toy/actions/workflows/ci.yml)
+
 **装那些没人给你打包的小工具。装的时候一行脚本都不跑。**
 
 ```bash
@@ -102,6 +105,7 @@ musl 机器上装到 glibc 构建根本起不来。反过来，只发两段 key 
 ```
 ✓ 已签名 · key a3f9… · 索引 community 登记（不代表 github/Derrity 本人）
 · 来源 github.com/Derrity · 未签名       你信的是 GitHub 的账号体系
+⚠ 打包说明来自索引 · 二进制取自作者的 release，但装哪个资产、命令叫什么名字由索引提供
 ⚠ 未签名 · 首次安装，已钉住 sha256        你什么都没信，但内容变了会拦下来
 ```
 
@@ -114,6 +118,15 @@ musl 机器上装到 glibc 构建根本起不来。反过来，只发两段 key 
 首次安装即钉住，换了就拒绝安装）。所以那一行永远带着「不代表某某本人」这句尾巴，
 第一次安装时该看的是 `source` 指向哪里，不是有没有勾。
 
+**第三档「打包说明来自索引」是什么。** 绝大多数现成的小工具还没有 `toy.toml`，
+所以索引条目可以内联一份（见下面「从哪都能装」）。这时候**字节仍然是作者的** ——
+下载地址由托管方模板 + tag 拼出来，索引说了不算；索引能改的只有「装 release 里的
+哪个资产、软链成什么命令名」。所以它比「托管方账号」低一档、比「什么都没信」高一档，
+而且**永远打不出那个勾**，哪怕这条记录是签过名的：签名者是提交这条记录的人，不是作者。
+
+上游哪天自己加了 `toy.toml`，内联那份立刻让位，toy 会说一句。反过来（上次是作者
+自己的声明、这次变成索引的）算降级，会停下来要你 `--force`。
+
 ## 从哪都能装
 
 ```bash
@@ -123,8 +136,13 @@ toy install gitlab:x/y                   # 加三行配置就多支持一家托�
 toy install https://…/toy.toml           # 完全裸奔
 ```
 
-索引里只存一个指向仓库的指针，**真相永远是那个 git 地址**。
+索引里**默认只存一个指向仓库的指针**，**真相永远是那个 git 地址**。
 所以从索引里删掉一条只是"不再被搜到"，装还是装得上 —— 没有人能真的封杀一个包。
+
+有一个例外：上游仓库还没有 `toy.toml` 时，条目可以内联一份打包说明
+（`toy publish --inline`），这样那几千个现成的小工具不用等作者接入就能被装。
+代价说在明处 —— 这样装的包会降到第三档信任等级，安装时会明说哪一半不是作者写的。
+上游一旦有了自己的 `toy.toml`，内联那份无条件让位。
 
 **v1 没有预置任何索引**，因为公共索引还没上线 —— 与其塞一个拉不到的地址让你第一次
 `toy doctor` 就看见一条红叉，不如老实说没有。要开搜就自己加一个（索引就是一个 JSON
@@ -144,7 +162,7 @@ toy index list                                       # 加了哪些
 ## 命令
 
 ```
-toy install [--force] [--version v] <ref>        装一个包
+toy install [--reinstall] [--force] [--version v] <ref>   装一个包
 toy uninstall <名字>                              卸掉（缓存留着）
 toy update [名字]                                 升级，不带名字就是全部
 toy list                                         已经装了什么
@@ -153,13 +171,18 @@ toy info <ref>                                   装之前先看一眼：平台�
 toy init [--dist ./dist] [--name x] [--force]    从 dist 里的资产名反推一份 toy.toml
 toy index add <名字> <地址> | rm <名字> | list       索引管理
 toy keygen                                       生成 ed25519 密钥对
-toy publish [--source github:owner/repo] [目录]   签名，输出一条能粘进索引的条目
+toy publish [--inline] [--source github:owner/repo] [目录]  签名，输出一条能粘进索引的条目
 toy serve [--addr host:port]                     把本机缓存变成一个镜像
 toy doctor                                       检查 PATH、目录权限、索引可达性
 ```
 
 **选项要写在包名前面**（`toy install --force github:o/r`）—— Go 的 flag 解析
 碰到第一个非选项参数就停了。
+
+`--reinstall` 和 `--force` 是两件事，别混：`--reinstall` 只表示"我知道已经装了这一版，
+再装一次"，它**不放行任何安全检查**；`--force` 才是"我看过了，接受这些变化"
+（哈希变了 / 公钥换了 / 命令名遮蔽 / 信任等级降级 / 来源变了），而且它会逐条打印
+自己放行了什么。一个开关同时干这两件事，等于让"我想重装一下"顺手接受了后面五件。
 
 `toy serve` 把你本机的缓存变成一个镜像。因为内容是哈希寻址的，
 镜像不需要被信任 —— 谁都可以当，五分钟的事。上游哪天没了，包还活着。
@@ -172,11 +195,48 @@ toy doctor                                       检查 PATH、目录权限、�
 
 ## 装 toy 自己
 
+**先把话说在前面：第一个包管理器总得靠别的方式装。** toy 存在的理由是让你不必
+`curl | bash`，而它自己没法用 toy 装 —— 这个循环没有出路，凡是说自己解决了的都是
+把它挪了个地方。所以下面两种方式都不完美，区别只在于**你在信任谁**，我们把它写清楚。
+
+**方式一：`go install`**（有 Go 工具链的话，这是最省事的）
+
 ```bash
 go install github.com/Cirraya-LLC/toy/cmd/toy@latest
 ```
 
-装完把 `~/.toy/bin` 加进 PATH，跑 `toy doctor` 检查一遍。
+你信的是 Go 的模块代理和 checksum database（`sum.golang.org`）—— 一套公开的、
+可审计的透明日志。它比我们自己的任何承诺都强，所以有 Go 就用这个。
+
+**方式二：下载 release 二进制，自己核对哈希**
+
+```bash
+# 换成你的平台：linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64
+V=1.0.0; P=linux_amd64
+BASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V
+
+curl -fLO $BASE/toy_${V}_${P}.tar.gz
+curl -fLO $BASE/checksums.txt
+
+# 核对哈希。这一步不是可选的 —— 跳过它，你就是在无条件信任那条下载链路。
+sha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c
+
+tar -xzf toy_${V}_${P}.tar.gz
+install -m 0755 toy ~/.local/bin/toy           # 或者任何在你 PATH 上的目录
+```
+
+`checksums.txt` 和二进制来自同一个 release，所以它挡的是"传输过程中被改了"，
+不是"发布的人本身有问题"。**要挡后者只能看 release 页上的签名和这个仓库的历史** ——
+这正是 toy 对每一个包所做的事（哈希首次安装即钉住，之后变了会拦下来），
+而 toy 自己这一次没人替它做。这就是引导悖论的实际形状。
+
+装完之后：
+
+```bash
+export PATH="$HOME/.toy/bin:$PATH"   # 写进 ~/.bashrc / ~/.zshrc
+toy doctor
+```
+
 `doctor` 会说"没有配索引" —— 那是默认状态不是故障，装东西不受影响。
 
 ## 许可

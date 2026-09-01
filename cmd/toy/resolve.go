@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -40,7 +41,7 @@ type resolved struct {
 	// IndexName 是这条记录来自哪个索引。签名只由那个索引背书（谁能改那份 JSON
 	// 谁就能换掉这把公钥），所以信任那一行必须说得出是哪一份索引在背书。
 	IndexName string
-	Trust     string // store.TrustSigned / TrustHost / TrustUnverified
+	Trust     string // store.TrustSigned / TrustHost / TrustIndexed / TrustUnverified
 	Signer    string // 公钥指纹，未签名为空
 }
 
@@ -204,7 +205,7 @@ func resolve(ctx context.Context, st *store.Store, cfg store.Config, r ref.Ref) 
 	case ref.KindIndex:
 		return rsvViaIndex(ctx, st, cfg, r)
 	case ref.KindHost:
-		return rsvViaHost(ctx, cfg, r)
+		return rsvViaHost(ctx, cfg, r, "")
 	case ref.KindURL:
 		return rsvViaURL(ctx, r)
 	default:
@@ -241,7 +242,12 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 		var res *resolved
 		switch src.Kind {
 		case ref.KindHost:
-			res, err = rsvViaHost(ctx, cfg, src)
+			// 内联的 toyfile 只往托管方这条路上传：那条路的下载地址是我们自己的
+			// host 模板 + tag 拼的，索引能改的只有「装哪个资产、命令叫什么名字」
+			// （规则 5，这是这个设计能成立的原因）。裸地址那条路上 toy.toml 的地址
+			// 本来就由索引说了算，资产又是相对它解析的 —— 再让索引换掉文件内容，
+			// 影响半径就没有边了，所以那条路不吃内联。
+			res, err = rsvViaHost(ctx, cfg, src, e.Toyfile)
 		case ref.KindURL:
 			// 裸地址没有版本可挑，装不出用户点名的那一版；这时候按最新版装
 			// 是在给他一个他没要的东西，宁可说清楚。
@@ -274,7 +280,10 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 }
 
 // rsvViaHost 走规格 §2 的正路：ls-remote 拿 tag → 挑版本 → raw 取 toy.toml。
-func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref) (*resolved, error) {
+//
+// inline 是索引条目内联的那份 toyfile 原文（没有就是空串）。它只在上游明确
+// 没有 toy.toml 时才用得上，用了就把信任降到 store.TrustIndexed。
+func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string) (*resolved, error) {
 	h, err := host.Lookup(r.Host, cfg.Hosts)
 	if err != nil {
 		return nil, err
@@ -308,9 +317,24 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref) (*resolved, er
 			"在 ~/.toy/config.toml 的 [hosts.%s] 里补上 raw = \"…/{owner}/{repo}/…/{ref}/{path}\"",
 			hostName, hostName)
 	}
-	tf, raw, err := rsvGetToyfile(ctx, rawURL, fmt.Sprintf("%s:%s/%s@%s", hostName, r.Owner, r.Repo, v.Raw))
+	where := fmt.Sprintf("%s:%s/%s@%s", hostName, r.Owner, r.Repo, v.Raw)
+	// 信任锚点是托管方的账号体系，没有别的（规格 §4）。
+	trust := store.TrustHost
+	tf, raw, err := rsvGetToyfile(ctx, rawURL, where)
 	if err != nil {
-		return nil, err
+		// 上游永远优先（规则 1）：只有它【明确没有】自己那份 toy.toml 时，
+		// 索引条目内联的那份才顶上。作者哪天自己加了一个，这里立刻无条件让位 ——
+		// 否则一条恶意索引条目就能覆盖作者自己的声明，那是劫持。
+		if inline == "" || !rsvIsNotFound(err) {
+			return nil, err
+		}
+		if tf, raw, err = rsvInlineToyfile(inline); err != nil {
+			return nil, fmt.Errorf("%s 的仓库里没有 toy.toml，而索引给的那份内联 toyfile 也用不了：%w", where, err)
+		}
+		trust = store.TrustIndexed
+		ui.Warn("%s 的仓库里没有 toy.toml，这次用的是索引条目里内联的那一份 —— "+
+			"装哪个资产、命令叫什么名字是索引说的，不是作者写的；"+
+			"字节仍然来自作者自己那个 release（下载地址由托管方模板拼，索引说了不算）", where)
 	}
 
 	return &resolved{
@@ -323,8 +347,7 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref) (*resolved, er
 		Version:  v,
 		Toyfile:  tf,
 		Raw:      raw,
-		// 信任锚点是托管方的账号体系，没有别的（规格 §4）。
-		Trust: store.TrustHost,
+		Trust:    trust,
 	}, nil
 }
 
@@ -377,6 +400,38 @@ func rsvGetToyfile(ctx context.Context, url, where string) (*toyfile.Toyfile, []
 	// 原始字节要留着：作者的签名签的是「用户真正下载到的那份文件」，
 	// 重新序列化一遍等于换了一份文本去验（见 autSignMessage 的注释）。
 	return tf, data, nil
+}
+
+// rsvInlineToyfile 解析索引条目内联的那份 toyfile。
+//
+// 校验走的是和上游一模一样的那条路（toyfile.ParseFrom 只是给 Parse 加了一条来源
+// 标记），一条都不放松：bin 目标不许绝对路径、不许含 ".."、artifact 值不许是 URL、
+// 平台 key 必须合法（规则 4）。「是我们自己索引里的」不是放松校验的理由 ——
+// 索引恰恰是那个谁都能 fork、谁都能提 PR 的地方。
+func rsvInlineToyfile(inline string) (*toyfile.Toyfile, []byte, error) {
+	raw := []byte(inline)
+	tf, err := toyfile.ParseFrom(raw, toyfile.OriginIndex)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tf, raw, nil
+}
+
+// rsvIsNotFound 判断「上游那份 toy.toml 明确不存在」，而不是「这次没拿到」。
+//
+// 这个区别就是内联 toyfile 的安全边界（规则 1）：404 说明作者确实还没接入 toy，
+// 而超时 / 5xx / DNS 失败只说明这次没问到 —— 拿后者当"不存在"，等于让一次网络
+// 抖动悄悄把用户从「作者的声明」切到「索引的声明」，而且没有任何地方会说。
+//
+// 两条路合成同一个判断：file:// 那边 os.Open 给的就是 fs.ErrNotExist，https 那边
+// fetch 在状态码真的是 404 时包了同一个哨兵。
+//
+// **绝不能改回按错误文本匹配。** resp.Status 里的原因短语是服务器原样发来的，
+// 一台上游回一句 `HTTP/1.1 500 HTTP 404 Not Found`，就能让 strings.Contains
+// 把一次 500 认成"不存在"，于是一次服务端故障把用户从作者的声明切到索引的声明 ——
+// 正是规则 3 要挡的那件事，而且没有任何地方会说。
+func rsvIsNotFound(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // rsvPickVersion 挑版本：用户指名了就找那个 tag，否则取最高的正式版。
@@ -449,6 +504,16 @@ func rsvApplySignature(idxName string, e index.Entry, res *resolved) {
 		if err := sign.Verify(key, autSignMessage(e.ID, e.Source, res.Raw), strings.TrimSpace(e.Sig)); err != nil {
 			ui.Warn("索引 %s 里 %s 的签名验不过这一版的 toy.toml（%v），当作未签名处理 —— "+
 				"可能是作者改了 toy.toml 却没重新 `toy publish`，也可能是索引里这条被人动过", idxName, e.ID, err)
+			return
+		}
+		// 内联的 toyfile 永远到不了 TrustSigned（规则 2）：签名覆盖的是【提交这条
+		// 索引记录的人】写的内容，签名者不是作者。这时候打勾正是 §14.3 说的那种
+		// 说过头 —— 它只证明这条记录没被改过，证明不了作者认可这份打包说明。
+		// 指纹仍然留下：钥匙换了要能被 TOFU 拦住（insKeyID / 规格 §4）。
+		if res.Toyfile != nil && res.Toyfile.Origin == toyfile.OriginIndex {
+			res.Signer = fp
+			ui.Info("索引 %s 里 %s 的签名验过了（key %s）—— 它只说明这条索引记录没被改过，"+
+				"不代表作者本人认可这份打包说明，所以信任等级仍然是「打包说明来自索引」", idxName, e.ID, fp)
 			return
 		}
 		res.Trust, res.Signer = store.TrustSigned, fp

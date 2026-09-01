@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "这些文件没格式化："
+            echo "$out"
+            exit 1
+          fi
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./... -race -count=1
+
+      - name: e2e
+        run: bash scripts/e2e.sh
+
+      - name: e2e（索引内联 toyfile 的六条规则）
+        run: bash scripts/e2e-inline.sh
+
+  # 资产名对不上是这条发布链路最容易犯、最难发现的错：两个文件各自看都没毛病，
+  # 症状只在别人 install 的时候出现。所以每次 PR 都对一遍。
+  toyfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make verify-toyfile
+
+  # 只构建不发布，确认 .goreleaser.yaml 本身是好的 —— 不然会在打完 tag
+  # 那一刻才发现，而 tag 是不可变的（铁律 6）。
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --snapshot --clean

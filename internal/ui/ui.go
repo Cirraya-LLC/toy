@@ -178,10 +178,12 @@ func Step(format string, a ...any) {
 // Trust 打印安装完成那一行的信任等级（铁律 8、规格 §4）：
 //
 //	signed      ✓ 已签名 · Derrity (key a3f9…)
-//	host        · 来源 github.com/Derrity · 未签名
-//	unverified  ⚠ 未签名 · 首次安装，已钉住 sha256
+//	host           · 来源 github.com/Derrity · 未签名
+//	index-toyfile  ⚠ 打包说明来自索引，不是作者写的
+//	unverified     ⚠ 未签名 · 首次安装，已钉住 sha256
 //
-// level 取 store.TrustSigned / TrustHost / TrustUnverified。
+// level 取 store.TrustSigned / TrustHost / TrustIndexed / TrustUnverified
+// （写成字面量是为了不让 ui 依赖 store）。
 func Trust(level, detail string) {
 	// detail 是签名者名字 / 托管方域名，都来自索引或 ref —— 外来的。
 	detail = safe(detail)
@@ -199,6 +201,15 @@ func Trust(level, detail string) {
 			detail = "未知"
 		}
 		line(paint(ansiDim, "· 来源 "+detail+" · 未签名"))
+	case "index-toyfile":
+		// 说清楚哪一半是作者的、哪一半不是。"部分可信"这种含糊说法等于没说 ——
+		// 用户要能据此判断风险：装进来的字节是作者 release 里的那个资产，
+		// 但「装哪个资产、软链成什么命令名」是索引条目里内联的 toyfile 说的。
+		s := "⚠ 打包说明来自索引 · 二进制取自作者的 release，但装哪个资产、命令叫什么名字由索引提供，作者本人没有写过 toy.toml"
+		if detail != "" {
+			s += " · " + detail
+		}
+		line(paint(ansiBold+ansiYellow, s))
 	case "unverified":
 		s := "⚠ 未签名 · 首次安装，已钉住 sha256"
 		if detail != "" {

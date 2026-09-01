@@ -155,6 +155,10 @@ func qryTrustLabel(trust, signer string) string {
 		return "✓ 已签名 " + signer
 	case store.TrustHost:
 		return "· 托管方账号"
+	case store.TrustIndexed:
+		// 这一列要看得出「打包说明是索引提供的」（规则 3）：装哪个资产、
+		// 命令叫什么名字不是作者写的，那是这张表里该一眼看见的事。
+		return "⚠ 打包说明来自索引"
 	case store.TrustUnverified:
 		return "⚠ 未签名"
 	case "":

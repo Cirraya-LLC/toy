@@ -228,3 +228,62 @@ func TestRunInitRefusesToWriteAnEmptyShell(t *testing.T) {
 		t.Fatal("不该写出 toy.toml")
 	}
 }
+
+// goreleaser 在 GOARCH=arm 且没设 goarm 时，默认 name_template 产出的就是
+// `tool_1.2.3_linux_arm.tar.gz`。裸 "arm" 一度不在 iniArch 里，于是这份构建
+// 被【静默丢掉】：init 打印「认出了 4 个平台」，看起来一切正常，而树莓派用户
+// 装的时候拿到的是「没有适配当前平台的构建」。
+//
+// linux/arm 不是个可有可无的 key —— platform.go 就是拿它给 armv6/armv7
+// 兜底的（规格 §3.1）。
+func TestInitRecognizesBareArm(t *testing.T) {
+	for _, f := range []string{
+		"tool_1.2.3_linux_arm.tar.gz",
+		"tool-1.2.3-linux-arm.tar.gz",
+	} {
+		key, _ := iniDetect(f)
+		if key != "linux/arm" {
+			t.Errorf("%s：认出的 key 是 %q，想要 linux/arm", f, key)
+		}
+	}
+	// armv6/armv7 仍然按代次认，别被上面那条盖掉。
+	for f, want := range map[string]string{
+		"tool_1.2.3_linux_armv6.tar.gz": "linux/armv6",
+		"tool_1.2.3_linux_armv7.tar.gz": "linux/armv7",
+		"tool_1.2.3_linux_armhf.tar.gz": "linux/armv7",
+	} {
+		if key, _ := iniDetect(f); key != want {
+			t.Errorf("%s：认出的 key 是 %q，想要 %s", f, key, want)
+		}
+	}
+}
+
+// 认不出来的【资产】必须出声。静默丢掉的症状和上面那条一模一样：
+// 数字看着对，少的那个平台要等用户来报。
+// 但 checksums.txt / LICENSE 这些本来就不是资产，为它们报警会把真的那条淹掉。
+func TestInitReportsUnrecognizedAssetsButNotStrayFiles(t *testing.T) {
+	assets, skipped := iniScan([]string{
+		"tool_1.2.3_linux_amd64.tar.gz",
+		"tool_1.2.3_freebsd_riscv64.tar.gz", // 像资产，认不出 → 要出声
+		"checksums.txt",                     // 不是资产 → 不许出声
+		"LICENSE",
+		"README.md",
+	}, "")
+	if len(assets) != 1 {
+		t.Fatalf("认出的资产数 = %d，想要 1：%v", len(assets), assets)
+	}
+	var mentions int
+	for _, s := range skipped {
+		if strings.Contains(s, "freebsd_riscv64") {
+			mentions++
+		}
+		for _, quiet := range []string{"checksums.txt", "LICENSE", "README.md"} {
+			if strings.Contains(s, quiet) {
+				t.Errorf("不该为非资产 %s 出声：%s", quiet, s)
+			}
+		}
+	}
+	if mentions != 1 {
+		t.Errorf("认不出的资产应该被报一次，实际 %d 次：%v", mentions, skipped)
+	}
+}

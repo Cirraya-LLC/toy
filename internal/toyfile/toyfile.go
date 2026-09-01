@@ -27,7 +27,19 @@ type Toyfile struct {
 	Artifact map[string]string `toml:"artifact"` // "linux/amd64" -> 资产名模板
 	SHA256   map[string]string `toml:"sha256"`   // "linux/amd64" -> hex，可选但写了就强制
 	Script   map[string]string `toml:"script"`   // 单文件形态：PATH 名字 -> 资产名模板
+
+	// Origin 记录这份 toyfile 是作者自己写的还是索引提供的（规格 §5 的内联 toyfile）。
+	// **不进磁盘格式**：这是「这几行字节从哪来的」，不是作者能声明的东西 ——
+	// 能声明就等于内联的那份可以自称 upstream，而信任等级正是照着它分档的（铁律 8）。
+	// toml:"-" 也顺带让 toy.toml 里真写了 origin = 的时候落进 Undecoded 被拒。
+	Origin string `toml:"-"`
 }
+
+// toyfile 的来源。Origin 只有这两个值。
+const (
+	OriginUpstream = "upstream" // 仓库里那份 toy.toml，作者自己写的
+	OriginIndex    = "index"    // 索引条目内联的那份，提交索引记录的人写的
+)
 
 // Parse 解析并校验。校验必须拒绝：
 //   - artifact 和 script 同时存在或都不存在
@@ -36,7 +48,13 @@ type Toyfile struct {
 //   - sha256 的值不是 64 位 hex
 //
 // 报错要说人话，并告诉作者该怎么改。
-func Parse(data []byte) (*Toyfile, error) {
+func Parse(data []byte) (*Toyfile, error) { return ParseFrom(data, OriginUpstream) }
+
+// ParseFrom 是 Parse 加上一条来源标记，校验规则**一模一样，一条都不放松**。
+// 索引内联的那份是远端内容（索引谁都能 fork、谁都能提 PR），比作者自己仓库里
+// 的那份更需要这些检查，不是更不需要 —— 尤其 bin 目标不许绝对路径 / 不许 ".."、
+// artifact 值不许是 URL 这几条，它们挡的正是「一条恶意索引记录能干什么」。
+func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 	var t Toyfile
 	md, err := toml.Decode(string(data), &t)
 	if err != nil {
@@ -135,6 +153,7 @@ func Parse(data []byte) (*Toyfile, error) {
 		}
 	}
 
+	t.Origin = origin
 	return &t, nil
 }
 

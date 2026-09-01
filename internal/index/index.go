@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Cirraya-LLC/toy/internal/ref"
+	"github.com/Cirraya-LLC/toy/internal/toyfile"
 )
 
 // Version 是本客户端认识的索引格式版本。规格 §5 的 JSON 里那个 "version": 1。
@@ -25,6 +26,25 @@ type Entry struct {
 	Sig      string `json:"sig,omitempty"`
 	Stars    int    `json:"stars,omitempty"`
 	Installs int    `json:"installs,omitempty"`
+
+	// Toyfile 是上游仓库【还没有】 toy.toml 时，由索引提供的那一份原文。
+	// 索引冷启动的唯一出路：现存几千个 CLI 工具一个都没有 toy.toml，
+	// 只存指针的索引对它们产出的是一堆装不上的条目。
+	//
+	// 四条边界（少一条这个设计就不成立）：
+	//   1. 上游永远优先 —— 只有 raw URL 取 toy.toml 明确不存在时才用这一份，
+	//      上游一旦有了自己的就无条件让位。否则一条恶意条目就能覆盖作者的声明。
+	//   2. 它永远达不到 TrustSigned。签名覆盖的是提交这条记录的人写的内容，
+	//      签名者不是作者 —— 打上勾正是我们一直在避免的那种说过头（§14.3）。
+	//      条目同时有 toyfile 和 key/sig 时，签名只证明这条记录没被改过，
+	//      档位仍然是 store.TrustIndexed。
+	//   3. 校验和上游那份一模一样（下面 validEntry 里就调 toyfile.ParseFrom），
+	//      不因为"是我们自己索引里的"走一条更松的路。
+	//   4. 资产名仍然只是资产名，下载地址照旧由 host 模板 + tag 拼。所以它的
+	//      影响半径被夹在「作者自己那个 release 里的某个资产」+「PATH 上的命令名」
+	//      之间，而后者已经有 store 的保留名单和遮蔽检查兜着。**这就是这个设计
+	//      能成立的原因** —— 索引能改的是「装哪个」，不是「从哪装」。
+	Toyfile string `json:"toyfile,omitempty"`
 }
 
 type Index struct {
@@ -93,6 +113,14 @@ func validEntry(e Entry) bool {
 	// 影响 —— 它的地址是我们自己的 host 表拼的，不是索引说了算。
 	if r.Kind == ref.KindURL && !strings.HasPrefix(strings.ToLower(r.URL), "https://") {
 		return false
+	}
+	// 内联的 toyfile 在这里就完整解析一遍，坏的当场判坏记录。留到安装时才炸的话，
+	// 用户已经在等下载了，而且报错会长得像上游仓库的问题 —— 实际上错的是索引。
+	// 校验用的就是上游那条路上的同一个函数，一条都不放松（Entry.Toyfile 第 3 条）。
+	if e.Toyfile != "" {
+		if _, err := toyfile.ParseFrom([]byte(e.Toyfile), toyfile.OriginIndex); err != nil {
+			return false
+		}
 	}
 	return true
 }

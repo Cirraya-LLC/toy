@@ -302,12 +302,19 @@ type insItem struct {
 func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *resolved, old *store.Manifest, force bool) error {
 	if insTrustDowngraded(old, res) {
 		if !force {
-			return fmt.Errorf("上一次装 %s 的时候它是已签名的（key %s），这次却验不出签名 —— "+
-				"索引里那条记录可能被摘掉了 sig，也可能你这次是从别的路径装的。"+
-				"上面那行警告说了具体原因；自己核对过再加 --force 继续", old.Name, old.Signer)
+			return fmt.Errorf("这次装 %s 的信任等级比上一次低：上次是「%s」，这次是「%s」—— "+
+				"索引里那条记录可能被摘掉了 sig，也可能上游那份 toy.toml 没了、改由索引内联的那份提供，"+
+				"还可能你这次是从别的路径装的。上面那行警告说了具体原因；"+
+				"自己核对过再加 --force 继续", old.Name, insTrustWord(old.Trust), insTrustWord(res.Trust))
 		}
-		ui.Warn("--force 放行：%s 上一次是已签名的（key %s），这次验不出签名，信任等级降了一档",
-			old.Name, old.Signer)
+		ui.Warn("--force 放行：%s 的信任等级降了一档（%s → %s）",
+			old.Name, insTrustWord(old.Trust), insTrustWord(res.Trust))
+	}
+	// 反方向是好事：作者后来自己加了 toy.toml，打包说明不再由索引提供（规则 6）。
+	// 不拦，但要说一句 —— 上一次装的时候「装哪个资产、命令叫什么名字」是索引说的，
+	// 这一次换成了作者说的，那是这个包身上真的变了的一件事。
+	if old != nil && old.Trust == store.TrustIndexed && res.Trust != store.TrustIndexed {
+		ui.Info("%s 的上游现在有自己的 toy.toml 了：打包说明不再由索引提供，这一版按作者写的装", old.Name)
 	}
 	if insSourceChanged(old, res) {
 		if !force {
@@ -447,13 +454,37 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	return nil
 }
 
-// insTrustDowngraded 判断这次安装是不是把一个已签名的包降级成了没签名的。
+// insTrustDowngraded 判断这次安装是不是让信任等级掉了一档。
 //
 // 光验签名还不够：把 sig 从索引条目里删掉就能让「✓ 已签名」悄悄变成
 // 「· 来源 …」，而没人会注意到少了一个勾。TOFU 记的是「上次是什么样」，
 // 所以这里也一样 —— 降级要停下来让用户亲手 --force（规格 §4、铁律 8）。
+//
+// 比的是 store.TrustRank 而不是「等不等于 TrustSigned」：加一档的时候后者
+// 一个地方都不会报错，只会静默地把新档位算到错的一边。托管方那一档掉到
+// 「打包说明来自索引」（上游的 toy.toml 没了、改由索引内联那份顶上）就是
+// 这么一次降级 —— 它和签名消失一样，是别人替作者做了主。
 func insTrustDowngraded(old *store.Manifest, res *resolved) bool {
-	return old != nil && old.Trust == store.TrustSigned && res.Trust != store.TrustSigned
+	return old != nil && store.TrustRank(res.Trust) < store.TrustRank(old.Trust)
+}
+
+// insTrustWord 是信任等级在句子里的说法。ui.Trust 打的是完整那一行，
+// 这里只要一个短词，好嵌进「上次是 X，这次是 Y」。
+func insTrustWord(level string) string {
+	switch level {
+	case store.TrustSigned:
+		return "已签名"
+	case store.TrustHost:
+		return "托管方账号"
+	case store.TrustIndexed:
+		return "打包说明来自索引"
+	case store.TrustUnverified:
+		return "未验证"
+	case "":
+		return "没记信任等级"
+	default:
+		return fmt.Sprintf("认不出的等级 %q", level)
+	}
 }
 
 // insItems 按形态挑出这次要下载的东西。
@@ -949,6 +980,21 @@ func insTrustDetail(res *resolved) string {
 	case store.TrustHost:
 		// 想要的是 "github.com/Derrity" —— 用户信的是那个托管方上的那个账号。
 		return qryHostLabel(res)
+	case store.TrustIndexed:
+		// ui.Trust 那一行已经讲清楚「哪一半不是作者的」，这里补两件它不知道的事：
+		// 是哪一份索引提供的这份打包说明，以及字节到底来自谁的 release。
+		var parts []string
+		if res.IndexName != "" {
+			parts = append(parts, "索引 "+res.IndexName+" 提供")
+		}
+		if who := qryHostLabel(res); who != "" && who != "/" {
+			parts = append(parts, "release 来自 "+who)
+		}
+		if res.Signer != "" {
+			// 内联那一档有签名也不是「作者签的」（规则 2），措辞必须把这句写死。
+			parts = append(parts, "key "+res.Signer+"（只证明这条索引记录没被改过）")
+		}
+		return strings.Join(parts, " · ")
 	default:
 		return ""
 	}

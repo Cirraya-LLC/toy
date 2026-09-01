@@ -27,10 +27,37 @@ var (
 
 // Trust 等级，如实打给用户看（铁律 8）。
 const (
-	TrustSigned     = "signed"     // 索引 + 作者签名
-	TrustHost       = "host"       // 托管方的账号体系
+	TrustSigned = "signed" // 索引 + 作者签名
+	TrustHost   = "host"   // 托管方的账号体系
+	// TrustIndexed 是「二进制来自作者的 release，但打包说明来自索引」：
+	// 上游仓库没有 toy.toml，装哪个资产、命令叫什么名字是索引条目内联那一份说的。
+	// 它比 TrustHost 低一档（那份声明不是作者写的），比 TrustUnverified 高一档
+	// （字节仍然来自作者自己那个 release，地址由 host 模板拼，索引说了不算）。
+	// **内联的 toyfile 永远到不了 TrustSigned**：签名者是提交索引记录的人，
+	// 不是作者，那个勾会说过头（§14.3、index.Entry.Toyfile 第 2 条）。
+	TrustIndexed    = "index-toyfile"
 	TrustUnverified = "unverified" // 裸 URL
 )
+
+// TrustRank 把信任等级排成一条线，越大越可信。降档判断和显示都比这个，
+// 不要再各处硬编码「等于 TrustSigned 就算高」—— 加一档的时候那些地方
+// 一个都不会报错，只会静默地把新档位算到错的一边（这一档就是这么加进来的）。
+//
+// 认不出的等级排在最低：铁律 8 说不许静默成功，说不清就不能当成安全的那一档。
+func TrustRank(level string) int {
+	switch level {
+	case TrustSigned:
+		return 4
+	case TrustHost:
+		return 3
+	case TrustIndexed:
+		return 2
+	case TrustUnverified:
+		return 1
+	default:
+		return 0
+	}
+}
 
 // DefaultIndexURL 是内置索引的地址。**这就是那一个常量** —— 索引真的传上线之后，
 // 把地址填在这里就是全部改动，别处一个字都不用动（规格 §5：索引来源「实现上就是
@@ -199,7 +226,7 @@ type Manifest struct {
 	Host        string   `toml:"host"`
 	Owner       string   `toml:"owner"`
 	Repo        string   `toml:"repo"`
-	Trust       string   `toml:"trust"`  // 上面三个常量之一
+	Trust       string   `toml:"trust"`  // 上面四个 Trust* 常量之一
 	Signer      string   `toml:"signer"` // 公钥指纹，未签名为空
 	SHA256      string   `toml:"sha256"`
 	Source      string   `toml:"source"` // 实际下载成功的 URL

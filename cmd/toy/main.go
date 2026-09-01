@@ -42,7 +42,7 @@ func commands() []command {
 		{"info", "<ref>", "看一个包的详情和信任状态", runInfo},
 		{"index", "add <名字> <地址> | rm <名字> | list", "管理索引", runIndex},
 		{"keygen", "", "生成 ed25519 密钥对", runKeygen},
-		{"publish", "[--source github:owner/repo] [目录]", "读 toy.toml，签名，输出索引条目", runPublish},
+		{"publish", "[--inline] [--source github:owner/repo] [目录]", "读 toy.toml，签名，输出索引条目", runPublish},
 		{"serve", "[--addr host:port]", "把本机缓存变成一个镜像", runServe},
 		{"doctor", "", "检查 PATH、目录权限、索引可达性", runDoctor},
 	}
