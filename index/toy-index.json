@@ -1,4 +1,138 @@
 {
   "version": 1,
-  "packages": []
+  "packages": [
+    {
+      "id": "BurntSushi/ripgrep",
+      "source": "github:BurntSushi/ripgrep",
+      "desc": "ripgrep recursively searches directories for a regex pattern while respecting your gitignore",
+      "stars": 67813,
+      "toyfile": "# 由 toy-index gen 从 BurntSushi/ripgrep 最新 release（15.2.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"ripgrep\"\ndesc    = \"ripgrep recursively searches directories for a regex pattern while respecting your gitignore\"\nlicense = \"Unlicense\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nrg = \"rg\"\n\n[artifact]\n\"darwin/amd64\" = \"ripgrep-{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"ripgrep-{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/amd64/musl\" = \"ripgrep-{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm64/gnu\" = \"ripgrep-{version}-aarch64-unknown-linux-gnu.tar.gz\"\n\"linux/arm64/musl\" = \"ripgrep-{version}-aarch64-unknown-linux-musl.tar.gz\"\n\"linux/armv7\" = \"ripgrep-{version}-armv7-unknown-linux-gnueabihf.tar.gz\"\n"
+    },
+    {
+      "id": "ClementTsang/bottom",
+      "source": "github:ClementTsang/bottom",
+      "desc": "Yet another cross-platform graphical process/system monitor.",
+      "stars": 13964,
+      "toyfile": "# 由 toy-index gen 从 ClementTsang/bottom 最新 release（0.14.9）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"bottom\"\ndesc    = \"Yet another cross-platform graphical process/system monitor.\"\nlicense = \"MIT\"\nhomepage = \"https://bottom.pages.dev\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nbtm = \"btm\"\n\n[artifact]\n\"darwin/amd64\" = \"bottom_x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"bottom_aarch64-apple-darwin.tar.gz\"\n\"linux/386/gnu\" = \"bottom_i686-unknown-linux-gnu.tar.gz\"\n\"linux/386/musl\" = \"bottom_i686-unknown-linux-musl.tar.gz\"\n\"linux/amd64/gnu\" = \"bottom_x86_64-unknown-linux-gnu-2-17.tar.gz\"\n\"linux/amd64/musl\" = \"bottom_x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm64/gnu\" = \"bottom_aarch64-unknown-linux-gnu.tar.gz\"\n\"linux/arm64/musl\" = \"bottom_aarch64-unknown-linux-musl.tar.gz\"\n\"linux/armv7\" = \"bottom_armv7-unknown-linux-gnueabihf.tar.gz\"\n"
+    },
+    {
+      "id": "Peltoche/lsd",
+      "source": "github:Peltoche/lsd",
+      "desc": "The next gen ls command",
+      "stars": 16204,
+      "toyfile": "# 由 toy-index gen 从 Peltoche/lsd 最新 release（v1.2.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"lsd\"\ndesc    = \"The next gen ls command\"\nlicense = \"Apache-2.0\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nlsd = \"lsd\"\n\n[artifact]\n\"darwin/amd64\" = \"lsd-v{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"lsd-v{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/386/gnu\" = \"lsd-v{version}-i686-unknown-linux-gnu.tar.gz\"\n\"linux/386/musl\" = \"lsd-v{version}-i686-unknown-linux-musl.tar.gz\"\n\"linux/amd64/gnu\" = \"lsd-v{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"lsd-v{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"lsd-v{version}-arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/gnu\" = \"lsd-v{version}-aarch64-unknown-linux-gnu.tar.gz\"\n\"linux/arm64/musl\" = \"lsd-v{version}-aarch64-unknown-linux-musl.tar.gz\"\n"
+    },
+    {
+      "id": "ajeetdsouza/zoxide",
+      "source": "github:ajeetdsouza/zoxide",
+      "desc": "A smarter cd command. Supports all major shells.",
+      "stars": 39103,
+      "toyfile": "# 由 toy-index gen 从 ajeetdsouza/zoxide 最新 release（v0.10.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"zoxide\"\ndesc    = \"A smarter cd command. Supports all major shells.\"\nlicense = \"MIT\"\nhomepage = \"https://crates.io/crates/zoxide\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nzoxide = \"zoxide\"\n\n[artifact]\n\"darwin/amd64\" = \"zoxide-{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"zoxide-{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/386/musl\" = \"zoxide-{version}-i686-unknown-linux-musl.tar.gz\"\n\"linux/amd64/musl\" = \"zoxide-{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"zoxide-{version}-arm-unknown-linux-musleabihf.tar.gz\"\n\"linux/arm64/musl\" = \"zoxide-{version}-aarch64-unknown-linux-musl.tar.gz\"\n\"linux/armv7\" = \"zoxide-{version}-armv7-unknown-linux-musleabihf.tar.gz\"\n"
+    },
+    {
+      "id": "bootandy/dust",
+      "source": "github:bootandy/dust",
+      "desc": "A more intuitive version of du in rust",
+      "stars": 12205,
+      "toyfile": "# 由 toy-index gen 从 bootandy/dust 最新 release（v1.2.5）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"dust\"\ndesc    = \"A more intuitive version of du in rust\"\nlicense = \"Apache-2.0\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\ndust = \"dust\"\n\n[artifact]\n\"darwin/amd64\" = \"dust-v{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"dust-v{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/386/gnu\" = \"dust-v{version}-i686-unknown-linux-gnu.tar.gz\"\n\"linux/386/musl\" = \"dust-v{version}-i686-unknown-linux-musl.tar.gz\"\n\"linux/amd64/gnu\" = \"dust-v{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"dust-v{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"dust-v{version}-arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/gnu\" = \"dust-v{version}-aarch64-unknown-linux-gnu.tar.gz\"\n\"linux/arm64/musl\" = \"dust-v{version}-aarch64-unknown-linux-musl.tar.gz\"\n"
+    },
+    {
+      "id": "charmbracelet/glow",
+      "source": "github:charmbracelet/glow",
+      "desc": "Render markdown on the CLI, with pizzazz! 💅🏻",
+      "stars": 27151,
+      "toyfile": "# 由 toy-index gen 从 charmbracelet/glow 最新 release（v3.0.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"glow\"\ndesc    = \"Render markdown on the CLI, with pizzazz! 💅🏻\"\nlicense = \"MIT\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nglow = \"glow\"\n\n[artifact]\n\"darwin/amd64\" = \"glow_{version}_Darwin_x86_64.tar.gz\"\n\"darwin/arm64\" = \"glow_{version}_Darwin_arm64.tar.gz\"\n\"linux/386\" = \"glow_{version}_Linux_i386.tar.gz\"\n\"linux/amd64\" = \"glow_{version}_Linux_x86_64.tar.gz\"\n\"linux/arm\" = \"glow_{version}_Linux_arm.tar.gz\"\n\"linux/arm64\" = \"glow_{version}_Linux_arm64.tar.gz\"\n"
+    },
+    {
+      "id": "chmln/sd",
+      "source": "github:chmln/sd",
+      "desc": "Intuitive find & replace CLI (sed alternative)",
+      "stars": 7339,
+      "toyfile": "# 由 toy-index gen 从 chmln/sd 最新 release（v1.1.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"sd\"\ndesc    = \"Intuitive find & replace CLI (sed alternative)\"\nlicense = \"MIT\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nsd = \"sd\"\n\n[artifact]\n\"darwin/amd64\" = \"sd-v{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"sd-v{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/amd64/gnu\" = \"sd-v{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"sd-v{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"sd-v{version}-arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/musl\" = \"sd-v{version}-aarch64-unknown-linux-musl.tar.gz\"\n\"linux/armv7\" = \"sd-v{version}-armv7-unknown-linux-gnueabihf.tar.gz\"\n"
+    },
+    {
+      "id": "dalance/procs",
+      "source": "github:dalance/procs",
+      "desc": "A modern replacement for ps written in Rust",
+      "stars": 6151,
+      "toyfile": "# 由 toy-index gen 从 dalance/procs 最新 release（v0.14.12）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"procs\"\ndesc    = \"A modern replacement for ps written in Rust\"\nlicense = \"MIT\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nprocs = \"procs\"\n\n[artifact]\n\"linux/amd64\" = \"procs-v{version}-x86_64-linux.zip\"\n\"linux/arm64\" = \"procs-v{version}-aarch64-linux.zip\"\n"
+    },
+    {
+      "id": "dandavison/delta",
+      "source": "github:dandavison/delta",
+      "desc": "A syntax-highlighting pager for git, diff, grep, rg --json, and blame output",
+      "stars": 32054,
+      "toyfile": "# 由 toy-index gen 从 dandavison/delta 最新 release（0.19.2）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"delta\"\ndesc    = \"A syntax-highlighting pager for git, diff, grep, rg --json, and blame output\"\nlicense = \"MIT\"\nhomepage = \"https://dandavison.github.io/delta/\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\ndelta = \"delta\"\n\n[artifact]\n\"darwin/arm64\" = \"delta-{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/386/gnu\" = \"delta-{version}-i686-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/gnu\" = \"delta-{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"delta-{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"delta-{version}-arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/gnu\" = \"delta-{version}-aarch64-unknown-linux-gnu.tar.gz\"\n"
+    },
+    {
+      "id": "eza-community/eza",
+      "source": "github:eza-community/eza",
+      "desc": "A modern alternative to ls",
+      "stars": 23121,
+      "toyfile": "# 由 toy-index gen 从 eza-community/eza 最新 release（v0.23.5）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"eza\"\ndesc    = \"A modern alternative to ls\"\nlicense = \"EUPL-1.2\"\nhomepage = \"https://eza.rocks\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\neza = \"eza\"\n\n[artifact]\n\"linux/amd64/gnu\" = \"eza_x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"eza_x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"eza_arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/gnu\" = \"eza_aarch64-unknown-linux-gnu.tar.gz\"\n"
+    },
+    {
+      "id": "jesseduffield/lazygit",
+      "source": "github:jesseduffield/lazygit",
+      "desc": "simple terminal UI for git commands",
+      "stars": 81854,
+      "toyfile": "# 由 toy-index gen 从 jesseduffield/lazygit 最新 release（v0.64.1）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"lazygit\"\ndesc    = \"simple terminal UI for git commands\"\nlicense = \"MIT\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nlazygit = \"lazygit\"\n\n[artifact]\n\"darwin/amd64\" = \"lazygit_{version}_darwin_x86_64.tar.gz\"\n\"darwin/arm64\" = \"lazygit_{version}_darwin_arm64.tar.gz\"\n\"linux/amd64\" = \"lazygit_{version}_linux_x86_64.tar.gz\"\n\"linux/arm64\" = \"lazygit_{version}_linux_arm64.tar.gz\"\n\"linux/armv6\" = \"lazygit_{version}_linux_armv6.tar.gz\"\n"
+    },
+    {
+      "id": "junegunn/fzf",
+      "source": "github:junegunn/fzf",
+      "desc": ":cherry_blossom: A command-line fuzzy finder",
+      "stars": 82764,
+      "toyfile": "# 由 toy-index gen 从 junegunn/fzf 最新 release（v0.74.3）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"fzf\"\ndesc    = \":cherry_blossom: A command-line fuzzy finder\"\nlicense = \"MIT\"\nhomepage = \"https://junegunn.github.io/fzf/\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nfzf = \"fzf\"\n\n[artifact]\n\"darwin/amd64\" = \"fzf-{version}-darwin_amd64.tar.gz\"\n\"darwin/arm64\" = \"fzf-{version}-darwin_arm64.tar.gz\"\n\"linux/amd64\" = \"fzf-{version}-linux_amd64.tar.gz\"\n\"linux/arm64\" = \"fzf-{version}-linux_arm64.tar.gz\"\n\"linux/armv6\" = \"fzf-{version}-linux_armv6.tar.gz\"\n\"linux/armv7\" = \"fzf-{version}-linux_armv7.tar.gz\"\n"
+    },
+    {
+      "id": "mikefarah/yq",
+      "source": "github:mikefarah/yq",
+      "desc": "yq is a portable command-line YAML, JSON, XML, CSV, TOML, HCL  and properties processor",
+      "stars": 15913,
+      "toyfile": "# 由 toy-index gen 从 mikefarah/yq 最新 release（v4.53.6）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"yq\"\ndesc    = \"yq is a portable command-line YAML, JSON, XML, CSV, TOML, HCL  and properties processor\"\nlicense = \"MIT\"\nhomepage = \"https://mikefarah.gitbook.io/yq/\"\n\n[bin]\n# 这个仓库发的是裸二进制：文件按原资产名落进包目录，所以右边就是资产名 ——\n# 而资产名每个平台都不一样，这一行只对上面那一个平台成立，别的平台要手改。\nyq = \"yq\"\n\n[artifact]\n\"darwin/amd64\" = \"yq_darwin_amd64\"\n\"darwin/arm64\" = \"yq_darwin_arm64\"\n\"linux/386\" = \"yq_linux_386\"\n\"linux/amd64\" = \"yq_linux_amd64\"\n\"linux/arm\" = \"yq_linux_arm\"\n\"linux/arm64\" = \"yq_linux_arm64\"\n"
+    },
+    {
+      "id": "muesli/duf",
+      "source": "github:muesli/duf",
+      "desc": "Disk Usage/Free Utility - a better 'df' alternative",
+      "stars": 15281,
+      "toyfile": "# 由 toy-index gen 从 muesli/duf 最新 release（v0.9.1）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"duf\"\ndesc    = \"Disk Usage/Free Utility - a better 'df' alternative\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nduf = \"duf\"\n\n[artifact]\n\"darwin/amd64\" = \"duf_{version}_darwin_x86_64.tar.gz\"\n\"darwin/arm64\" = \"duf_{version}_darwin_arm64.tar.gz\"\n\"linux/386\" = \"duf_{version}_linux_i386.tar.gz\"\n\"linux/amd64\" = \"duf_{version}_linux_x86_64.tar.gz\"\n\"linux/arm64\" = \"duf_{version}_linux_arm64.tar.gz\"\n\"linux/armv6\" = \"duf_{version}_linux_armv6.tar.gz\"\n\"linux/armv7\" = \"duf_{version}_linux_armv7.tar.gz\"\n"
+    },
+    {
+      "id": "sharkdp/bat",
+      "source": "github:sharkdp/bat",
+      "desc": "A cat(1) clone with wings.",
+      "stars": 60330,
+      "toyfile": "# 由 toy-index gen 从 sharkdp/bat 最新 release（v0.26.1）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"bat\"\ndesc    = \"A cat(1) clone with wings.\"\nlicense = \"Apache-2.0\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nbat = \"bat\"\n\n[artifact]\n\"darwin/amd64\" = \"bat-v{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"bat-v{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/386/gnu\" = \"bat-v{version}-i686-unknown-linux-gnu.tar.gz\"\n\"linux/386/musl\" = \"bat-v{version}-i686-unknown-linux-musl.tar.gz\"\n\"linux/amd64/gnu\" = \"bat-v{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"bat-v{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"bat-v{version}-arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/gnu\" = \"bat-v{version}-aarch64-unknown-linux-gnu.tar.gz\"\n\"linux/arm64/musl\" = \"bat-v{version}-aarch64-unknown-linux-musl.tar.gz\"\n"
+    },
+    {
+      "id": "sharkdp/fd",
+      "source": "github:sharkdp/fd",
+      "desc": "A simple, fast and user-friendly alternative to 'find'",
+      "stars": 44273,
+      "toyfile": "# 由 toy-index gen 从 sharkdp/fd 最新 release（v10.5.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"fd\"\ndesc    = \"A simple, fast and user-friendly alternative to 'find'\"\nlicense = \"Apache-2.0\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nfd = \"fd\"\n\n[artifact]\n\"darwin/amd64\" = \"fd-v{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"fd-v{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/386/gnu\" = \"fd-v{version}-i686-unknown-linux-gnu.tar.gz\"\n\"linux/386/musl\" = \"fd-v{version}-i686-unknown-linux-musl.tar.gz\"\n\"linux/amd64/gnu\" = \"fd-v{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"fd-v{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"fd-v{version}-arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/gnu\" = \"fd-v{version}-aarch64-unknown-linux-gnu.tar.gz\"\n\"linux/arm64/musl\" = \"fd-v{version}-aarch64-unknown-linux-musl.tar.gz\"\n"
+    },
+    {
+      "id": "sharkdp/hyperfine",
+      "source": "github:sharkdp/hyperfine",
+      "desc": "A command-line benchmarking tool",
+      "stars": 28783,
+      "toyfile": "# 由 toy-index gen 从 sharkdp/hyperfine 最新 release（v1.20.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"hyperfine\"\ndesc    = \"A command-line benchmarking tool\"\nlicense = \"Apache-2.0\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nhyperfine = \"hyperfine\"\n\n[artifact]\n\"darwin/amd64\" = \"hyperfine-v{version}-x86_64-apple-darwin.tar.gz\"\n\"darwin/arm64\" = \"hyperfine-v{version}-aarch64-apple-darwin.tar.gz\"\n\"linux/386/gnu\" = \"hyperfine-v{version}-i686-unknown-linux-gnu.tar.gz\"\n\"linux/386/musl\" = \"hyperfine-v{version}-i686-unknown-linux-musl.tar.gz\"\n\"linux/amd64/gnu\" = \"hyperfine-v{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\"linux/amd64/musl\" = \"hyperfine-v{version}-x86_64-unknown-linux-musl.tar.gz\"\n\"linux/arm\" = \"hyperfine-v{version}-arm-unknown-linux-gnueabihf.tar.gz\"\n\"linux/arm64/gnu\" = \"hyperfine-v{version}-aarch64-unknown-linux-gnu.tar.gz\"\n"
+    },
+    {
+      "id": "tstack/lnav",
+      "source": "github:tstack/lnav",
+      "desc": "Log file navigator",
+      "stars": 10627,
+      "toyfile": "# 由 toy-index gen 从 tstack/lnav 最新 release（v0.14.0）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"lnav\"\ndesc    = \"Log file navigator\"\nlicense = \"BSD-2-Clause\"\nhomepage = \"http://lnav.org\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\nlnav = \"lnav\"\n\n[artifact]\n\"darwin/arm64\" = \"lnav-{version}-aarch64-macos.zip\"\n\"linux/amd64/musl\" = \"lnav-{version}-linux-musl-x86_64.zip\"\n\"linux/arm64/musl\" = \"lnav-{version}-linux-musl-arm64.zip\"\n"
+    },
+    {
+      "id": "wagoodman/dive",
+      "source": "github:wagoodman/dive",
+      "desc": "A tool for exploring each layer in a docker image",
+      "stars": 54522,
+      "toyfile": "# 由 toy-index gen 从 wagoodman/dive 最新 release（v0.13.1）的资产名反推。\n# 这是一份【内联】打包说明（规格 §5.1）：二进制取自作者自己的 release，\n# 但装哪个资产、软链成什么命令名是索引说的 —— 所以客户端会降档到 index-toyfile。\n# 故意没有 [sha256]：内联条目跟着上游最新的 tag 走，钉死某一版的字节会让\n# 上游一发新版就变成「哈希对不上」，读起来像投毒警告。首次安装仍有 TOFU 钉住。\nname    = \"dive\"\ndesc    = \"A tool for exploring each layer in a docker image\"\nlicense = \"MIT\"\n\n[bin]\n# 右边这个路径是解开一个真包看出来的。\ndive = \"dive\"\n\n[artifact]\n\"darwin/amd64\" = \"dive_{version}_darwin_amd64.tar.gz\"\n\"darwin/arm64\" = \"dive_{version}_darwin_arm64.tar.gz\"\n\"linux/amd64\" = \"dive_{version}_linux_amd64.tar.gz\"\n\"linux/arm64\" = \"dive_{version}_linux_arm64.tar.gz\"\n"
+    }
+  ]
 }

@@ -38,7 +38,7 @@ func Base() string { return runtime.GOOS + "/" + runtime.GOARCH }
 // candidatesFor 是整个包的规格，纯函数，测试全打这里。
 //
 //	Alpine x86-64      linux/amd64/musl → linux/amd64
-//	glibc x86-64       linux/amd64/gnu  → linux/amd64
+//	glibc x86-64       linux/amd64/gnu  → linux/amd64 → linux/amd64/musl
 //	Apple Silicon      darwin/arm64     → darwin/amd64   （Rosetta 2，静态规则不探测）
 //	Intel Mac          darwin/amd64
 //	树莓派 3（armv7）   linux/armv7      → linux/arm
@@ -60,11 +60,15 @@ func candidatesFor(goos, goarch string, musl bool, arm int) []string {
 		}
 		return []string{base}
 	case goos == "linux":
-		libc := "gnu"
 		if musl {
-			libc = "musl"
+			// 反方向【不加】：musl 机器兜底到 glibc 构建是真的跑不起来，
+			// 而报错是 `not found`（找不到动态加载器），文件明明就在那儿。
+			return []string{base + "/musl", base}
 		}
-		return []string{base + "/" + libc, base}
+		// glibc 机器最后再兜底到 musl 那一档：静态链接的 musl 二进制在 glibc 机器上
+		// 跑得好好的（这正是大家发 musl 版的原因），而 ripgrep / zoxide 这类项目的
+		// x86-64 就只发 musl 一份 —— 不兜底等于把它们整块挡在门外。
+		return []string{base + "/gnu", base, base + "/musl"}
 	case goos == "darwin" && goarch == "arm64":
 		return []string{base, "darwin/amd64"}
 	}

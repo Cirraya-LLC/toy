@@ -550,6 +550,15 @@ func insFallbackNote(cands []string, matched string, declared []string) string {
 		return ""
 	}
 	switch {
+	case strings.HasSuffix(want, "/gnu") && matched == strings.TrimSuffix(want, "/gnu")+"/musl":
+		// glibc 机器兜底到 musl 那一档（platform.candidatesFor 的末位候选）。
+		// 这条几乎总是好消息 —— musl 版基本都是静态链接的，所以它在 glibc 机器上
+		// 照跑不误，ripgrep / zoxide 这类只发 musl 一份的项目正是靠它才装得上。
+		// 但仍然要说：装的不是「为这台机器构建的那个」（铁律 8），而且万一那份
+		// musl 构建是动态链接的，它在这里就起不来。
+		return "这个包的 " + strings.TrimSuffix(want, "/gnu") + " 只有 musl 构建，装的就是它 —— " +
+			"musl 版一般是静态链接的，在这台 glibc 机器上照样跑；" +
+			"真要是动态链接的那种，敲下去会报「文件不存在」，那时候去上游要一个 glibc 构建"
 	case want == "darwin/arm64" && matched == "darwin/amd64":
 		return "这个包没有 Apple Silicon 的构建，装的是 Intel 版（darwin/amd64）—— " +
 			"它靠 Rosetta 2 翻译运行，能跑但会慢一截。没装 Rosetta 2 的话敲下去会直接报「无法打开」，" +
@@ -617,8 +626,27 @@ func insUnpack(tf *toyfile.Toyfile, it insItem, pkgDir string) error {
 	case archive.IsArchive(it.asset):
 		return insExtract(it.path, it.asset, pkgDir)
 	default:
-		// 裸二进制。[bin] 的值要写成这个文件名，写错了 store.Link 会说清楚。
-		return insCopy(it.path, filepath.Join(pkgDir, filepath.Base(it.asset)), 0o755)
+		// 裸二进制：落成 [bin] 指定的那个路径，而不是资产名。
+		//
+		// 资产名是【按平台变】的（yq_linux_amd64 / yq_darwin_arm64 / yq_linux_arm64…），
+		// 而 [bin] 只有一行、不按平台变、也不展开占位符。照资产名落盘的话，
+		// 除了 [bin] 恰好写对的那一个平台，其余每一个平台都会软链到一个不存在的
+		// 文件 —— 而且是在下载和校验都成功之后才炸。索引里 mikefarah/yq 那条
+		// 就是这么在 6 个平台里坏了 5 个（收进去的时候只在 linux/amd64 上验过）。
+		//
+		// 只在 [bin] 恰好一条时这么做：多条时挑哪一个都是猜，
+		// 保持原来的行为让 store.Link 响亮地报错。
+		dst := filepath.Base(it.asset)
+		if len(tf.Bin) == 1 {
+			for _, target := range tf.Bin {
+				dst = target // toyfile 已经保证它不是绝对路径、不含 ..
+			}
+		}
+		full := filepath.Join(pkgDir, dst)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return fmt.Errorf("建目录 %s 失败：%w", filepath.Dir(full), err)
+		}
+		return insCopy(it.path, full, 0o755)
 	}
 }
 

@@ -430,7 +430,10 @@ func TestAuditChmodWidensPastUmask(t *testing.T) {
 	old := umaskSet(0o077)
 	defer umaskSet(old)
 	_, dest := canary(t)
+	// 顶层故意留【两个】条目：只有一个顶层目录的话 stripTopDir 会把 d 剥掉，
+	// 那时候这个测试就不再看得到目录的权限位了（它要验的正是目录那一档）。
 	src := buildAdvTar(t, "um.tar", false, []advEntry{
+		{name: "keep", typ: tar.TypeReg, mode: 0o644, body: "x"},
 		{name: "d", typ: tar.TypeDir, mode: 0o755},
 		{name: "d/f", typ: tar.TypeReg, mode: 0o755, body: "x"},
 	})

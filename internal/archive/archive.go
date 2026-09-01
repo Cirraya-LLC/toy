@@ -69,7 +69,8 @@ func IsArchive(name string) bool { return formatOf(name) != kindNone }
 //   - 跳过设备文件、FIFO、socket 这些没有内容的非常规成员；不认识又声明了内容的一律拒绝
 //   - 累计字节数超过 MaxTotalBytes 就中止并清理
 //
-// 返回写出来的相对路径列表。
+// 解完之后如果整棵树【只有一个顶层条目而且它是目录】，就把那一层剥掉
+// （见 stripTopDir）。返回的相对路径列表是剥完之后的。
 func Extract(src, destDir string) ([]string, error) {
 	return extractTo(src, destDir, MaxTotalBytes)
 }
@@ -106,7 +107,109 @@ func extractTo(src, destDir string, limit int64) ([]string, error) {
 		e.cleanup()
 		return nil, err
 	}
+	if err := e.stripTopDir(); err != nil {
+		e.cleanup()
+		return nil, err
+	}
 	return e.files, nil
+}
+
+// stripTopDir 剥掉唯一的那个顶层目录，等价于 `tar --strip-components=1`。
+//
+// cargo-dist 和一半的 goreleaser 配置都把内容套在一层
+// `ripgrep-15.2.0-x86_64-unknown-linux-musl/` 里，而那个目录名【同时】钉死了版本
+// 和 target triple —— toy.toml 的 [bin] 右边是单个字符串、不按平台变、也不展开
+// {version}，根本表达不了它。不剥的话现代 Rust CLI 那一整块（ripgrep / fd / bat /
+// delta / eza）一个都收不了。eget / ubi / cargo-binstall 全都剥，用户预期就是这样。
+//
+// 判据是【恰好一个顶层条目而且它是真目录】：
+//   - 两个及以上不剥 —— 剥哪个都得丢掉另一个。
+//   - 唯一那个是文件不剥（裸二进制那种包）。
+//   - 唯一那个是符号链接也不剥：DirEntry.IsDir() 是 lstat 语义，符号链接为 false，
+//     所以不存在"跟着一条链接把内容搬到 destDir 外面去"这回事。
+//   - 空目录不剥：剥完 destDir 就空了，那不是"少一层"而是"什么都没有"。
+//
+// 名字只从 os.ReadDir 拿，它返回的永远是单个路径段（不会是 "." / ".."、也不含
+// 分隔符），所以这里的 Join 必定落在 destDir 内 —— 铁律 7 是在 resolve() 里守的，
+// 这一步没有引入第二个需要清洗的名字来源。
+func (e *extractor) stripTopDir() error {
+	ents, err := os.ReadDir(e.dest)
+	if err != nil {
+		return fmt.Errorf("archive: 剥顶层目录前读不了 %s：%w", e.dest, err)
+	}
+	if len(ents) != 1 || !ents[0].IsDir() {
+		return nil
+	}
+	top := ents[0].Name()
+	topDir := filepath.Join(e.dest, top)
+	inner, err := os.ReadDir(topDir)
+	if err != nil {
+		return fmt.Errorf("archive: 剥顶层目录时读不了 %s：%w", topDir, err)
+	}
+	if len(inner) == 0 {
+		return nil
+	}
+	prefix := top + string(filepath.Separator)
+	if !e.stripKeepsLinksInside(prefix) {
+		return nil
+	}
+	// 先把那层目录挪开再往上搬，不然 `pkg/pkg` 这种（里面有个东西和外面那层同名）
+	// 会撞在一起：rename 到一个非空目录上是 ENOTEMPTY，到一个空目录上是 EISDIR，
+	// 两个都会让一个本来正常的包整个装不上。挪开之后目标名字必定是空的。
+	// 这个临时名字和 top 同一个父目录（也就是同一个文件系统），rename 不会跨设备。
+	staged := topDir + ".toy-strip"
+	if err := os.Rename(topDir, staged); err != nil {
+		return fmt.Errorf("archive: 剥掉顶层目录 %s 时挪不开它：%w", top, err)
+	}
+	for _, ent := range inner {
+		if err := os.Rename(filepath.Join(staged, ent.Name()), filepath.Join(e.dest, ent.Name())); err != nil {
+			return fmt.Errorf("archive: 剥掉顶层目录 %s 时挪 %s 失败：%w", top, ent.Name(), err)
+		}
+	}
+	if err := os.Remove(staged); err != nil {
+		return fmt.Errorf("archive: 剥掉顶层目录 %s 之后删不掉它：%w", top, err)
+	}
+	// 返回给调用方的相对路径要跟着剥，否则它和盘上的布局对不上 —— 而 [bin] 右边
+	// 和 toy-index 的 probe 认的都是这份列表。
+	for i, f := range e.files {
+		e.files[i] = strings.TrimPrefix(f, prefix)
+	}
+	return nil
+}
+
+// stripKeepsLinksInside 报告剥掉那一层之后，包里每一条【相对】符号链接是不是仍然
+// 落在 destDir 内。
+//
+// 这是剥目录唯一自己引入的逃逸面，必须自己堵上：剥掉一层等于把每条链接的解析起点
+// 上移一层。包内自己指自己的链接（macOS 那种 `Versions/Current -> A`）不受影响，
+// 但一条先爬到包根、再顺着顶层目录名走回来的链接会：
+//
+//	sub/deep/back -> ../../sub/real.txt    剥之前落在 dest/sub/real.txt ✓
+//	   deep/back  -> ../../sub/real.txt    剥之后落在 dest 的【父目录】 ✗
+//
+// 这种包就不剥，原样交给调用方：[bin] 会因为路径对不上而响亮地失败，
+// 那比在包里留一条能读到 destDir 外面的链接好太多了（铁律 7）。
+// 读不出来的（Lstat / Readlink 出错）一律当成不安全 —— 剥目录是便利，不是必需。
+func (e *extractor) stripKeepsLinksInside(prefix string) bool {
+	for _, rel := range e.files {
+		full := filepath.Join(e.dest, rel)
+		fi, err := os.Lstat(full)
+		if err != nil {
+			return false
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			continue // 普通文件和硬链接认的是 inode，挪一层不改变任何东西
+		}
+		target, err := os.Readlink(full)
+		if err != nil {
+			return false
+		}
+		moved := filepath.Join(e.dest, strings.TrimPrefix(rel, prefix))
+		if e.checkLinkTarget(moved, target) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 type extractor struct {

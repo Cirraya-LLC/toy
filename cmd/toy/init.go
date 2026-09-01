@@ -25,11 +25,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 
+	"github.com/Cirraya-LLC/toy/internal/assetname"
 	"github.com/Cirraya-LLC/toy/internal/toyfile"
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
@@ -37,35 +37,6 @@ import (
 // iniMaxListed 是报错时最多列几个看到的文件名 —— 一个塞了两百个文件的 dist
 // 不该把终端刷满。
 const iniMaxListed = 12
-
-// iniOS / iniArch 是文件名里那些词到 GOOS/GOARCH 的映射。大小写不敏感，
-// 切词用 - _ .（所以 x86_64 会裂成两段，靠下面的相邻二元组捞回来）。
-var iniOS = map[string]string{
-	"linux":   "linux",
-	"darwin":  "darwin",
-	"macos":   "darwin",
-	"osx":     "darwin",
-	"apple":   "darwin",
-	"windows": "windows",
-	"win":     "windows",
-}
-
-var iniArch = map[string]string{
-	"amd64": "amd64", "x86_64": "amd64", "x64": "amd64",
-	"arm64": "arm64", "aarch64": "arm64",
-	"armv7": "armv7", "armhf": "armv7",
-	"armv6": "armv6",
-	// 裸 "arm" 必须在这里：GOARCH=arm 且没设 goarm 时，goreleaser 的默认
-	// name_template 产出的就是 `tool_1.2.3_linux_arm.tar.gz`。少了这一行，
-	// 树莓派那份构建会被【静默丢掉】—— 而 linux/arm 正是 platform.go 给
-	// armv6/armv7 兜底的那个候选（规格 §3.1），丢了就等于 Pi 用户装不上。
-	"arm": "arm",
-	"386": "386", "i386": "386",
-}
-
-// iniVerRe 认文件名里的版本段。只认三段式：两段式（1.2）在文件名里和
-// 别的数字对分不开，认错的下场是把不该动的字符串换成 {version}。
-var iniVerRe = regexp.MustCompile(`\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?`)
 
 // iniAsset 是 dist 里认出来的一个资产。
 type iniAsset struct {
@@ -103,9 +74,17 @@ func runInit(_ context.Context, args []string) error {
 		return err
 	}
 
-	assets, skipped := iniScan(files, strings.TrimPrefix(strings.TrimSpace(*version), "v"))
-	if len(assets) == 0 {
+	// 推断本身在 internal/assetname 里 —— 批量索引生成器（cmd/toy-index）用的是
+	// 同一个函数。两份实现必然漂移，而漂移的症状是索引里生成的条目和作者自己跑
+	// toy init 得到的不一样，且没有任何地方会说。
+	res := assetname.Infer(files, *version)
+	skipped := iniSkipLines(res.Skipped)
+	if len(res.Assets) == 0 {
 		return iniNothingRecognized(distDir, files, skipped)
+	}
+	assets := make([]iniAsset, len(res.Assets))
+	for i, a := range res.Assets {
+		assets[i] = iniAsset{file: a.File, key: a.Platform, tmpl: a.Template}
 	}
 
 	// 文件就在本地，算一遍哈希几乎不要钱，而这把包从"首次安装 TOFU 钉住"
@@ -118,7 +97,7 @@ func runInit(_ context.Context, args []string) error {
 		assets[i].sum = sum
 	}
 
-	pkg, guessedName := iniName(*name, dir, assets)
+	pkg, guessedName := iniName(*name, dir, res.Name)
 	data, err := iniRender(pkg, assets)
 	if err != nil {
 		return err
@@ -143,7 +122,7 @@ func runInit(_ context.Context, args []string) error {
 	}
 	ui.Info("")
 	ui.Info("已写出 %s", out)
-	iniReport(pkg, assets, skipped, guessedName)
+	iniReport(pkg, assets, skipped, guessedName, res.Name)
 	return nil
 }
 
@@ -167,148 +146,18 @@ func iniListFiles(distDir string) ([]string, error) {
 	return out, nil
 }
 
-// iniScan 把文件名列表变成资产映射。第二个返回值是「认出来了但用不了」的说明，
-// 现在只有 Windows 一种（规格 §11：v1 不做 Windows）。
-//
-// 同一个 key 有多个文件时留排序最前的那一个（.tar.gz 和 .zip 同时发的很常见），
-// 并把这件事记进 skipped 让作者自己挑。
-func iniScan(files []string, forceVersion string) (assets []iniAsset, skipped []string) {
-	type hit struct {
-		file, key string
+// iniSkipLines 把跳过说明拼成给人看的一行。
+func iniSkipLines(skipped []assetname.Asset) []string {
+	out := make([]string, len(skipped))
+	for i, a := range skipped {
+		out[i] = a.File + "：" + a.Skip
 	}
-	var hits []hit
-	for _, f := range files {
-		key, goos := iniDetect(f)
-		if goos == "windows" {
-			skipped = append(skipped, f+"：认出来是 Windows，但 toy v1 不支持 Windows（规格 §11），跳过")
-			continue
-		}
-		if key == "" {
-			// 认不出来的【资产】要说一声。静默丢掉的下场是：作者发了六个平台，
-			// toy.toml 里只有四个，而 init 打印的「认出了 N 个平台」看起来一切正常，
-			// 症状要等到那个平台的用户来报「没有适配当前平台的构建」才出现。
-			// 只对像发布包的文件出声 —— checksums.txt / LICENSE 这些本来就不是资产，
-			// 为它们报一行会把真正要看的那条淹掉。
-			if iniLooksLikeArchive(f) {
-				skipped = append(skipped, f+"：认不出是哪个平台的（os 或 arch 没认出来），跳过。"+
-					"确实是个发布资产的话，自己往 [artifact] 里补一行")
-			}
-			continue
-		}
-		hits = append(hits, hit{f, key})
-	}
-	if len(hits) == 0 {
-		return nil, skipped
-	}
-
-	ver := forceVersion
-	if ver == "" {
-		names := make([]string, len(hits))
-		for i, h := range hits {
-			names[i] = h.file
-		}
-		ver = iniVersion(names)
-	}
-
-	seen := map[string]string{}
-	for _, h := range hits {
-		if first, dup := seen[h.key]; dup {
-			skipped = append(skipped, h.file+"：和 "+first+" 同属 "+h.key+
-				"，只能留一个，留了排前面的那个。要换就自己改 [artifact] 里那一行")
-			continue
-		}
-		seen[h.key] = h.file
-		tmpl := h.file
-		if ver != "" {
-			tmpl = strings.ReplaceAll(tmpl, ver, "{version}")
-		}
-		assets = append(assets, iniAsset{file: h.file, key: h.key, tmpl: tmpl})
-	}
-	sort.Slice(assets, func(i, j int) bool { return assets[i].key < assets[j].key })
-	return assets, skipped
-}
-
-// iniLooksLikeArchive 判断一个文件像不像发布资产，只用来决定「认不出来时要不要
-// 出声」。宁可漏报不可错报：checksums.txt、LICENSE、README.md 都会落在 dist 里，
-// 为它们各报一行警告，等于把真正需要作者去看的那一条淹掉。
-func iniLooksLikeArchive(f string) bool {
-	l := strings.ToLower(f)
-	for _, ext := range []string{".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tar.zst", ".zip"} {
-		if strings.HasSuffix(l, ext) {
-			return true
-		}
-	}
-	return false
-}
-
-// iniDetect 从一个文件名里认出平台 key。认不出返回空 key；
-// 第二个返回值是认出来的 GOOS（Windows 要单独说明才跳过，不能静默）。
-func iniDetect(file string) (key, goos string) {
-	toks := iniTokens(file)
-	var arch, libc string
-	for i, tok := range toks {
-		if v, ok := iniOS[tok]; ok && goos == "" {
-			goos = v
-		}
-		if v, ok := iniArch[tok]; ok && arch == "" {
-			arch = v
-		}
-		// x86_64 被 '_' 切成了两段，用相邻二元组捞回来。
-		if i+1 < len(toks) {
-			if v, ok := iniArch[tok+"_"+toks[i+1]]; ok && arch == "" {
-				arch = v
-			}
-		}
-		switch tok {
-		case "musl", "gnu":
-			libc = tok
-		}
-	}
-	if goos == "" || arch == "" {
-		return "", goos
-	}
-	if goos == "windows" {
-		return "", goos
-	}
-	switch {
-	// armv6/armv7 本身就是代次，再挂一层 libc 没有意义（也没人这么发布）。
-	case strings.HasPrefix(arch, "armv"):
-		return goos + "/" + arch, goos
-	case goos == "linux" && libc != "":
-		return goos + "/" + arch + "/" + libc, goos
-	default:
-		return goos + "/" + arch, goos
-	}
-}
-
-func iniTokens(s string) []string {
-	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return r == '-' || r == '_' || r == '.'
-	})
-}
-
-// iniVersion 挑出现次数最多的那个版本串。goreleaser 一批资产的版本是同一个，
-// 所以"最多的那个"就是它；平手时取字典序最小的，好让同样的 dist 每次跑出同样的结果。
-func iniVersion(files []string) string {
-	count := map[string]int{}
-	for _, f := range files {
-		// 一个文件名里同一个版本可能出现两次（目录前缀 + 包名），只算一次。
-		for _, v := range slices.Compact(slices.Sorted(slices.Values(iniVerRe.FindAllString(f, -1)))) {
-			count[v]++
-		}
-	}
-	best := ""
-	for v, n := range count {
-		if best == "" || n > count[best] || (n == count[best] && v < best) {
-			best = v
-		}
-	}
-	return best
+	return out
 }
 
 // iniName 定工具名：--name > 项目目录名 > 资产名的公共前缀。
 // 第二个返回值说的是"这个名字是猜出来的"，作者得核对。
-func iniName(flagName, dir string, assets []iniAsset) (name string, guessed bool) {
+func iniName(flagName, dir, prefix string) (name string, guessed bool) {
 	if n := strings.TrimSpace(flagName); n != "" {
 		return n, false
 	}
@@ -317,28 +166,7 @@ func iniName(flagName, dir string, assets []iniAsset) (name string, guessed bool
 			return base, true
 		}
 	}
-	return iniCommonPrefix(assets), true
-}
-
-// iniCommonPrefix 从资产名里抠出工具名：取公共前缀，砍掉版本号那一段往后的部分，
-// 再削掉尾巴上的分隔符。`hello_1.2.0_linux_amd64.tar.gz` 这一批得到 `hello`。
-func iniCommonPrefix(assets []iniAsset) string {
-	if len(assets) == 0 {
-		return ""
-	}
-	p := assets[0].file
-	for _, a := range assets[1:] {
-		for !strings.HasPrefix(a.file, p) {
-			p = p[:len(p)-1]
-			if p == "" {
-				return ""
-			}
-		}
-	}
-	if loc := iniVerRe.FindStringIndex(p); loc != nil {
-		p = p[:loc[0]]
-	}
-	return strings.TrimRight(p, "-_.")
+	return prefix, true
 }
 
 // iniRender 拼出 toy.toml。手写而不是用 toml 编码器：这个文件是给人改的，
@@ -365,7 +193,8 @@ func iniRender(name string, assets []iniAsset) ([]byte, error) {
 	fmt.Fprintf(&b, "license = \"\"  # ← 例如 \"MIT\"\n")
 	b.WriteString("\n[bin]\n")
 	b.WriteString("# 左边 = 装完之后 PATH 上的命令名，右边 = 【解压之后】包内的相对路径。\n")
-	b.WriteString("# ← 压缩包里套了一层目录的话右边要改，例如 \"" + name + "_1.2.3_linux_amd64/" + name + "\"。\n")
+	b.WriteString("# 整棵树套在一层目录里（cargo-dist 那种 " + name + "-1.2.3-x86_64-.../）时那一层会被自动剥掉，\n")
+	b.WriteString("# 所以右边不要带它；真的分了子目录才要写上，例如 \"bin/" + name + "\"。\n")
 	b.WriteString("# 用 `tar tzf dist/<某个包>` 看一眼里面到底长什么样。\n")
 	fmt.Fprintf(&b, "%s = %s\n", key(name), q(name))
 
@@ -388,7 +217,7 @@ func iniRender(name string, assets []iniAsset) ([]byte, error) {
 
 // iniReport 明说它猜了什么、要作者去核对哪几处。
 // 一个不说自己猜过的生成器，作者就会把猜出来的东西当成事实提交上去。
-func iniReport(name string, assets []iniAsset, skipped []string, guessedName bool) {
+func iniReport(name string, assets []iniAsset, skipped []string, guessedName bool, prefix string) {
 	ui.Info("")
 	ui.Info("认出了 %d 个平台：", len(assets))
 	for _, a := range assets {
@@ -400,12 +229,13 @@ func iniReport(name string, assets []iniAsset, skipped []string, guessedName boo
 
 	ui.Info("")
 	ui.Info("下面这几处是猜的，提交之前核对一遍：")
-	ui.Info("    [bin] 右边的包内路径 —— 压缩包里套了目录就得改（`tar tzf` 看一眼）")
+	ui.Info("    [bin] 右边的包内路径 —— 包里分了子目录（bin/ 之类）就得改；" +
+		"整棵树套在一层目录里的那种不用管，那一层解压时会被剥掉（`tar tzf` 看一眼）")
 	if guessedName {
 		hint := ""
 		// 目录名和资产名前缀对不上时，后者多半才是真名（仓库目录常被改名、
 		// clone 成别的名字，而资产名是构建脚本自己写出来的）。直接把命令给出来。
-		if p := iniCommonPrefix(assets); p != "" && p != name {
+		if p := prefix; p != "" && p != name {
 			hint = "；资产名看起来是 " + p + "：`toy init --force --name " + p + "`"
 		}
 		ui.Info("    name = %s —— 从目录名或资产名前缀推的%s", name, hint)

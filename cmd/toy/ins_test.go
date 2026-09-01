@@ -179,6 +179,21 @@ func TestInsFallbackNote(t *testing.T) {
 			[]string{"linux/amd64/musl", "linux/amd64"}, "linux/amd64",
 			[]string{"linux/amd64"},
 			[]string{"musl", "文件不存在"}},
+		// glibc 机器兜底到 musl 那一档（候选链末位）。这条几乎总是好消息 ——
+		// 只发 musl 一份的项目（ripgrep / zoxide 的 x86-64）靠它才装得上 ——
+		// 但仍然要说：装的不是为这台机器构建的那个，而且万一那份 musl 构建是
+		// 动态链接的，它在这里就起不来。
+		{"glibc 机器只找到 musl 构建：要说它是静态链接所以能跑",
+			[]string{"linux/amd64/gnu", "linux/amd64", "linux/amd64/musl"}, "linux/amd64/musl",
+			[]string{"linux/amd64/musl"},
+			[]string{"musl", "静态链接", "linux/amd64"}},
+		{"arm64 上同理", []string{"linux/arm64/gnu", "linux/arm64", "linux/arm64/musl"}, "linux/arm64/musl",
+			[]string{"linux/arm64/musl"}, []string{"musl", "静态链接"}},
+		// 三段候选链上命中中间那个（裸 key）时判据不能变：作者没按 libc 分档，
+		// 通用构建就是对的那个，不许因为候选链变长了就开始报假警告。
+		{"候选链末位加了 musl 之后，命中裸 key 仍然不许吭声",
+			[]string{"linux/amd64/gnu", "linux/amd64", "linux/amd64/musl"}, "linux/amd64",
+			[]string{"linux/amd64", "linux/arm64"}, nil},
 		{"别的回退也要说一声",
 			[]string{"linux/armv7", "linux/arm"}, "linux/arm",
 			[]string{"linux/arm"},

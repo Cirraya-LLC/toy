@@ -15,14 +15,17 @@ func TestCandidatesFor(t *testing.T) {
 		arm          int
 		want         []string
 	}{
+		// 反方向不许有：musl 机器兜底到 glibc 构建是真的跑不起来（报 `not found`）。
 		{"Alpine x86-64", "linux", "amd64", true, 0, []string{"linux/amd64/musl", "linux/amd64"}},
-		{"glibc x86-64", "linux", "amd64", false, 0, []string{"linux/amd64/gnu", "linux/amd64"}},
+		// glibc 机器末位兜底到 musl：静态链接的 musl 二进制在这里照跑，而
+		// ripgrep / zoxide 的 x86-64 只发 musl 一份，不兜底就整块装不上。
+		{"glibc x86-64", "linux", "amd64", false, 0, []string{"linux/amd64/gnu", "linux/amd64", "linux/amd64/musl"}},
 		{"Apple Silicon 能靠 Rosetta 跑 amd64", "darwin", "arm64", false, 0, []string{"darwin/arm64", "darwin/amd64"}},
 		{"Intel Mac 不回退到 arm64", "darwin", "amd64", false, 0, []string{"darwin/amd64"}},
 		{"树莓派 3 是 armv7", "linux", "arm", false, 7, []string{"linux/armv7", "linux/arm"}},
 		{"树莓派 Zero 是 armv6", "linux", "arm", false, 6, []string{"linux/armv6", "linux/arm"}},
 		{"linux/arm64 musl", "linux", "arm64", true, 0, []string{"linux/arm64/musl", "linux/arm64"}},
-		{"linux/arm64 gnu", "linux", "arm64", false, 0, []string{"linux/arm64/gnu", "linux/arm64"}},
+		{"linux/arm64 gnu", "linux", "arm64", false, 0, []string{"linux/arm64/gnu", "linux/arm64", "linux/arm64/musl"}},
 		// 探不到代次就别猜：armv7 的二进制丢到 Zero 上是非法指令。
 		{"arm 代次未知只给裸 key", "linux", "arm", false, 0, []string{"linux/arm"}},
 		// armv8 的 32 位用户态跑 armv7 二进制没问题，而没人发布 linux/armv8。
@@ -36,9 +39,11 @@ func TestCandidatesFor(t *testing.T) {
 			if strings.Join(got, ",") != strings.Join(c.want, ",") {
 				t.Fatalf("candidatesFor(%q,%q,%v,%d) = %v，想要 %v", c.goos, c.goarch, c.musl, c.arm, got, c.want)
 			}
-			// 最具体的必须在最前面：回退的意义就在这个顺序上。
-			if len(got) > 1 && len(got[0]) <= len(got[len(got)-1]) && c.goos == "linux" {
-				t.Errorf("最具体的候选应当在最前面：%v", got)
+			// 最具体的必须在最前面：回退的意义就在这个顺序上。判据是「首选不是
+			// 那个两段的底座」，不能拿字符串长度当"具体程度"的代理 —— glibc 机器
+			// 的末位候选 linux/amd64/musl 比首选还长一个字符。
+			if len(got) > 1 && c.goos == "linux" && got[0] == c.goos+"/"+c.goarch {
+				t.Errorf("两段的底座不该排在最前面：%v", got)
 			}
 		})
 	}
@@ -149,5 +154,23 @@ func TestCandidatesOnThisMachine(t *testing.T) {
 	}
 	if !strings.Contains(Current(), got[0]) {
 		t.Errorf("Current() = %q 里没有首选候选 %q", Current(), got[0])
+	}
+}
+
+// musl 的兜底是单向的：glibc 机器可以退到 musl 构建（静态链接，照跑），
+// musl 机器【绝不能】退到 glibc 构建 —— 那是真的起不来，而报错长得像文件不存在。
+// 这一条翻转过来不会有任何别的测试变红，所以单独钉住。
+func TestMuslFallbackIsOneWay(t *testing.T) {
+	for _, goarch := range []string{"amd64", "arm64"} {
+		base := "linux/" + goarch
+		glibc := candidatesFor("linux", goarch, false, 0)
+		if last := glibc[len(glibc)-1]; last != base+"/musl" {
+			t.Errorf("glibc %s 的末位候选 = %q，想要 %q", goarch, last, base+"/musl")
+		}
+		for _, c := range candidatesFor("linux", goarch, true, 0) {
+			if c == base+"/gnu" {
+				t.Errorf("musl 机器不该有 %s 这个候选：%v", c, candidatesFor("linux", goarch, true, 0))
+			}
+		}
 	}
 }

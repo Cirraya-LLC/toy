@@ -6,139 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Cirraya-LLC/toy/internal/assetname"
 	"github.com/Cirraya-LLC/toy/internal/toyfile"
 )
 
-// 文件名反推是这条命令的全部内容。认错一个词的下场是别人装的时候
-// 一句「没有适配当前平台的构建」—— 而作者永远不会知道是哪一行错了。
-func TestIniDetect(t *testing.T) {
-	cases := []struct{ file, key, goos string }{
-		{"gadget_1.4.2_linux_amd64.tar.gz", "linux/amd64", "linux"},
-		// x86_64 会被 '_' 切成两段，靠相邻二元组捞回来。goreleaser 的默认命名就是它。
-		{"gadget_1.4.2_linux_x86_64.tar.gz", "linux/amd64", "linux"},
-		{"gadget-1.4.2-linux-x64.tar.gz", "linux/amd64", "linux"},
-		{"gadget_1.4.2_darwin_arm64.zip", "darwin/arm64", "darwin"},
-		{"gadget_1.4.2_macos_aarch64.tar.gz", "darwin/arm64", "darwin"},
-		{"gadget-osx-x86_64.tar.gz", "darwin/amd64", "darwin"},
-		{"gadget-1.0.0-apple-arm64.tar.gz", "darwin/arm64", "darwin"},
-		// musl / gnu 变成第三段，正是 platform.Candidates 头一个要找的那个 key。
-		{"gadget_1.4.2_linux_amd64_musl.tar.gz", "linux/amd64/musl", "linux"},
-		{"gadget_1.4.2_linux_x86_64_gnu.tar.gz", "linux/amd64/gnu", "linux"},
-		// arm 代次本身就够具体了，再挂 libc 没有意义。
-		{"gadget_1.4.2_linux_armv7.tar.gz", "linux/armv7", "linux"},
-		{"gadget_1.4.2_linux_armhf.tar.gz", "linux/armv7", "linux"},
-		{"gadget_1.4.2_linux_armv6.tar.gz", "linux/armv6", "linux"},
-		{"gadget_1.4.2_linux_i386.tar.gz", "linux/386", "linux"},
-		// 规格 §11：Windows 认得出来，但不能进 [artifact]。key 空、goos 非空
-		// 就是「认出来了但用不了」，调用方靠这个区分它和一个完全没认出来的文件。
-		{"gadget_1.4.2_windows_amd64.zip", "", "windows"},
-		{"gadget_1.4.2_win_x86_64.zip", "", "windows"},
-		// 认不出来的一律跳过，不许瞎猜。
-		{"checksums.txt", "", ""},
-		{"artifacts.json", "", ""},
-		{"gadget_1.4.2_linux.tar.gz", "", "linux"}, // 只有 os 没有 arch
-		{"gadget_amd64.tar.gz", "", ""},            // 只有 arch 没有 os
-	}
-	for _, c := range cases {
-		key, goos := iniDetect(c.file)
-		if key != c.key || goos != c.goos {
-			t.Errorf("iniDetect(%q) = (%q,%q)，想要 (%q,%q)", c.file, key, goos, c.key, c.goos)
-		}
-	}
-}
+// 文件名反推本身在 internal/assetname 里，它的单测也在那儿（Classify / Infer 两组）。
+// 这个文件只测 cmd 这一层：反推结果怎么变成一份能解析的 toy.toml、怎么落地、
+// 以及那两条【必须走完整条命令】才有意义的回归。
+//
+// 别把 assetname 的表驱动用例抄回这里 —— 抄回来就是第二份会漂移的实现的第二份
+// 会漂移的测试，而这个包被抽出来正是为了消灭第一份。
 
-// 版本号不换成 {version}，作者每次发版都要回来改这个文件 ——
-// 而「打个 tag 就是发新版」是这个产品的卖点。
-func TestIniScanReplacesTheVersion(t *testing.T) {
-	files := []string{
-		"gadget_1.4.2_linux_amd64.tar.gz",
-		"gadget_1.4.2_darwin_arm64.tar.gz",
-		"checksums.txt",
-	}
-	assets, _ := iniScan(files, "")
-	if len(assets) != 2 {
-		t.Fatalf("认出 %d 个，想要 2：%+v", len(assets), assets)
-	}
-	for _, a := range assets {
-		if strings.Contains(a.tmpl, "1.4.2") {
-			t.Errorf("%q 里还留着写死的版本号：%q", a.file, a.tmpl)
-		}
-		if !strings.Contains(a.tmpl, "{version}") {
-			t.Errorf("%q 没有 {version} 占位符：%q", a.file, a.tmpl)
-		}
-	}
-}
-
-// 资产名里带 v 前缀时，{version} 不带 v（规格 §3），所以只该替换裸版本号，
-// 让 v 留在模板里 —— 换掉 "v1.4.2" 会生成一个每次都少个 v 的地址。
-func TestIniScanKeepsTheVPrefixInTheTemplate(t *testing.T) {
-	assets, _ := iniScan([]string{"gadget_v1.4.2_linux_amd64.tar.gz"}, "")
-	if len(assets) != 1 {
-		t.Fatalf("认出 %d 个，想要 1", len(assets))
-	}
-	if got, want := assets[0].tmpl, "gadget_v{version}_linux_amd64.tar.gz"; got != want {
-		t.Fatalf("模板 = %q，想要 %q", got, want)
-	}
-}
-
-// --version 说了算：文件名里认不出三段式版本（1.4 这种）时它是唯一的出路。
-func TestIniScanHonoursTheGivenVersion(t *testing.T) {
-	assets, _ := iniScan([]string{"gadget-2024.09-linux-amd64.tar.gz"}, "2024.09")
-	if got, want := assets[0].tmpl, "gadget-{version}-linux-amd64.tar.gz"; got != want {
-		t.Fatalf("模板 = %q，想要 %q", got, want)
-	}
-}
-
-// 同一个平台发了 .tar.gz 和 .zip 两份很常见。静默丢一个会让作者以为
-// 自己发的那个格式生效了，所以必须说出来。
-func TestIniScanReportsDuplicatePlatforms(t *testing.T) {
-	assets, skipped := iniScan([]string{
-		"gadget_1.0.0_linux_amd64.tar.gz",
-		"gadget_1.0.0_linux_amd64.zip",
-	}, "")
-	if len(assets) != 1 {
-		t.Fatalf("同一个平台应该只留一行，得到 %d", len(assets))
-	}
-	if len(skipped) != 1 || !strings.Contains(skipped[0], "linux/amd64") {
-		t.Fatalf("重复的那个要说明，得到 %v", skipped)
-	}
-}
-
-// 规格 §11：不做 Windows。但静默跳过等于让作者以为 Windows 用户装得上。
-func TestIniScanSaysWhyWindowsIsSkipped(t *testing.T) {
-	assets, skipped := iniScan([]string{"gadget_1.0.0_windows_amd64.zip"}, "")
-	if len(assets) != 0 {
-		t.Fatalf("Windows 不能进 [artifact]，得到 %+v", assets)
-	}
-	if len(skipped) != 1 || !strings.Contains(skipped[0], "Windows") {
-		t.Fatalf("要说明是因为 Windows，得到 %v", skipped)
-	}
-}
-
-func TestIniCommonPrefix(t *testing.T) {
-	cases := []struct {
-		in   []string
-		want string
-	}{
-		{[]string{"gadget_1.4.2_linux_amd64.tar.gz", "gadget_1.4.2_darwin_arm64.tar.gz"}, "gadget"},
-		{[]string{"my-tool-1.0.0-linux-amd64.tar.gz", "my-tool-1.0.0-darwin-arm64.tar.gz"}, "my-tool"},
-		{[]string{"solo_1.0.0_linux_amd64.tar.gz"}, "solo"},
-		{[]string{"a_1.0.0_linux_amd64.tar.gz", "b_1.0.0_linux_arm64.tar.gz"}, ""},
-	}
-	for _, c := range cases {
-		assets := make([]iniAsset, len(c.in))
-		for i, f := range c.in {
-			assets[i] = iniAsset{file: f}
-		}
-		if got := iniCommonPrefix(assets); got != c.want {
-			t.Errorf("iniCommonPrefix(%v) = %q，想要 %q", c.in, got, c.want)
-		}
-	}
-}
-
-// 生成出来的东西必须能被真正的解析器吃下去 —— 否则这条命令交付的是
-// 一个"看起来生成好了"的谜题。这条也顺带钉住 [sha256] 的 key 和 [artifact] 一致
-// （toyfile.Parse 对不上就拒）。
 func TestIniRenderProducesAParsableToyfile(t *testing.T) {
 	assets := []iniAsset{
 		{key: "linux/amd64", tmpl: "gadget_{version}_linux_amd64.tar.gz", sum: strings.Repeat("a", 64)},
@@ -230,60 +108,85 @@ func TestRunInitRefusesToWriteAnEmptyShell(t *testing.T) {
 }
 
 // goreleaser 在 GOARCH=arm 且没设 goarm 时，默认 name_template 产出的就是
-// `tool_1.2.3_linux_arm.tar.gz`。裸 "arm" 一度不在 iniArch 里，于是这份构建
-// 被【静默丢掉】：init 打印「认出了 4 个平台」，看起来一切正常，而树莓派用户
-// 装的时候拿到的是「没有适配当前平台的构建」。
+// `tool_1.2.3_linux_arm.tar.gz`。裸 "arm" 一度不在映射表里，于是这份构建被
+// 【静默丢掉】：init 打印「认出了 N 个平台」，看起来一切正常，而树莓派用户装的
+// 时候拿到的是「没有适配当前平台的构建」。
 //
-// linux/arm 不是个可有可无的 key —— platform.go 就是拿它给 armv6/armv7
-// 兜底的（规格 §3.1）。
-func TestInitRecognizesBareArm(t *testing.T) {
-	for _, f := range []string{
+// linux/arm 不是个可有可无的 key —— platform.go 就是拿它给 armv6/armv7 兜底的
+// （规格 §3.1）。走完整条命令而不是只调推断函数：漏掉的那一环可以是 cmd 这一层
+// 把结果转成 [artifact] 时丢的，而那种丢法在推断的单测里看不见。
+func TestRunInitKeepsBareArm(t *testing.T) {
+	tf := iniRunOnDist(t, []string{
 		"tool_1.2.3_linux_arm.tar.gz",
-		"tool-1.2.3-linux-arm.tar.gz",
-	} {
-		key, _ := iniDetect(f)
-		if key != "linux/arm" {
-			t.Errorf("%s：认出的 key 是 %q，想要 linux/arm", f, key)
-		}
-	}
-	// armv6/armv7 仍然按代次认，别被上面那条盖掉。
-	for f, want := range map[string]string{
-		"tool_1.2.3_linux_armv6.tar.gz": "linux/armv6",
-		"tool_1.2.3_linux_armv7.tar.gz": "linux/armv7",
-		"tool_1.2.3_linux_armhf.tar.gz": "linux/armv7",
-	} {
-		if key, _ := iniDetect(f); key != want {
-			t.Errorf("%s：认出的 key 是 %q，想要 %s", f, key, want)
+		"tool_1.2.3_linux_armv6.tar.gz",
+		"tool_1.2.3_linux_armv7.tar.gz",
+		"tool_1.2.3_linux_amd64.tar.gz",
+	})
+	for _, want := range []string{"linux/arm", "linux/armv6", "linux/armv7", "linux/amd64"} {
+		if tf.Artifact[want] == "" {
+			t.Errorf("[artifact] 里少了 %s：%v", want, tf.Artifact)
 		}
 	}
 }
 
-// 认不出来的【资产】必须出声。静默丢掉的症状和上面那条一模一样：
-// 数字看着对，少的那个平台要等用户来报。
-// 但 checksums.txt / LICENSE 这些本来就不是资产，为它们报警会把真的那条淹掉。
-func TestInitReportsUnrecognizedAssetsButNotStrayFiles(t *testing.T) {
-	assets, skipped := iniScan([]string{
+// 认不出来的【资产】必须出声。静默丢掉的症状和上面那条一模一样：数字看着对，
+// 少的那个平台要等用户来报。但 checksums.txt / LICENSE 这些本来就不是资产，
+// 为它们报警会把真的那条淹掉。
+func TestRunInitReportsUnrecognizedAssetsButNotStrayFiles(t *testing.T) {
+	files := []string{
 		"tool_1.2.3_linux_amd64.tar.gz",
 		"tool_1.2.3_freebsd_riscv64.tar.gz", // 像资产，认不出 → 要出声
 		"checksums.txt",                     // 不是资产 → 不许出声
 		"LICENSE",
 		"README.md",
-	}, "")
-	if len(assets) != 1 {
-		t.Fatalf("认出的资产数 = %d，想要 1：%v", len(assets), assets)
 	}
-	var mentions int
-	for _, s := range skipped {
-		if strings.Contains(s, "freebsd_riscv64") {
-			mentions++
+	var lines []string
+	for _, a := range assetnameSkipped(files) {
+		lines = append(lines, a.File+"："+a.Skip)
+	}
+	joined := strings.Join(lines, "\n")
+	if strings.Count(joined, "freebsd_riscv64") != 1 {
+		t.Errorf("认不出的资产应该被报一次：%q", joined)
+	}
+	for _, quiet := range []string{"checksums.txt", "LICENSE", "README.md"} {
+		if strings.Contains(joined, quiet) {
+			t.Errorf("不该为非资产 %s 出声：%q", quiet, joined)
 		}
-		for _, quiet := range []string{"checksums.txt", "LICENSE", "README.md"} {
-			if strings.Contains(s, quiet) {
-				t.Errorf("不该为非资产 %s 出声：%s", quiet, s)
-			}
+	}
+	// 出声归出声，能认的那个平台还是要照常进 [artifact]。
+	if tf := iniRunOnDist(t, files); len(tf.Artifact) != 1 {
+		t.Errorf("想要 1 个平台，得到 %v", tf.Artifact)
+	}
+}
+
+// iniRunOnDist 造一个 dist、跑一遍 runInit、把写出来的 toy.toml 解析回来。
+func iniRunOnDist(t *testing.T, files []string) *toyfile.Toyfile {
+	t.Helper()
+	dir := t.TempDir()
+	dist := filepath.Join(dir, "dist")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dist, f), []byte(f), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if mentions != 1 {
-		t.Errorf("认不出的资产应该被报一次，实际 %d 次：%v", mentions, skipped)
+	if err := runInit(t.Context(), []string{"--name", "tool", dir}); err != nil {
+		t.Fatalf("runInit：%v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(dir, "toy.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf, err := toyfile.Parse(data)
+	if err != nil {
+		t.Fatalf("写出来的 toy.toml 解析不了：%v\n%s", err, data)
+	}
+	return tf
+}
+
+// assetnameSkipped 拿到 cmd 这一层真正会打印的那份跳过清单。
+func assetnameSkipped(files []string) []assetname.Asset {
+	return assetname.Infer(files, "").Skipped
 }

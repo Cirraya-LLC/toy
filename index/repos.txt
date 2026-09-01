@@ -1,0 +1,30 @@
+# toy 索引的种子列表 —— 一行一个 owner/repo，# 之后是注释。
+# 来源：常见的 "modern CLI tools" awesome-list（the design notes §11 的冷启动办法）。
+# 跑法见 index/README.md；一律带 --probe，不带的话 [bin] 右边是猜的。
+
+junegunn/fzf              # 已在索引里
+mikefarah/yq              # 已在索引里
+
+# cargo-dist / Rust 那一批（§14.13 剥顶层目录之后才收得了）
+BurntSushi/ripgrep
+sharkdp/fd
+sharkdp/bat
+dandavison/delta
+eza-community/eza
+ajeetdsouza/zoxide
+sharkdp/hyperfine
+bootandy/dust
+chmln/sd
+XAMPPRocky/tokei
+dalance/procs
+ClementTsang/bottom
+Peltoche/lsd
+
+# Go 那一批
+muesli/duf
+jesseduffield/lazygit
+charmbracelet/glow
+wagoodman/dive
+
+# C
+tstack/lnav

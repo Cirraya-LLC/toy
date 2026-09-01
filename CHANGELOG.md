@@ -5,6 +5,27 @@
 
 ## [未发布]
 
+### 新增
+
+- **解压时剥掉唯一那层顶层目录**（等价 `tar --strip-components=1`）：整棵树只有
+  一个顶层条目且它是目录时剥掉它。cargo-dist 的包套着
+  `<名字>-<版本>-<triple>/`，那个名字同时钉死版本和平台，而 `[bin]` 右边表达不了
+  —— 于是 ripgrep / fd / bat / delta / eza 一个都收不了。剥完 `[bin] rg = "rg"`
+  就成立。两个及以上顶层条目、顶层是文件、顶层是符号链接、空目录，一律不剥；
+  剥完会让包里某条相对符号链接指到目标目录外面时，也整个不剥（铁律 7）。
+- **glibc 机器的平台候选末位兜底到 musl 构建**（`linux/amd64/gnu` →
+  `linux/amd64` → `linux/amd64/musl`，arm64 同理）。ripgrep、zoxide 的 x86-64
+  只发 musl 一份，而静态 musl 二进制在 glibc 机器上照跑。**反方向不加**：musl
+  机器退到 glibc 构建是真的起不来。命中时照常打一句回退说明（铁律 8）。
+- **资产名认 `i686`**（→ `386`）。ripgrep / fd / zoxide 的 32 位 Linux 构建以前
+  被静默丢掉。
+
+### 变更
+
+- FreeBSD / OpenBSD / NetBSD / Solaris / illumos 的资产从"认不出是哪个平台的"
+  改归"认出来了但不是 toy 支持的系统"—— 前者那句话是在请作者补一行 `[artifact]`，
+  而补了也装不上。
+
 ## [0.1.0] - 2026-09-01
 
 首个版本。

@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 BIN   := ./toy
 
-.PHONY: all fmt build vet test e2e e2e-inline check snapshot verify-toyfile clean
+.PHONY: all fmt build vet test e2e e2e-inline check index-check index-gen snapshot verify-toyfile clean
 
 all: check
 
@@ -27,6 +27,23 @@ e2e-inline:
 	bash scripts/e2e-inline.sh
 
 check: fmt build vet test e2e e2e-inline
+
+# 索引回归检查：把 index/toy-index.json 里的每一条真的装一遍、跑一遍、卸一遍。
+# **故意不进 check** —— 它要联网、要真的下载几 MB，属于 index-check.yml 那条
+# 定时线，不属于每次提交都跑的那一批。
+#   make index-check                          全量
+#   make index-check ARGS="--only owner/repo" 只测一条（PR 上就是这么跑的）
+index-check:
+	bash scripts/index-check.sh $(ARGS)
+
+# 批量生成索引条目（cmd/toy-index）。**故意不进 check** —— 它要联网、要调
+# 托管方的 API，是维护者手动跑的离线批处理，不是每次提交都跑的那一批。
+# 客户端（cmd/toy）永远不用 API，这两个二进制分开的理由见 the design notes §14.11。
+#   make index-gen ARGS="--repos index/repos.txt"
+#   make index-gen ARGS="--repos index/repos.txt --update --probe"
+# 不带 $GITHUB_TOKEN 只有 60 次/小时，很快就撞限流。
+index-gen:
+	go run ./cmd/toy-index gen $(ARGS)
 
 # 本地按 release 的方式构建一遍（要装了 goreleaser）。
 snapshot:

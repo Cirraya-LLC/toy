@@ -185,6 +185,37 @@ release = "file://$UP/dist/{asset}"
 web     = "file://$UP"
 EOF
 
+echo "== cargo-dist 的形状：唯一那层顶层目录要被剥掉 =="
+# 那个目录名同时含版本号和 target triple，而 [bin] 是单个字符串、不按平台变、
+# 也不展开 {version} —— 表达不了。不剥的话 ripgrep / fd / bat / delta / eza
+# 这一整块（现代 CLI 工具里最大的一块）一个都收不了。
+NEST="$WORK/nest"; mkdir -p "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/doc"
+printf '#!/bin/sh\necho "nested ok"\n' > "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/tinytool"
+chmod +x "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/tinytool"
+echo man > "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/doc/tinytool.1"
+tar -C "$NEST" -czf "$UP/dist/tinytool_1.2.0_${GOOS_}_${GOARCH_}.tar.gz" "tinytool-3.1.0-${GOOS_}_${GOARCH_}"
+cat > "$UP/toy.toml" <<EOF
+name = "tinytool"
+desc = "整棵树套在一层目录里"
+license = "MIT"
+[bin]
+tinytool = "tinytool"
+[artifact]
+"$GOOS_/$GOARCH_" = "tinytool_{version}_${GOOS_}_${GOARCH_}.tar.gz"
+EOF
+( cd "$UP" && git add -A && git -c user.email=t@e.st -c user.name=t commit -q -m nest )
+if "$TOY" install local:test/tinytool >"$WORK/nest.log" 2>&1; then
+  ok "[bin] 写成剥完之后的 \"tinytool\" 就能装上"
+else
+  bad "套一层目录的包装不上"; cat "$WORK/nest.log"
+fi
+check "装出来的命令真的能跑"                  "tinytool | grep -q 'nested ok'"
+PKGDIR="$(dirname "$(readlink "$TOY_HOME/bin/tinytool")")"
+check "包目录顶层直接就是 tinytool，那层目录没了" \
+      "test -f '$PKGDIR/tinytool' && test ! -e '$PKGDIR/tinytool-3.1.0-${GOOS_}_${GOARCH_}'"
+check "目录里别的东西一个没丢（剥的是层，不是内容）" "test -f '$PKGDIR/doc/tinytool.1'"
+"$TOY" uninstall tinytool >/dev/null 2>&1 || true
+
 echo "== 铁律：不许遮蔽 PATH 上已有的命令 =="
 cat > "$UP/toy.toml" <<'EOF'
 name = "evil"
