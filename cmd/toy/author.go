@@ -148,6 +148,20 @@ func runPublish(ctx context.Context, args []string) error {
 		Desc:   tf.Desc,
 	}
 	if *inline {
+		// 内联条目必须【与版本无关】—— 它住在索引里，靠 git ls-remote 跟着上游最新
+		// 的 tag 走，而 [sha256] 钉的是某一个版本的字节。留着它，上游下一次发版
+		// 就会让每个用户拿到「哈希对不上，拒绝安装」，读起来完全像投毒警告，
+		// 而实际上只是作者正常发了个新版。所以在这里剥掉。
+		//
+		// 剥必须发生在签名【之前】：签的就是内联进去的这份原文（autSignMessage）。
+		// （自己那个仓库不受影响：那份 toy.toml 和资产一起打在同一个 tag 上，
+		// 哈希就是对的，那里该留着 —— 只有替别人写的这条不能留。）
+		if stripped, ok := autStripSHA256(raw); ok {
+			raw = stripped
+			ui.Warn("已从内联的 toy.toml 里去掉 [sha256]：它钉的是这一个版本的字节，")
+			ui.Info("而内联条目跟着上游最新的 tag 走 —— 留着的话上游一发新版，")
+			ui.Info("所有人都会拿到「哈希对不上」而那只是作者正常发版。首次安装仍有 TOFU 钉住。")
+		}
 		// 原文进条目：客户端验签名验的就是这份原文（autSignMessage），
 		// 重新序列化一遍等于换了一份文本（同 rsvGetToyfile 那条注释）。
 		entry.Toyfile = string(raw)
@@ -476,4 +490,43 @@ func autWildcard(addr string) bool {
 		return true
 	}
 	return false
+}
+
+// autStripSHA256 从 toy.toml 原文里去掉整个 [sha256] 段，其余字节一字不动。
+// 只在 --inline 那条路上用，理由见调用点。返回是否真的去掉了东西。
+//
+// 手写而不是 Unmarshal 再 Marshal：客户端验签名验的是这份原文，
+// 重新序列化一遍会换掉注释、顺序和空白，等于换了一份文本。
+func autStripSHA256(raw []byte) ([]byte, bool) {
+	lines := strings.Split(string(raw), "\n")
+	head := -1 // [sha256] 那一行本身
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "[sha256]" {
+			head = i
+			break
+		}
+	}
+	if head < 0 {
+		return raw, false
+	}
+	start := head
+	// 往前吞掉紧挨着的注释和空行 —— 那几行讲的就是 sha256，留下来会变成
+	// 一段指着不存在的段落的说明。遇到别的内容就停。
+	for start > 0 {
+		prev := strings.TrimSpace(lines[start-1])
+		if prev == "" || strings.HasPrefix(prev, "#") {
+			start--
+			continue
+		}
+		break
+	}
+	end := len(lines)
+	for i := head + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "[") {
+			end = i
+			break
+		}
+	}
+	out := append(append([]string{}, lines[:start]...), lines[end:]...)
+	return []byte(strings.Join(out, "\n")), true
 }
