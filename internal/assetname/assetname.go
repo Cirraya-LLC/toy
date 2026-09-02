@@ -155,17 +155,17 @@ func looksLikeCompanion(f string) bool {
 
 // 跳过的原因。文案是给人看的，会被原样打进 toy init 的输出里。
 const (
-	SkipWindows      = "认出来是 Windows，但 toy v1 不支持 Windows（规格 §11），跳过"
-	SkipUnrecognized = "认不出是哪个平台的（os 或 arch 没认出来），跳过。" +
-		"确实是个发布资产的话，自己往 [artifact] 里补一行"
-	SkipNotAnAsset = "不像发布资产（后缀不是压缩包），跳过"
-	SkipAndroid    = "认出来是 Android（bionic）构建 —— 名字里带 linux，但它在 Linux 机器上跑不起来，跳过"
+	SkipWindows      = "Windows build, and toy v1 does not support Windows (spec §11) — skipped"
+	SkipUnrecognized = "cannot tell which platform this is (no OS or arch recognized) — skipped. " +
+		"If it really is a release asset, add a line for it to [artifact] yourself"
+	SkipNotAnAsset = "does not look like a release asset (not an archive) — skipped"
+	SkipAndroid    = "Android (bionic) build — the name says linux, but it will not run on a Linux machine — skipped"
 )
 
 // SkipForeignOS 是「认出来了，但那不是 toy 支持的系统」。和 SkipUnrecognized
 // 分开：后者是在请作者手写一行 [artifact]，而这些系统写了也装不上。
 func SkipForeignOS(goos string) string {
-	return "认出来是 " + goos + " 构建，toy v1 只支持 Linux 和 macOS（规格 §11），跳过"
+	return goos + " build, and toy v1 only supports Linux and macOS (spec §11) — skipped"
 }
 
 // Asset 是一个 release 资产被认出来的样子。
@@ -323,8 +323,8 @@ func Infer(files []string, forceVersion string) Result {
 	seen := map[string]string{}
 	for _, h := range hits {
 		if first, dup := seen[h.Platform]; dup {
-			h.Skip = "和 " + first + " 同属 " + h.Platform +
-				"，只能留一个，留了排前面的那个。要换就自己改 [artifact] 里那一行"
+			h.Skip = "same platform (" + h.Platform + ") as " + first +
+				"; only one can be kept, so the first one won. To keep this one instead, edit that line in [artifact] yourself"
 			h.Notable = true
 			h.Platform = ""
 			res.Skipped = append(res.Skipped, h)

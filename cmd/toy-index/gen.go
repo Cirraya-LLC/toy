@@ -101,7 +101,7 @@ func gen(ctx context.Context, cfg genConfig) error {
 
 	// 一个仓库失败不影响其它，但整批一个都没成的时候不该退 0 —— CI 上那会静默过去。
 	if changed == 0 && anyFailed(results) {
-		return errors.New("一个条目都没产出（上面每条都写了原因）")
+		return errors.New("no entries produced (every line above says why)")
 	}
 	return nil
 }
@@ -116,13 +116,13 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 	// 而 index.validID 用的也是它 —— 抄一份的下场就是慢慢分叉。
 	switch {
 	case err != nil:
-		res.err = fmt.Errorf("解析不了：%w", err)
+		res.err = fmt.Errorf("cannot parse: %w", err)
 		return res
 	case r.Version != "":
-		res.err = errors.New("列表里不要带 @版本：索引条目指的是仓库，装哪一版由 git tag 决定（规格 §5）")
+		res.err = errors.New("drop the @version: an index entry names a repo, and which version gets installed is decided by git tags (spec §5)")
 		return res
 	case r.Kind != ref.KindIndex && !(r.Kind == ref.KindHost && r.Host == "github"):
-		res.err = errors.New("只认 owner/repo（或 github:owner/repo）这两种写法")
+		res.err = errors.New("only owner/repo or github:owner/repo is accepted here")
 		return res
 	}
 	res.id = r.ID()
@@ -134,15 +134,15 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 			// 重新生成必然换掉 toyfile 原文，而签名签的就是那份原文 —— 覆盖等于
 			// 把一个「✓」悄悄弄没。规格 §5 说签名消失要停下来让人决定，那这里就
 			// 别替人决定。--update 也不放行。
-			res.skip = "索引里那条是签过名的，不动它（重新生成会让签名失效）"
+			res.skip = "the entry in the index is signed; leaving it alone (regenerating would invalidate the signature)"
 			return res
 		case old.Toyfile == "":
 			// 指针条目 = 上游自己有 toy.toml，客户端装出来是 host 档。换成内联
 			// 就是 TrustHost → TrustIndexed 的降档（§5.1 第 6 条），不是刷新。
-			res.skip = "索引里那条是指针条目（上游自己有 toy.toml），换成内联是降档，不动"
+			res.skip = "the entry in the index is a pointer (upstream ships its own toy.toml); inlining it would downgrade trust, so leaving it alone"
 			return res
 		case !cfg.update:
-			res.skip = "已经在索引里了，跳过（要覆盖加 --update）"
+			res.skip = "already in the index, skipping (pass --update to overwrite)"
 			return res
 		}
 	}
@@ -158,9 +158,9 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 	// 版本」，报错里连"是因为 tag 的形状"都看不出来。
 	// 这和 unstableBinPath 是同一类判断：装不下去的条目不该进索引。
 	if _, verr := semver.Parse(info.Tag); verr != nil {
-		res.err = fmt.Errorf("最新 release 的 tag 是 %q，不是 semver（要形如 v1.2.3）—— "+
-			"客户端用 `git ls-remote --tags` + semver 挑版本，这个仓库它一个版本都认不出来，"+
-			"收录了也装不上", tomlSafe(info.Tag, 64))
+		res.err = fmt.Errorf("the latest release is tagged %q, which is not semver (it has to look like v1.2.3). "+
+			"The client picks versions with `git ls-remote --tags` + semver, so it would not recognise a "+
+			"single version here -- listing this repo produces an entry nobody can install", tomlSafe(info.Tag, 64))
 		return res
 	}
 
@@ -174,7 +174,7 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 		switch hit, cands, err := probeBin(ctx, cfg.host, p); {
 		case err != nil:
 			// 探不到不算失败：条目照出，只是 [bin] 仍然是猜的，报告里会说。
-			p.notes = append(p.notes, "探测没成："+err.Error())
+			p.notes = append(p.notes, "probe failed: "+err.Error())
 		case hit != "":
 			if why := unstableBinPath(hit, p.res.Version); why != "" {
 				// 探到的路径靠不住时【整条判失败】，不产出条目：一条今天能装、
@@ -182,8 +182,8 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 				// 报错里把探到的路径原样给出来，人要手写的时候答案就在眼前。
 				// 唯一那层顶层目录解压时已经被剥掉了，所以走到这里的是剥不掉的那种：
 				// 顶层不止一个条目，或者路径本身就带着版本号 / 平台名。
-				res.err = fmt.Errorf("探到的包内路径是 %q，%s。"+
-					"这条要手写（或者让作者自己加 toy.toml）", hit, why)
+				res.err = fmt.Errorf("the probed in-package path is %q: %s. "+
+					"Write this entry by hand (or get the author to add their own toy.toml)", hit, why)
 				return res
 			}
 			p.binPath, p.binProbed = hit, true
@@ -194,12 +194,12 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 			// 所以装完能跑、只是没人叫得出它。探到了就以探到的为准。
 			if base := path.Base(hit); base != p.binName && cleanName(base) {
 				p.notes = append(p.notes, fmt.Sprintf(
-					"命令名按探到的文件取成 %q（资产名前缀是 %q）", base, p.binName))
+					"command name taken from the probed file: %q (the asset-name prefix was %q)", base, p.binName))
 				p.binName = base
 			}
 		default:
-			p.notes = append(p.notes, "包里有多个可执行文件，定不下来 [bin] 该指哪个，"+
-				"自己挑一个："+strings.Join(head(cands, 8), "、"))
+			p.notes = append(p.notes, "the archive holds several executables, so [bin] cannot be settled "+
+				"automatically -- pick one: "+strings.Join(head(cands, 8), ", "))
 		}
 	}
 
@@ -222,11 +222,11 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 func loadIndex(path string) (*index.Index, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		ui.Info("%s 还不存在，会新建一份", path)
+		ui.Info("%s does not exist yet; a new one will be created", path)
 		return &index.Index{Version: index.Version}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("读不了索引 %s：%w", path, err)
+		return nil, fmt.Errorf("cannot read index %s: %w", path, err)
 	}
 	idx, skipped, err := index.Load(data, path)
 	if err != nil {
@@ -235,7 +235,7 @@ func loadIndex(path string) (*index.Index, error) {
 	if skipped > 0 {
 		// Load 会把坏记录丢掉，而我们马上要把整份写回去 —— 不说一声就等于
 		// 悄悄删了别人的条目。
-		ui.Warn("%s 里有 %d 条记录不合法，已被丢掉；这次写回去之后它们就没了", path, skipped)
+		ui.Warn("%s holds %d invalid records; they were dropped, and writing the file back removes them for good", path, skipped)
 	}
 	return idx, nil
 }
@@ -251,7 +251,7 @@ func writeIndex(path string, idx *index.Index) error {
 		}
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("写不出索引 %s：%w", path, err)
+		return fmt.Errorf("cannot write index %s: %w", path, err)
 	}
 	return nil
 }
@@ -280,11 +280,11 @@ func report(cfg genConfig, rs []genResult, changed int) {
 		case r.skip != "":
 			fmt.Fprintf(tw, "-\t%s\t%s\n", r.id, r.skip)
 		default:
-			how := "猜的"
+			how := "guessed"
 			if r.pack.binProbed {
-				how = "探到的"
+				how = "probed"
 			}
-			fmt.Fprintf(tw, "✓\t%s\t%d 个平台，bin %s → %s（%s）\n",
+			fmt.Fprintf(tw, "✓\t%s\t%d platforms, bin %s -> %s (%s)\n",
 				r.id, len(r.pack.res.Assets), r.pack.name, r.pack.binPath, how)
 		}
 	}
@@ -296,7 +296,7 @@ func report(cfg genConfig, rs []genResult, changed int) {
 
 	for _, r := range rs {
 		for _, n := range r.pack.notes {
-			ui.Warn("%s：%s", r.id, n)
+			ui.Warn("%s: %s", r.id, n)
 		}
 	}
 
@@ -310,7 +310,7 @@ func report(cfg genConfig, rs []genResult, changed int) {
 	names := reportBinNames(rs)
 	if len(names) > 0 {
 		ui.Info("")
-		ui.Info("这批条目会往 PATH 上放这些命令名 —— 提交之前一个一个看过去：")
+		ui.Info("These entries will put the following command names on PATH -- check every one before committing:")
 		var nb strings.Builder
 		ntw := tabwriter.NewWriter(&nb, 0, 0, 2, ' ', 0)
 		for _, n := range names {
@@ -324,10 +324,11 @@ func report(cfg genConfig, rs []genResult, changed int) {
 
 	ui.Info("")
 	if changed > 0 {
-		ui.Info("写出 %d 条到 %s。每条都是【内联】条目（规格 §5.1）：装它的人会看到降档标识，", changed, cfg.out)
-		ui.Info("而且没有 [sha256] —— 内联条目跟着上游最新 tag 走，钉死某一版会让上游一发新版就「哈希对不上」。")
+		ui.Info("Wrote %d entries to %s. Every one is an inline entry (spec §5.1): whoever installs it sees", changed, cfg.out)
+		ui.Info("the downgraded trust level, and there is no [sha256] -- inline entries follow the upstream's")
+		ui.Info("newest tag, so pinning one version's bytes turns the next release into a checksum mismatch.")
 	} else {
-		ui.Info("没有任何改动，%s 一个字都没动。", cfg.out)
+		ui.Info("Nothing changed; %s was left untouched.", cfg.out)
 	}
 	if q := cfg.prov.Quota(); q != "" {
 		ui.Info("%s", q)

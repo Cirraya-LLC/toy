@@ -39,16 +39,17 @@ import (
 var errUsage = errors.New("usage")
 
 var usageLines = []string{
-	"用法：toy-index gen --repos <文件> [--out index/toy-index.json] [--update] [--probe] [--token <token>]",
+	"Usage: toy-index gen --repos <file> [--out index/toy-index.json] [--update] [--probe] [--token <token>]",
 	"",
-	"  --repos   仓库列表，一行一个 owner/repo；# 开头或行内 # 之后是注释，空行忽略",
-	"  --out     要合并进去的索引 JSON（不存在就新建一份空的）",
-	"  --update  已经在索引里的条目也覆盖。默认跳过 —— 索引里的条目可能被人手工",
-	"            修正过（尤其 [bin] 右边那个包内路径），无脑覆盖会把修正冲掉",
-	"  --probe   下载一个 linux/amd64 资产解开看，把 [bin] 从「猜的」变成「探到的」",
-	"  --token   托管方 API token，不给就读 $GITHUB_TOKEN（不给会很快撞上限流）",
+	"  --repos   Repo list, one owner/repo per line. # starts a comment (whole line or trailing); blank lines ignored",
+	"  --out     Index JSON to merge into (a new empty one is created if it does not exist)",
+	"  --update  Overwrite entries already in the index. Off by default: existing entries may have been",
+	"            hand-corrected (especially the in-package path on the right of [bin]), and a blind",
+	"            overwrite throws those corrections away",
+	"  --probe   Download one linux/amd64 asset and unpack it, turning [bin] from a guess into a fact",
+	"  --token   Host API token; falls back to $GITHUB_TOKEN. Without one you hit the rate limit fast",
 	"",
-	"选项一律写在位置参数前面：flag 包在第一个非 flag 参数处就停止解析。",
+	"Flags go before positional arguments: Go's flag package stops parsing at the first non-flag argument.",
 }
 
 func main() {
@@ -78,7 +79,7 @@ func run(ctx context.Context, args []string) error {
 		printUsage()
 		return nil
 	default:
-		return fmt.Errorf("不认识的子命令 %q，只有 gen", args[0])
+		return fmt.Errorf("unknown subcommand %q; the only one is gen", args[0])
 	}
 }
 
@@ -93,8 +94,8 @@ func printUsage() {
 func readRepoList(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("读不了仓库列表 %s：%w\n"+
-			"格式是一行一个 owner/repo，# 开头的是注释", path, err)
+		return nil, fmt.Errorf("cannot read repo list %s: %w\n"+
+			"The format is one owner/repo per line; # starts a comment", path, err)
 	}
 	var out []string
 	seen := map[string]bool{}
@@ -110,7 +111,7 @@ func readRepoList(path string) ([]string, error) {
 		out = append(out, line)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("%s 里一个仓库都没有（只有空行和注释）", path)
+		return nil, fmt.Errorf("%s lists no repos at all (only blank lines and comments)", path)
 	}
 	return out, nil
 }

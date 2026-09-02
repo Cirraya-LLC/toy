@@ -163,9 +163,9 @@ classify() {
   # `HTTP 500 HTTP 404 Not Found` 就能把一次抖动伪装成"资产名写错了"，然后我们
   # 去改一条其实没问题的条目（§5.1 第 3 条那个真的写出来过的洞的同一个形状）。
   code="$(grep -oE 'HTTP [0-9]{3}' "$log" 2>/dev/null | head -n1 | awk '{print $2}')"
-  if   grep -q '没有适配当前平台的构建' "$log"; then
+  if   grep -q 'toyfile: no build for this platform' "$log"; then
     printf '条目\t作者没发这个平台的构建，或条目的 [artifact] 平台 key 写错了\n'
-  elif grep -q 'sha256 校验失败' "$log"; then
+  elif grep -q 'sha256 checksum mismatch' "$log"; then
     printf '条目\t[sha256] 和实际下载到的字节对不上（上游重打了包？还是条目抄错了）\n'
   elif [ -n "$code" ]; then
     case "$code" in
@@ -173,21 +173,21 @@ classify() {
       401|403) printf '条目\t下载 %s：这个 release 要登录或已经私有了，收录不了\n' "$code" ;;
       *)       printf '网络\t上游回了 HTTP %s，这是抖动不是条目的错，重试\n' "$code" ;;
     esac
-  elif grep -qE '这个仓库没有发布二进制|只能有一个|缺少 name|bin 目标路径不安全' "$log"; then
+  elif grep -q 'toyfile: ' "$log"; then
     printf '条目\t内联的 toyfile 本身有问题\n'
-  elif grep -q '链接目标' "$log"; then
+  elif grep -q 'store: link target' "$log"; then
     printf '运行\t包里没有 [bin] 右边写的那个文件 —— 压缩包多半套了一层目录\n'
-  elif grep -q '遮蔽 PATH' "$log"; then
+  elif grep -q 'shadow' "$log"; then
     printf '条目\t[bin] 起的命令名和这台机器上已有的程序撞了，换个名字\n'
-  elif grep -q '不认识这个托管方' "$log"; then
+  elif grep -q 'host: unknown host' "$log"; then
     printf '条目\tsource 的托管方没配（config.toml 的 [hosts.*]）\n'
-  elif grep -q '无法解析这个包引用' "$log"; then
+  elif grep -q 'cannot parse this package reference' "$log"; then
     printf '条目\tid 或 source 的格式坏了\n'
-  elif grep -q '一个 tag 都没有' "$log"; then
-    printf '条目\t上游一个 tag 都没有 —— toy 靠 tag 发现版本，这条收录不了\n'
-  elif grep -qE '超时了|i/o timeout|context deadline|Client\.Timeout|connection refused|no such host|TLS handshake|Temporary failure|Could not resolve' "$log"; then
+  elif grep -qE 'has no tags at all|is a semver version|no stable release' "$log"; then
+    printf '条目\t上游没有可用的 semver tag（一个都没有，或都不是 v1.2.3 这种形状）—— toy 靠 tag 发现版本，这条收录不了\n'
+  elif grep -qE 'timed out|i/o timeout|context deadline|Client\.Timeout|connection refused|no such host|TLS handshake|Temporary failure|Could not resolve' "$log"; then
     printf '网络\t连不上/超时\n'
-  elif grep -qE 'ls-remote .* 失败' "$log"; then
+  elif grep -qE 'ls-remote .* failed' "$log"; then
     printf '条目\t读不到上游的 tag（仓库改名了？删了？转私有了？）\n'
   else
     printf '网络\t说不清（原文见下）—— 先当抖动重试一次，还失败就按条目问题查\n'
@@ -219,7 +219,7 @@ fail() { # $1=类别 $2=说明
   local raw
   # 不截断：这行常常很长，但「是哪个 URL / 哪个文件」全在里面。按字节截会把
   # 一个 UTF-8 汉字劈成半个，贴进 issue 就是一串乱码。
-  raw="$(grep -m1 '^错误:' "$LOG" 2>/dev/null | tr -d '\t')"
+  raw="$(grep -m1 '^error:' "$LOG" 2>/dev/null | tr -d '\t')"
   [ -n "$raw" ] || raw="$(tail -n 1 "$LOG" 2>/dev/null | tr -d '\t')"
   printf '%s\t%s\t%s\t%s\t%s\n' "$ID" "${SRC:-—}" "$1" "$2" "$raw" >> "$WORK/failures.txt"
   rm -rf "$HOME_DIR"

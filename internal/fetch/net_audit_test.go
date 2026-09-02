@@ -42,7 +42,7 @@ func TestRedirectHTTPSToHTTPIsRefused(t *testing.T) {
 	}
 	// 报错必须说清楚是降级，不能只是一句光秃秃的"拿不到"——
 	// 用户没法从后者推出"你的上游把我踢到明文上了"。
-	if !strings.Contains(err.Error(), "降级") {
+	if !strings.Contains(err.Error(), "downgrades") {
 		t.Errorf("报错没说清是降级：%v", err)
 	}
 }
@@ -258,7 +258,7 @@ func TestArtifactDownloadIsCapped(t *testing.T) {
 			if err == nil {
 				t.Fatal("超过上限居然成功了")
 			}
-			if !strings.Contains(err.Error(), "上限") {
+			if !strings.Contains(err.Error(), "size limit") {
 				t.Errorf("报错没说是体积上限：%v", err)
 			}
 			// 允许多冲几个缓冲区：LimitReader 卡在 limit+1 上，但服务器那边可能

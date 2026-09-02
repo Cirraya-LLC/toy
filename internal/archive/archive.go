@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	ErrTraversal   = errors.New("archive: 压缩包里有逃出目标目录的路径")
-	ErrUnsupported = errors.New("archive: 不认识这个压缩格式")
-	ErrTooLarge    = errors.New("archive: 解压后体积超过上限")
+	ErrTraversal   = errors.New("archive: path escapes the destination directory")
+	ErrUnsupported = errors.New("archive: unsupported archive format")
+	ErrTooLarge    = errors.New("archive: extracted size exceeds the limit")
 )
 
 // MaxTotalBytes 是解压后总字节数上限，防 zip bomb。
@@ -80,24 +80,24 @@ func Extract(src, destDir string) ([]string, error) {
 func extractTo(src, destDir string, limit int64) ([]string, error) {
 	switch formatOf(src) {
 	case kindNone:
-		return nil, fmt.Errorf("%w：%s。只认 .tar.gz/.tgz/.tar/.zip，裸二进制请直接当单文件装",
+		return nil, fmt.Errorf("%w: %s. Only .tar.gz/.tgz/.tar/.zip are supported; install a bare binary as a single file instead",
 			ErrUnsupported, filepath.Base(src))
 	case kindTarXz:
-		return nil, fmt.Errorf("%w：%s 要外部 xz 才解得开。请让作者改发 .tar.gz 或 .zip",
+		return nil, fmt.Errorf("%w: %s needs an external xz to unpack. Ask the author to ship .tar.gz or .zip instead",
 			ErrUnsupported, filepath.Base(src))
 	}
 
 	dest, err := filepath.Abs(destDir)
 	if err != nil {
-		return nil, fmt.Errorf("archive: 求不出 %q 的绝对路径：%w", destDir, err)
+		return nil, fmt.Errorf("archive: cannot resolve %q to an absolute path: %w", destDir, err)
 	}
 	dest = filepath.Clean(dest)
 	fi, err := os.Stat(dest)
 	if err != nil {
-		return nil, fmt.Errorf("archive: 目标目录 %s 不可用：%w", dest, err)
+		return nil, fmt.Errorf("archive: destination directory %s is unusable: %w", dest, err)
 	}
 	if !fi.IsDir() {
-		return nil, fmt.Errorf("archive: 目标 %s 不是目录", dest)
+		return nil, fmt.Errorf("archive: destination %s is not a directory", dest)
 	}
 
 	e := &extractor{dest: dest, limit: limit, regular: map[string]bool{}}
@@ -135,7 +135,7 @@ func extractTo(src, destDir string, limit int64) ([]string, error) {
 func (e *extractor) stripTopDir() error {
 	ents, err := os.ReadDir(e.dest)
 	if err != nil {
-		return fmt.Errorf("archive: 剥顶层目录前读不了 %s：%w", e.dest, err)
+		return fmt.Errorf("archive: cannot read %s before stripping the top-level directory: %w", e.dest, err)
 	}
 	if len(ents) != 1 || !ents[0].IsDir() {
 		return nil
@@ -144,7 +144,7 @@ func (e *extractor) stripTopDir() error {
 	topDir := filepath.Join(e.dest, top)
 	inner, err := os.ReadDir(topDir)
 	if err != nil {
-		return fmt.Errorf("archive: 剥顶层目录时读不了 %s：%w", topDir, err)
+		return fmt.Errorf("archive: cannot read %s while stripping the top-level directory: %w", topDir, err)
 	}
 	if len(inner) == 0 {
 		return nil
@@ -159,15 +159,15 @@ func (e *extractor) stripTopDir() error {
 	// 这个临时名字和 top 同一个父目录（也就是同一个文件系统），rename 不会跨设备。
 	staged := topDir + ".toy-strip"
 	if err := os.Rename(topDir, staged); err != nil {
-		return fmt.Errorf("archive: 剥掉顶层目录 %s 时挪不开它：%w", top, err)
+		return fmt.Errorf("archive: cannot move top-level directory %s aside while stripping it: %w", top, err)
 	}
 	for _, ent := range inner {
 		if err := os.Rename(filepath.Join(staged, ent.Name()), filepath.Join(e.dest, ent.Name())); err != nil {
-			return fmt.Errorf("archive: 剥掉顶层目录 %s 时挪 %s 失败：%w", top, ent.Name(), err)
+			return fmt.Errorf("archive: stripping top-level directory %s: cannot move %s up: %w", top, ent.Name(), err)
 		}
 	}
 	if err := os.Remove(staged); err != nil {
-		return fmt.Errorf("archive: 剥掉顶层目录 %s 之后删不掉它：%w", top, err)
+		return fmt.Errorf("archive: cannot remove top-level directory %s after stripping it: %w", top, err)
 	}
 	// 返回给调用方的相对路径要跟着剥，否则它和盘上的布局对不上 —— 而 [bin] 右边
 	// 和 toy-index 的 probe 认的都是这份列表。
@@ -227,7 +227,7 @@ type extractor struct {
 func (e *extractor) note() error {
 	e.entries++
 	if e.entries > maxEntries {
-		return fmt.Errorf("%w：成员数超过 %d 个，包已丢弃", ErrTooLarge, maxEntries)
+		return fmt.Errorf("%w: more than %d entries; archive discarded", ErrTooLarge, maxEntries)
 	}
 	return nil
 }
@@ -237,26 +237,26 @@ func (e *extractor) run(src string) error {
 	case kindZip:
 		zr, err := zip.OpenReader(src)
 		if err != nil {
-			return fmt.Errorf("archive: 打不开 zip %s：%w", filepath.Base(src), err)
+			return fmt.Errorf("archive: cannot open zip %s: %w", filepath.Base(src), err)
 		}
 		defer zr.Close()
 		return e.unzip(&zr.Reader)
 	case kindTarGz:
 		f, err := os.Open(src)
 		if err != nil {
-			return fmt.Errorf("archive: 打不开 %s：%w", filepath.Base(src), err)
+			return fmt.Errorf("archive: cannot open %s: %w", filepath.Base(src), err)
 		}
 		defer f.Close()
 		gz, err := gzip.NewReader(f)
 		if err != nil {
-			return fmt.Errorf("archive: %s 不是合法的 gzip：%w", filepath.Base(src), err)
+			return fmt.Errorf("archive: %s is not valid gzip: %w", filepath.Base(src), err)
 		}
 		defer gz.Close()
 		return e.untar(gz)
 	default: // kindTar
 		f, err := os.Open(src)
 		if err != nil {
-			return fmt.Errorf("archive: 打不开 %s：%w", filepath.Base(src), err)
+			return fmt.Errorf("archive: cannot open %s: %w", filepath.Base(src), err)
 		}
 		defer f.Close()
 		return e.untar(f)
@@ -279,18 +279,18 @@ func within(dest, p string) bool {
 func (e *extractor) resolve(name string) (full, rel string, err error) {
 	n := strings.ReplaceAll(name, `\`, "/")
 	if strings.TrimSpace(n) == "" {
-		return "", "", fmt.Errorf("%w：有个成员没有名字", ErrTraversal)
+		return "", "", fmt.Errorf("%w: an entry has no name", ErrTraversal)
 	}
 	if strings.HasPrefix(n, "/") || filepath.IsAbs(filepath.FromSlash(n)) {
-		return "", "", fmt.Errorf("%w：成员 %q 是绝对路径", ErrTraversal, name)
+		return "", "", fmt.Errorf("%w: entry %q is an absolute path", ErrTraversal, name)
 	}
 	rel = filepath.Clean(filepath.FromSlash(n))
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("%w：成员 %q 指到目标目录外面去了", ErrTraversal, name)
+		return "", "", fmt.Errorf("%w: entry %q points outside the destination directory", ErrTraversal, name)
 	}
 	full = filepath.Join(e.dest, rel)
 	if !within(e.dest, full) {
-		return "", "", fmt.Errorf("%w：成员 %q 解析出来是 %s，不在 %s 里", ErrTraversal, name, full, e.dest)
+		return "", "", fmt.Errorf("%w: entry %q resolves to %s, which is outside %s", ErrTraversal, name, full, e.dest)
 	}
 	return full, rel, nil
 }
@@ -304,10 +304,10 @@ func (e *extractor) resolve(name string) (full, rel string, err error) {
 func (e *extractor) checkLinkTarget(linkFull, target string) error {
 	t := strings.ReplaceAll(target, `\`, "/")
 	if strings.TrimSpace(t) == "" {
-		return fmt.Errorf("%w：%s 的链接目标是空的", ErrTraversal, linkFull)
+		return fmt.Errorf("%w: symlink %s has an empty target", ErrTraversal, linkFull)
 	}
 	if strings.HasPrefix(t, "/") || filepath.IsAbs(filepath.FromSlash(t)) {
-		return fmt.Errorf("%w：符号链接 %s 指向绝对路径 %q", ErrTraversal, filepath.Base(linkFull), target)
+		return fmt.Errorf("%w: symlink %s points at absolute path %q", ErrTraversal, filepath.Base(linkFull), target)
 	}
 	// 目标里不许出现"回头的 .."：开头连着的 .. 是从链接自己的父目录往上爬，而那条
 	// 父链已经被 mkdirAll 保证全是真目录，所以词法和内核算出来一样；一旦先迈过一段
@@ -320,7 +320,7 @@ func (e *extractor) checkLinkTarget(linkFull, target string) error {
 		case "", ".":
 		case "..":
 			if seenName {
-				return fmt.Errorf("%w：符号链接 %s 的目标 %q 里有回头的 ..，解析结果不可信",
+				return fmt.Errorf("%w: symlink %s has target %q containing a backtracking '..', so where it resolves cannot be trusted",
 					ErrTraversal, filepath.Base(linkFull), target)
 			}
 		default:
@@ -329,7 +329,7 @@ func (e *extractor) checkLinkTarget(linkFull, target string) error {
 	}
 	full := filepath.Clean(filepath.Join(filepath.Dir(linkFull), filepath.FromSlash(t)))
 	if !within(e.dest, full) {
-		return fmt.Errorf("%w：符号链接 %s 指向 %q，解析后是 %s，不在 %s 里",
+		return fmt.Errorf("%w: symlink %s points at %q, which resolves to %s, outside %s",
 			ErrTraversal, filepath.Base(linkFull), target, full, e.dest)
 	}
 	return nil
@@ -379,7 +379,7 @@ func (e *extractor) mkdirAll(dir string) error {
 	}
 	rel, err := filepath.Rel(e.dest, dir)
 	if err != nil {
-		return fmt.Errorf("archive: 求不出 %s 相对 %s 的路径：%w", dir, e.dest, err)
+		return fmt.Errorf("archive: cannot resolve %s relative to %s: %w", dir, e.dest, err)
 	}
 	if rel == "." {
 		return nil
@@ -390,16 +390,16 @@ func (e *extractor) mkdirAll(dir string) error {
 		fi, err := os.Lstat(cur)
 		if err != nil {
 			if err := os.Mkdir(cur, 0o755); err != nil {
-				return fmt.Errorf("archive: 建目录 %s 失败：%w", cur, err)
+				return fmt.Errorf("archive: cannot create directory %s: %w", cur, err)
 			}
 			e.created = append(e.created, cur)
 			continue
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%w：路径中的 %s 是符号链接，不能穿过它往里写", ErrTraversal, cur)
+			return fmt.Errorf("%w: %s in the path is a symlink; refusing to write through it", ErrTraversal, cur)
 		}
 		if !fi.IsDir() {
-			return fmt.Errorf("archive: %s 已存在而且不是目录，包里的路径互相打架了", cur)
+			return fmt.Errorf("archive: %s already exists and is not a directory; paths inside the archive conflict", cur)
 		}
 	}
 	return nil
@@ -414,7 +414,7 @@ func (e *extractor) writeFile(full, rel string, r io.Reader, mode os.FileMode) e
 	}
 	f, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
-		return fmt.Errorf("archive: 写 %s 失败：%w", rel, err)
+		return fmt.Errorf("archive: cannot write %s: %w", rel, err)
 	}
 	e.track(full, rel, false) // 先记账：写到一半失败也要清得掉
 
@@ -423,19 +423,19 @@ func (e *extractor) writeFile(full, rel string, r io.Reader, mode os.FileMode) e
 	n, copyErr := io.Copy(f, io.LimitReader(r, remain+1))
 	closeErr := f.Close()
 	if copyErr != nil {
-		return fmt.Errorf("archive: 写 %s 失败：%w", rel, copyErr)
+		return fmt.Errorf("archive: cannot write %s: %w", rel, copyErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("archive: 写 %s 失败：%w", rel, closeErr)
+		return fmt.Errorf("archive: cannot write %s: %w", rel, closeErr)
 	}
 	if n > remain {
-		return fmt.Errorf("%w：解压到 %s 时已经超过 %d 字节，包已丢弃", ErrTooLarge, rel, e.limit)
+		return fmt.Errorf("%w: extracting %s passed the %d byte limit; archive discarded", ErrTooLarge, rel, e.limit)
 	}
 	e.written += n
 
 	// OpenFile 的权限会被 umask 削掉，两档权限得自己钉一次。
 	if err := os.Chmod(full, mode); err != nil {
-		return fmt.Errorf("archive: 设置 %s 权限失败：%w", rel, err)
+		return fmt.Errorf("archive: cannot set permissions on %s: %w", rel, err)
 	}
 	e.regular[full] = true
 	return nil
@@ -452,7 +452,7 @@ func (e *extractor) writeSymlink(full, rel, target string) error {
 		return err
 	}
 	if err := os.Symlink(target, full); err != nil {
-		return fmt.Errorf("archive: 建符号链接 %s 失败：%w", rel, err)
+		return fmt.Errorf("archive: cannot create symlink %s: %w", rel, err)
 	}
 	e.track(full, rel, false)
 	return nil
@@ -468,10 +468,10 @@ func (e *extractor) writeSymlink(full, rel, target string) error {
 func (e *extractor) writeHardlink(full, rel, target string) error {
 	targetFull, _, err := e.resolve(target)
 	if err != nil {
-		return fmt.Errorf("硬链接 %s 的目标有问题：%w", rel, err)
+		return fmt.Errorf("bad target for hard link %s: %w", rel, err)
 	}
 	if !e.regular[targetFull] {
-		return fmt.Errorf("%w：硬链接 %s 指向 %q，那不是这个包前面写出来的普通文件",
+		return fmt.Errorf("%w: hard link %s points at %q, which is not a regular file this archive wrote earlier",
 			ErrTraversal, rel, target)
 	}
 	if err := e.mkdirAll(filepath.Dir(full)); err != nil {
@@ -481,7 +481,7 @@ func (e *extractor) writeHardlink(full, rel, target string) error {
 		return err
 	}
 	if err := os.Link(targetFull, full); err != nil {
-		return fmt.Errorf("archive: 建硬链接 %s 失败：%w", rel, err)
+		return fmt.Errorf("archive: cannot create hard link %s: %w", rel, err)
 	}
 	e.track(full, rel, false)
 	e.regular[full] = true // 硬链接落地之后自己也是一个普通文件，可以再被链
@@ -495,7 +495,7 @@ func (e *extractor) removeExisting(full string) error {
 		return nil
 	}
 	if err := os.Remove(full); err != nil {
-		return fmt.Errorf("archive: 清掉旧的 %s 失败：%w", full, err)
+		return fmt.Errorf("archive: cannot remove the existing %s: %w", full, err)
 	}
 	return nil
 }
@@ -508,7 +508,7 @@ func (e *extractor) untar(r io.Reader) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("archive: 读 tar 失败：%w", err)
+			return fmt.Errorf("archive: cannot read tar: %w", err)
 		}
 		if err := e.note(); err != nil {
 			return err
@@ -549,7 +549,7 @@ func (e *extractor) untar(r io.Reader) error {
 			// 丢掉，MaxTotalBytes 数不到（几 KiB 的包能烧掉几百 MiB 的解压），而
 			// "少一个文件却安装成功"比装不上更难查。
 			if hdr.Size > 0 {
-				return fmt.Errorf("%w：成员 %s 的类型 %q 不认识，它却声明了 %d 字节内容，不能当噪音扔掉",
+				return fmt.Errorf("%w: entry %s has unknown type %q yet declares %d bytes of content; refusing to silently drop it",
 					ErrUnsupported, rel, hdr.Typeflag, hdr.Size)
 			}
 			continue
@@ -585,7 +585,7 @@ func (e *extractor) unzip(zr *zip.Reader) error {
 		default:
 			rc, err := f.Open()
 			if err != nil {
-				return fmt.Errorf("archive: 读 zip 成员 %s 失败：%w", rel, err)
+				return fmt.Errorf("archive: cannot read zip entry %s: %w", rel, err)
 			}
 			err = e.writeFile(full, rel, rc, safeMode(mode))
 			rc.Close()
@@ -600,15 +600,15 @@ func (e *extractor) unzip(zr *zip.Reader) error {
 func readZipLinkTarget(f *zip.File) (string, error) {
 	rc, err := f.Open()
 	if err != nil {
-		return "", fmt.Errorf("archive: 读符号链接 %s 失败：%w", f.Name, err)
+		return "", fmt.Errorf("archive: cannot read symlink %s: %w", f.Name, err)
 	}
 	defer rc.Close()
 	b, err := io.ReadAll(io.LimitReader(rc, maxLinkTargetBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("archive: 读符号链接 %s 失败：%w", f.Name, err)
+		return "", fmt.Errorf("archive: cannot read symlink %s: %w", f.Name, err)
 	}
 	if len(b) > maxLinkTargetBytes {
-		return "", fmt.Errorf("%w：%s 号称是符号链接，目标却超过 %d 字节", ErrTraversal, f.Name, maxLinkTargetBytes)
+		return "", fmt.Errorf("%w: %s claims to be a symlink but its target exceeds %d bytes", ErrTraversal, f.Name, maxLinkTargetBytes)
 	}
 	return string(b), nil
 }

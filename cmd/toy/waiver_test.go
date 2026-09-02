@@ -39,7 +39,7 @@ func TestForceAnnouncesASourceChange(t *testing.T) {
 			t.Fatalf("确认之后还是装不上：%v", err)
 		}
 	})
-	if !strings.Contains(out, "--force 放行") || !strings.Contains(out, "fake:bob/tool") {
+	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "fake:bob/tool") {
 		t.Fatalf("--force 把来源变更放行了，输出里却看不出换到了哪个仓库：\n%s", out)
 	}
 }
@@ -80,7 +80,7 @@ func TestForceAnnouncesATrustDowngrade(t *testing.T) {
 			t.Fatalf("确认之后还是装不上：%v", err)
 		}
 	})
-	if !strings.Contains(out, "--force 放行") || !strings.Contains(out, "签名") {
+	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "signed") {
 		t.Fatalf("--force 放行了一次信任降级，输出里却没说这个包不再是已签名的了：\n%s", out)
 	}
 }
@@ -108,7 +108,7 @@ func TestForceAnnouncesAShadowedCommand(t *testing.T) {
 			t.Fatalf("--force 之后还是装不上：%v", err)
 		}
 	})
-	if !strings.Contains(out, "--force 放行") || !strings.Contains(out, victim) {
+	if !strings.Contains(out, "--force waived") || !strings.Contains(out, victim) {
 		t.Fatalf("--force 顶掉了 PATH 上的 %s，输出里却没说顶掉的是谁：\n%s", victim, out)
 	}
 }
@@ -122,7 +122,7 @@ func TestInstallHelpExplainsTheTwoSwitches(t *testing.T) {
 			t.Fatalf("-h 该走 usage 那条路：%v", err)
 		}
 	})
-	for _, want := range []string{"-reinstall", "-force", "再装一次", "安全检查"} {
+	for _, want := range []string{"-reinstall", "-force", "same version again", "safety check"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("`toy install -h` 里没有 %q，用户无从知道该用哪个开关：\n%s", want, out)
 		}

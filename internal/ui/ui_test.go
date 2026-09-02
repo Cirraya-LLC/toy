@@ -47,8 +47,8 @@ func TestHumanBytes(t *testing.T) {
 		in   int64
 		want string
 	}{
-		{0, "大小未知"},
-		{-1, "大小未知"},
+		{0, "size unknown"},
+		{-1, "size unknown"},
 		{1, "1 B"},
 		{999, "999 B"},
 		{1000, "1.0 KB"},
@@ -102,10 +102,10 @@ func TestTrust(t *testing.T) {
 		detail string
 		want   string
 	}{
-		{"签名", "signed", "Derrity (key a3f9…)", "✓ 已签名 · Derrity (key a3f9…)"},
-		{"托管方", "host", "github.com/Derrity", "· 来源 github.com/Derrity · 未签名"},
-		{"裸 URL", "unverified", "", "⚠ 未签名 · 首次安装，已钉住 sha256"},
-		{"裸 URL 带补充", "unverified", "abc1234", "⚠ 未签名 · 首次安装，已钉住 sha256 · abc1234"},
+		{"签名", "signed", "key a3f9… · registered in index default", "✓ signed · key a3f9… · registered in index default"},
+		{"托管方", "host", "github.com/Derrity", "· from github.com/Derrity · unsigned"},
+		{"裸 URL", "unverified", "", "⚠ unsigned · first install, sha256 pinned (trust on first use)"},
+		{"裸 URL 带补充", "unverified", "abc1234", "⚠ unsigned · first install, sha256 pinned (trust on first use) · abc1234"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := capture(t, func() { Trust(c.level, c.detail) })
@@ -140,10 +140,10 @@ func TestMessages(t *testing.T) {
 		fn   func()
 		want string
 	}{
-		{"Info", func() { Info("装好了 %s", "tinyserve") }, "装好了 tinyserve\n"},
-		{"Warn", func() { Warn("hash 变了") }, "警告: hash 变了\n"},
-		{"Error", func() { Error("拿不到 %s", "toy.toml") }, "错误: 拿不到 toy.toml\n"},
-		{"Step", func() { Step("解析 %s", "github:a/b") }, "→ 解析 github:a/b\n"},
+		{"Info", func() { Info("installed %s", "tinyserve") }, "installed tinyserve\n"},
+		{"Warn", func() { Warn("checksum changed") }, "warning: checksum changed\n"},
+		{"Error", func() { Error("cannot fetch %s", "toy.toml") }, "error: cannot fetch toy.toml\n"},
+		{"Step", func() { Step("resolving %s", "github:a/b") }, "→ resolving github:a/b\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := capture(t, c.fn); got != c.want {
@@ -168,12 +168,12 @@ func TestProgressNonTTYNeverWritesCR(t *testing.T) {
 			total: 12_300_000,
 			adds:  []int64{3_075_000, 3_075_000, 3_075_000, 3_075_000},
 			want: []string{
-				"下载 tinyserve (12.3 MB)\n",
+				"downloading tinyserve (12.3 MB)\n",
 				"  tinyserve 25% (3.1 MB / 12.3 MB)\n",
 				"  tinyserve 50% (6.2 MB / 12.3 MB)\n",
 				"  tinyserve 75% (9.2 MB / 12.3 MB)\n",
 				"  tinyserve 100% (12.3 MB / 12.3 MB)\n",
-				"✓ tinyserve 完成 (12.3 MB)\n",
+				"✓ tinyserve done (12.3 MB)\n",
 			},
 		},
 		{
@@ -181,12 +181,12 @@ func TestProgressNonTTYNeverWritesCR(t *testing.T) {
 			total: 100,
 			adds:  bytesOnce(100),
 			want: []string{
-				"下载 tinyserve (100 B)\n",
+				"downloading tinyserve (100 B)\n",
 				"  tinyserve 25% (25 B / 100 B)\n",
 				"  tinyserve 50% (50 B / 100 B)\n",
 				"  tinyserve 75% (75 B / 100 B)\n",
 				"  tinyserve 100% (100 B / 100 B)\n",
-				"✓ tinyserve 完成 (100 B)\n",
+				"✓ tinyserve done (100 B)\n",
 			},
 		},
 		{
@@ -196,9 +196,9 @@ func TestProgressNonTTYNeverWritesCR(t *testing.T) {
 			total: 100,
 			adds:  []int64{100},
 			want: []string{
-				"下载 tinyserve (100 B)\n",
+				"downloading tinyserve (100 B)\n",
 				"  tinyserve 100% (100 B / 100 B)\n",
-				"✓ tinyserve 完成 (100 B)\n",
+				"✓ tinyserve done (100 B)\n",
 			},
 		},
 		{
@@ -206,27 +206,27 @@ func TestProgressNonTTYNeverWritesCR(t *testing.T) {
 			total: 0,
 			adds:  []int64{10, 20},
 			want: []string{
-				"下载 tinyserve (大小未知)\n",
-				"✓ tinyserve 完成 (30 B)\n",
+				"downloading tinyserve (size unknown)\n",
+				"✓ tinyserve done (30 B)\n",
 			},
 		},
 		{
 			name:  "一个字节都没有就别编大小",
 			total: 0,
 			want: []string{
-				"下载 tinyserve (大小未知)\n",
-				"✓ tinyserve 完成\n",
+				"downloading tinyserve (size unknown)\n",
+				"✓ tinyserve done\n",
 			},
 		},
 		{
 			name:  "失败要说清楚是谁失败了",
 			total: 100,
 			adds:  []int64{50},
-			err:   errors.New("sha256 校验失败"),
+			err:   errors.New("sha256 mismatch"),
 			want: []string{
-				"下载 tinyserve (100 B)\n",
+				"downloading tinyserve (100 B)\n",
 				"  tinyserve 50% (50 B / 100 B)\n",
-				"✗ tinyserve 失败: sha256 校验失败\n",
+				"✗ tinyserve failed: sha256 mismatch\n",
 			},
 		},
 	} {
@@ -261,7 +261,7 @@ func TestProgressTTYUsesTheBar(t *testing.T) {
 	if !strings.Contains(got, "\r") {
 		t.Errorf("TTY 下应该走进度条（有 \\r），得到 %q", got)
 	}
-	if !strings.Contains(got, "完成") {
+	if !strings.Contains(got, "done") {
 		t.Errorf("TTY 下也要有结束那一行，得到 %q", got)
 	}
 }
@@ -272,7 +272,7 @@ func TestProgressWithoutStart(t *testing.T) {
 		capture(t, func() {
 			p := newProgress(tty)
 			p.Add(10)
-			p.Done(errors.New("还没开始就挂了"))
+			p.Done(errors.New("died before it started"))
 		})
 	}
 }
@@ -325,7 +325,7 @@ func TestNoControlCharactersReachTheTerminal(t *testing.T) {
 	plainOutput(t)
 	// 末尾那个裸 0x9b 是 8 位的 CSI：它不是合法 UTF-8，range 会把它解成
 	// U+FFFD（不是控制符），所以下面的检查必须逐字节看，按 rune 看是假阴性。
-	const evil = "tinyserve\r\x1b[2K\x1b[32m✓ 已签名 · Trusted Author\x1b[0m\x07\n伪造的第二行\x9b1A"
+	const evil = "tinyserve\r\x1b[2K\x1b[32m✓ signed · Trusted Author\x1b[0m\x07\nforged second line\x9b1A"
 
 	for _, c := range []struct {
 		name  string
@@ -380,7 +380,7 @@ func TestNoControlCharactersReachTheTerminal(t *testing.T) {
 }
 
 func TestSafeLeavesCleanTextAlone(t *testing.T) {
-	for _, s := range []string{"", "tinyserve", "github.com/Derrity", "✓ 已签名 · a3f9…", "100%"} {
+	for _, s := range []string{"", "tinyserve", "github.com/Derrity", "✓ signed · a3f9…", "100%"} {
 		if got := safe(s); got != s {
 			t.Errorf("safe(%q) = %q，干净的文本不该被动", s, got)
 		}
@@ -417,7 +417,7 @@ func TestProgressTTYDrawsEvenWithoutTotal(t *testing.T) {
 		if during == "" {
 			t.Errorf("total=%d：下载过程中进度条一个字都没画", total)
 		}
-		if after := capture(t, func() { p.Done(nil) }); !strings.Contains(after, "完成") {
+		if after := capture(t, func() { p.Done(nil) }); !strings.Contains(after, "done") {
 			t.Errorf("total=%d：没有结束那一行：%q", total, after)
 		}
 	}
@@ -439,7 +439,7 @@ func TestTrustSignedWithoutSignerIsNotAGreenCheck(t *testing.T) {
 func TestTrustHostWithoutDetailSaysUnknown(t *testing.T) {
 	plainOutput(t)
 	got := capture(t, func() { Trust("host", "") })
-	if !strings.Contains(got, "未知") {
+	if !strings.Contains(got, "unknown") {
 		t.Errorf("来源为空要说未知，不能留一个空格糊过去：%q", got)
 	}
 }
@@ -456,8 +456,8 @@ func TestPrintedURLsLoseTheirPassword(t *testing.T) {
 	}
 	for _, c := range cases {
 		for name, print := range map[string]func(string){
-			"Info":  func(s string) { Info("取 %s", s) },
-			"Error": func(s string) { Error("拿不到 %s：HTTP 404", s) },
+			"Info":  func(s string) { Info("fetching %s", s) },
+			"Error": func(s string) { Error("cannot fetch %s: HTTP 404", s) },
 			"Step":  func(s string) { Step("%s", s) },
 		} {
 			got := capture(t, func() { print(c.in) })
@@ -475,8 +475,8 @@ func TestPrintedURLsLoseTheirPassword(t *testing.T) {
 // 最后走 ui.Error("%v", err)。所以抹掉必须发生在这一层，而不是指望
 // 每个调用方都记得先 SafeURL 一下。
 func TestErrorTextWithAURLBuriedInItIsRedacted(t *testing.T) {
-	err := errors.New("fetch: 原始地址和所有镜像都拿不到：" +
-		"https://bob:s3cret@example.com/a.tar.gz：HTTP 403 Forbidden")
+	err := errors.New("fetch: original URL and every mirror failed: " +
+		"https://bob:s3cret@example.com/a.tar.gz: HTTP 403 Forbidden")
 	got := capture(t, func() { Error("%v", err) })
 	if strings.Contains(got, "s3cret") {
 		t.Fatalf("密码从错误信息里漏出来了：%q", got)
@@ -497,7 +497,7 @@ func TestSafeURLLeavesInnocentTextAlone(t *testing.T) {
 		"https://alice@example.com/toy.toml",
 		"file:///tmp/toy.toml",
 		"github:Derrity/tinyserve",
-		"装好了：tinyserve 1.2.3",
+		"installed tinyserve 1.2.3",
 		"",
 	} {
 		if got := SafeURL(s); got != s {
@@ -511,7 +511,7 @@ func TestSafeURLLeavesInnocentTextAlone(t *testing.T) {
 
 // SafeURL 也要守住铁律 8 那条：URL 里塞控制字符能把信任等级那一行盖掉重写。
 func TestSafeURLStillEscapesControlChars(t *testing.T) {
-	got := SafeURL("https://example.com/a\r\x1b[2K✓ 已签名")
+	got := SafeURL("https://example.com/a\r\x1b[2K✓ signed")
 	if strings.ContainsAny(got, "\r\x1b") {
 		t.Fatalf("控制字符漏出去了：%q", got)
 	}

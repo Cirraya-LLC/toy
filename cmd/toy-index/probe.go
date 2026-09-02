@@ -37,14 +37,14 @@ var probePlatforms = []string{"linux/amd64", "linux/amd64/gnu", "linux/amd64/mus
 func probeBin(ctx context.Context, h host.Host, p pack) (string, []string, error) {
 	plat, tmpl := probePick(p.res.Artifact)
 	if tmpl == "" {
-		return "", nil, errors.New("没有 linux/amd64 或 linux/arm64 的构建，跳过探测")
+		return "", nil, errors.New("no linux/amd64 or linux/arm64 build to probe, skipping")
 	}
 	asset := toyfile.Expand(tmpl, p.res.Version, p.info.Tag)
 	url := h.ReleaseURL(p.owner, p.repo, p.info.Tag, asset)
 
 	got, err := fetch.Get(ctx, url, fetch.Options{Name: asset, MaxBytes: probeMaxBytes})
 	if err != nil {
-		return "", nil, fmt.Errorf("下载 %s（%s）失败：%w", asset, plat, err)
+		return "", nil, fmt.Errorf("downloading %s (%s) failed: %w", asset, plat, err)
 	}
 	defer os.Remove(got.Path)
 
@@ -66,12 +66,12 @@ func probeBin(ctx context.Context, h host.Host, p pack) (string, []string, error
 	}
 	files, err := archive.Extract(link, out)
 	if err != nil {
-		return "", nil, fmt.Errorf("解开 %s 失败：%w", asset, err)
+		return "", nil, fmt.Errorf("unpacking %s failed: %w", asset, err)
 	}
 
 	hit, cands := pickExecutable(out, files, p.name)
 	if hit == "" && len(cands) == 0 {
-		return "", nil, fmt.Errorf("%s 里一个可执行文件都没有（%d 个成员）", asset, len(files))
+		return "", nil, fmt.Errorf("%s holds no executable at all (%d members)", asset, len(files))
 	}
 	return hit, cands, nil
 }
@@ -131,11 +131,11 @@ func pickExecutable(root string, files []string, want string) (string, []string)
 // 不在这里另抄一份 linux/darwin/amd64 的词表 —— 抄一份就是一处会慢慢分叉的地方。
 func unstableBinPath(path, version string) string {
 	if version != "" && strings.Contains(path, version) {
-		return "里面带着版本号 " + version + "，上游一发新版就指向一个不存在的目录"
+		return "it spells out the version " + version + ", so the next upstream release points at a directory that does not exist"
 	}
 	for _, seg := range strings.Split(path, "/") {
 		if p := assetname.Classify(seg).Platform; p != "" {
-			return "里面带着平台名（" + seg + " → " + p + "），而 [bin] 只有一行、所有平台共用"
+			return "it spells out a platform name (" + seg + " -> " + p + "), and [bin] is a single line shared by every platform"
 		}
 	}
 	return ""

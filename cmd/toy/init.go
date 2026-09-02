@@ -49,10 +49,10 @@ type iniAsset struct {
 // ctx 用不上：这条命令不联网，也不 exec 任何东西（见文件头）。
 func runInit(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	dist := fs.String("dist", "", "放 release 资产的目录（默认是项目目录下的 dist）")
-	name := fs.String("name", "", "工具名，不给就从目录名或资产名推")
-	version := fs.String("version", "", "这批资产的版本号，不给就从文件名里认")
-	force := fs.Bool("force", false, "已经有 toy.toml 了也覆盖")
+	dist := fs.String("dist", "", "directory holding the release assets (defaults to dist/ under the project directory)")
+	name := fs.String("name", "", "tool name; inferred from the directory or asset names if omitted")
+	version := fs.String("version", "", "version of this batch of assets; read from the file names if omitted")
+	force := fs.Bool("force", false, "overwrite an existing toy.toml")
 	if err := insParseFlags(fs, args); err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func runInit(_ context.Context, args []string) error {
 	for i := range assets {
 		sum, err := iniSum(filepath.Join(distDir, assets[i].file))
 		if err != nil {
-			return fmt.Errorf("算不出 %s 的 sha256：%w", assets[i].file, err)
+			return fmt.Errorf("cannot compute the sha256 of %s: %w", assets[i].file, err)
 		}
 		assets[i].sum = sum
 	}
@@ -105,23 +105,23 @@ func runInit(_ context.Context, args []string) error {
 	// 自己生成的东西也要过一遍真正的解析器：文件名里的怪字符（引号、方括号、
 	// 中文）都能把 toml 写歪，而写歪的 toy.toml 是作者下一个小时的谜题。
 	if _, err := toyfile.Parse(data); err != nil {
-		return fmt.Errorf("按 %s 里的文件名生成出来的 toy.toml 自己解析不了：%w\n"+
-			"多半是名字里有 toml 认不了的字符，用 --name 指一个干净的名字再试", distDir, err)
+		return fmt.Errorf("the toy.toml generated from the file names in %s does not parse: %w. "+
+			"Most likely a name contains characters toml cannot take — pass --name with a clean one and try again", distDir, err)
 	}
 
 	out := filepath.Join(dir, "toy.toml")
 	if _, err := os.Stat(out); err == nil && !*force {
-		return fmt.Errorf("%s 已经存在了，不覆盖。要覆盖加 --force（先确认里面没有你手改过的东西）", out)
+		return fmt.Errorf("%s already exists and will not be overwritten. Add --force to replace it — but check first that nothing in it was edited by hand", out)
 	}
 	if err := os.WriteFile(out, data, 0o644); err != nil {
-		return fmt.Errorf("写不出 %s：%w", out, err)
+		return fmt.Errorf("cannot write %s: %w", out, err)
 	}
 
 	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
 		ui.Info("%s", line)
 	}
 	ui.Info("")
-	ui.Info("已写出 %s", out)
+	ui.Info("wrote %s", out)
 	iniReport(pkg, assets, skipped, guessedName, res.Name)
 	return nil
 }
@@ -131,9 +131,9 @@ func runInit(_ context.Context, args []string) error {
 func iniListFiles(distDir string) ([]string, error) {
 	entries, err := os.ReadDir(distDir)
 	if err != nil {
-		return nil, fmt.Errorf("读不了 %s：%w\n"+
-			"toy init 是从已经打好的 release 资产的【文件名】反推映射的，"+
-			"先把它们构建出来（goreleaser 默认就输出到 dist/），或者用 --dist 指别的目录", distDir, err)
+		return nil, fmt.Errorf("cannot read %s: %w. toy init works backwards from the FILE NAMES of release "+
+			"assets that already exist, so build them first (goreleaser writes to dist/ by default), "+
+			"or point --dist somewhere else", distDir, err)
 	}
 	var out []string
 	for _, e := range entries {
@@ -150,7 +150,7 @@ func iniListFiles(distDir string) ([]string, error) {
 func iniSkipLines(skipped []assetname.Asset) []string {
 	out := make([]string, len(skipped))
 	for i, a := range skipped {
-		out[i] = a.File + "：" + a.Skip
+		out[i] = a.File + ": " + a.Skip
 	}
 	return out
 }
@@ -186,16 +186,19 @@ func iniRender(name string, assets []iniAsset) ([]byte, error) {
 		return q(s)
 	}
 
-	fmt.Fprintf(&b, "# 由 toy init 从资产文件名反推。装的时候一行脚本都不跑，所以这里没有 install/build 这类键。\n")
-	fmt.Fprintf(&b, "# 打个新 tag 就是发新版：{version} 会被换成那个 tag（不带 v），这个文件一个字都不用改。\n")
+	fmt.Fprintf(&b, "# Written by toy init from the release asset file names. Installing runs no scripts at all,\n")
+	fmt.Fprintf(&b, "# which is why there is no install/build key here.\n")
+	fmt.Fprintf(&b, "# Pushing a new tag is releasing a new version: {version} becomes that tag (without the v),\n")
+	fmt.Fprintf(&b, "# so this file never has to change again.\n")
 	fmt.Fprintf(&b, "name    = %s\n", q(name))
-	fmt.Fprintf(&b, "desc    = \"\"  # ← 一句话说清楚它是干嘛的，搜索结果里显示的就是这句\n")
-	fmt.Fprintf(&b, "license = \"\"  # ← 例如 \"MIT\"\n")
+	fmt.Fprintf(&b, "desc    = \"\"  # <- one sentence saying what it does; this is what search results show\n")
+	fmt.Fprintf(&b, "license = \"\"  # <- e.g. \"MIT\"\n")
 	b.WriteString("\n[bin]\n")
-	b.WriteString("# 左边 = 装完之后 PATH 上的命令名，右边 = 【解压之后】包内的相对路径。\n")
-	b.WriteString("# 整棵树套在一层目录里（cargo-dist 那种 " + name + "-1.2.3-x86_64-.../）时那一层会被自动剥掉，\n")
-	b.WriteString("# 所以右边不要带它；真的分了子目录才要写上，例如 \"bin/" + name + "\"。\n")
-	b.WriteString("# 用 `tar tzf dist/<某个包>` 看一眼里面到底长什么样。\n")
+	b.WriteString("# Left = the command name on PATH after installing. Right = the path inside the package\n")
+	b.WriteString("# AFTER unpacking. When the whole tree sits in one wrapper directory (the cargo-dist style\n")
+	b.WriteString("# " + name + "-1.2.3-x86_64-.../), that layer is stripped automatically, so leave it off the\n")
+	b.WriteString("# right hand side. Write a subdirectory only if the package really has one, e.g. \"bin/" + name + "\".\n")
+	b.WriteString("# Run `tar tzf dist/<one of the archives>` to see what is actually in there.\n")
 	fmt.Fprintf(&b, "%s = %s\n", key(name), q(name))
 
 	b.WriteString("\n[artifact]\n")
@@ -203,14 +206,15 @@ func iniRender(name string, assets []iniAsset) ([]byte, error) {
 		fmt.Fprintf(&b, "%s = %s\n", key(a.key), q(a.tmpl))
 	}
 
-	b.WriteString("\n# 有 sha256 就强制校验，对不上一律拒绝安装。这几行是 toy init 现算的，\n")
-	b.WriteString("# 所以它们只对上面这一批文件成立 —— 发新版之后要重新算（再跑一次 toy init --force）。\n")
+	b.WriteString("\n# With a sha256 the checksum is enforced, and a mismatch always refuses the install.\n")
+	b.WriteString("# toy init computed these lines just now, so they describe only this batch of files —\n")
+	b.WriteString("# recompute them after every release (run toy init --force again).\n")
 	b.WriteString("[sha256]\n")
 	for i := range assets {
 		fmt.Fprintf(&b, "%s = %s\n", key(assets[i].key), q(assets[i].sum))
 	}
 	if strings.ContainsAny(name, "\"\\") {
-		return nil, fmt.Errorf("工具名 %q 里有引号或反斜杠，当 toml 的键和值都很别扭。用 --name 换一个", name)
+		return nil, fmt.Errorf("the tool name %q contains a quote or a backslash, which is awkward as both a toml key and a value. Pass --name with a different one", name)
 	}
 	return []byte(b.String()), nil
 }
@@ -219,32 +223,34 @@ func iniRender(name string, assets []iniAsset) ([]byte, error) {
 // 一个不说自己猜过的生成器，作者就会把猜出来的东西当成事实提交上去。
 func iniReport(name string, assets []iniAsset, skipped []string, guessedName bool, prefix string) {
 	ui.Info("")
-	ui.Info("认出了 %d 个平台：", len(assets))
+	ui.Info("Recognized %d platform(s):", len(assets))
 	for _, a := range assets {
 		ui.Info("    %-22s ← %s", a.key, a.file)
 	}
 	for _, s := range skipped {
-		ui.Warn("跳过 %s", s)
+		ui.Warn("skipped %s", s)
 	}
 
 	ui.Info("")
-	ui.Info("下面这几处是猜的，提交之前核对一遍：")
-	ui.Info("    [bin] 右边的包内路径 —— 包里分了子目录（bin/ 之类）就得改；" +
-		"整棵树套在一层目录里的那种不用管，那一层解压时会被剥掉（`tar tzf` 看一眼）")
+	ui.Info("The following were guessed — check them before you commit:")
+	ui.Info("    the path on the right of [bin] — fix it if the package has subdirectories (a bin/ and so on). " +
+		"A single wrapper directory around the whole tree needs no fixing; that layer is stripped when unpacking " +
+		"(`tar tzf` shows you which case you have)")
 	if guessedName {
 		hint := ""
 		// 目录名和资产名前缀对不上时，后者多半才是真名（仓库目录常被改名、
 		// clone 成别的名字，而资产名是构建脚本自己写出来的）。直接把命令给出来。
 		if p := prefix; p != "" && p != name {
-			hint = "；资产名看起来是 " + p + "：`toy init --force --name " + p + "`"
+			hint = "; the asset names suggest " + p + ": `toy init --force --name " + p + "`"
 		}
-		ui.Info("    name = %s —— 从目录名或资产名前缀推的%s", name, hint)
+		ui.Info("    name = %s — taken from the directory name or the asset name prefix%s", name, hint)
 	}
-	ui.Info("    desc / license —— 空着的，填上")
+	ui.Info("    desc / license — left empty, fill them in")
 	if len(assets) > 0 && !strings.Contains(assets[0].tmpl, "{version}") {
 		// 没有 {version} 的映射每发一版都要手改，那正是这条命令要消灭的事。
-		ui.Warn("资产名里没认出版本号，所以没有 {version} 占位符 —— " +
-			"这样每次发版都得回来改这个文件。用 --version 指一下这批资产的版本号再跑一次")
+		ui.Warn("No version was recognized in the asset names, so there is no {version} placeholder — " +
+			"which means every release makes you come back and edit this file. Pass --version with the " +
+			"version of this batch and run it again")
 	}
 }
 
@@ -252,26 +258,26 @@ func iniReport(name string, assets []iniAsset, skipped []string, guessedName boo
 // 那会变成一个"看起来生成好了、实际谁也装不了"的文件。
 func iniNothingRecognized(distDir string, files, skipped []string) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s 里没有一个文件名能认出 os/arch，写不出 [artifact]", distDir)
+	fmt.Fprintf(&b, "no file name in %s says which os/arch it is for, so [artifact] cannot be written", distDir)
 	switch {
 	case len(files) == 0:
-		b.WriteString("（这个目录里一个普通文件都没有）")
+		b.WriteString(" (there is not a single regular file in that directory)")
 	default:
-		fmt.Fprintf(&b, "。看到的是：%s", strings.Join(iniHead(files, iniMaxListed), "、"))
+		fmt.Fprintf(&b, ". What it saw: %s", strings.Join(iniHead(files, iniMaxListed), ", "))
 	}
 	// 这里**不能**用 \n 分行：它最后是经 ui.Error 打出去的，而 ui 会把控制字符
 	// （\n 也在内）转义成看得见的 \xNN —— 那是防有人用外来文本伪造一行
 	// 「✓ 已签名」的护栏，不能为了排版把它松掉。所以全篇拿标点断句，和这个项目
 	// 里其它报错一样是一长句。
 	for _, s := range skipped {
-		b.WriteString("；跳过 " + s)
+		b.WriteString("; skipped " + s)
 	}
-	b.WriteString("。文件名里要同时出现操作系统和架构，例如 " +
-		"tool_1.2.3_linux_amd64.tar.gz / tool-1.2.3-darwin-arm64.zip。" +
-		"认这些写法：linux / darwin(macos, osx) / windows；" +
-		"amd64(x86_64, x64) / arm64(aarch64) / armv7(armhf) / armv6 / 386(i386)；" +
-		"名字里带 musl 或 gnu 会多出一段 libc key。" +
-		"实在对不上就自己手写 [artifact]，一个平台一行，格式见 `toy info` 里任何一个包。")
+	b.WriteString(". A file name has to carry both the operating system and the architecture, e.g. " +
+		"tool_1.2.3_linux_amd64.tar.gz / tool-1.2.3-darwin-arm64.zip. " +
+		"Recognized spellings: linux / darwin (macos, osx) / windows; " +
+		"amd64 (x86_64, x64) / arm64 (aarch64) / armv7 (armhf) / armv6 / 386 (i386); " +
+		"a musl or gnu in the name adds a libc segment to the key. " +
+		"If none of that fits, write [artifact] by hand — one line per platform.")
 	return fmt.Errorf("%s", b.String())
 }
 
@@ -279,7 +285,7 @@ func iniHead(s []string, n int) []string {
 	if len(s) <= n {
 		return s
 	}
-	return append(slices.Clone(s[:n]), fmt.Sprintf("…（还有 %d 个）", len(s)-n))
+	return append(slices.Clone(s[:n]), fmt.Sprintf("… (%d more)", len(s)-n))
 }
 
 // iniSum 算一个文件的 sha256。

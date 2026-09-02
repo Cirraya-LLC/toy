@@ -366,7 +366,7 @@ func TestGetBytes(t *testing.T) {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("想要 %v，得到 %v", tc.wantErr, err)
 				}
-				if tc.wantAny && !strings.Contains(err.Error(), "上限") {
+				if tc.wantAny && !strings.Contains(err.Error(), "size limit") {
 					t.Fatalf("报错该说清楚是超了上限：%v", err)
 				}
 				return

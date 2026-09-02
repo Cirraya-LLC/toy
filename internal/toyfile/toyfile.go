@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	ErrNoArtifact   = errors.New("toyfile: 这个仓库没有发布二进制")
-	ErrBothForms    = errors.New("toyfile: [artifact] 和 [script] 只能有一个")
-	ErrNoPlatform   = errors.New("toyfile: 没有适配当前平台的构建")
-	ErrUnsafeTarget = errors.New("toyfile: bin 目标路径不安全")
+	ErrNoArtifact   = errors.New("toyfile: this repo publishes no binaries")
+	ErrBothForms    = errors.New("toyfile: [artifact] and [script] are mutually exclusive")
+	ErrNoPlatform   = errors.New("toyfile: no build for this platform")
+	ErrUnsafeTarget = errors.New("toyfile: unsafe bin target path")
 )
 
 type Toyfile struct {
@@ -58,17 +58,18 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 	var t Toyfile
 	md, err := toml.Decode(string(data), &t)
 	if err != nil {
-		return nil, fmt.Errorf("toyfile: toy.toml 语法有问题：%w", err)
+		return nil, fmt.Errorf("toyfile: toy.toml is not valid TOML: %w", err)
 	}
 	// 认不出来的键一律拒，不能静默忽略：把 [sha256] 打成 [sha265] 的后果是
 	// 「作者以为写了 hash、客户端从头到尾没校验过」，正是铁律 4 要防的那件事。
 	// 顺带也拦住 install/postinstall/hook 这类键 —— toy 不执行包里的任何代码（铁律 1），
 	// 静默忽略会让作者以为它们生效了。
 	if un := md.Undecoded(); len(un) > 0 {
-		return nil, fmt.Errorf("toyfile: toy.toml 里有 toy 不认识的键：%s。"+
-			"只有 name / desc / license / homepage 和 [bin] [artifact] [sha256] [script] 这几项有效，"+
-			"多出来的键不会生效 —— 而 [sha256] 少写一个字母就等于完全没有校验，所以这里直接拒绝。"+
-			"另外 toy 从不执行包里的代码，install / build / hook 这类键在 toy.toml 里不存在",
+		return nil, fmt.Errorf("toyfile: toy.toml has keys toy does not recognize: %s. "+
+			"Only name / desc / license / homepage and the [bin] [artifact] [sha256] [script] sections are valid. "+
+			"An unknown key would do nothing -- and a [sha256] with one letter wrong means no checksum verification "+
+			"at all, so it is rejected outright rather than ignored. Also: toy never runs code from a package, "+
+			"so install / build / hook keys do not exist in toy.toml",
 			describeKeys(un))
 	}
 
@@ -84,13 +85,14 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 	hasArtifact, hasScript := len(t.Artifact) > 0, len(t.Script) > 0
 	switch {
 	case hasArtifact && hasScript:
-		return nil, fmt.Errorf("%w：%q 两个段都写了。发布的是 release 二进制就只留 [artifact]，"+
-			"是单文件脚本就只留 [script]", ErrBothForms, t.Name)
+		return nil, fmt.Errorf("%w: %q declares both sections. Shipping release binaries? Keep only [artifact]. "+
+			"Shipping a single-file script? Keep only [script]", ErrBothForms, t.Name)
 	case !hasArtifact && !hasScript:
-		return nil, fmt.Errorf("%w：%q 的 toy.toml 里既没有 [artifact] 也没有 [script]。"+
-			"发布了 release 资产就加 [artifact]（key 是 GOOS/GOARCH，value 是资产名，"+
-			"可以用 {version} 和 {tag} 占位）；如果它就是一个单文件脚本，改用 [script]。"+
-			"toy 不从源码构建，所以这两个都没有就装不了", ErrNoArtifact, t.Name)
+		return nil, fmt.Errorf("%w: the toy.toml for %q has neither [artifact] nor [script], so there is nothing "+
+			"to install -- toy never builds from source. If the project publishes release assets, add [artifact] "+
+			"(key is GOOS/GOARCH, value is the asset name, {version} and {tag} are available as placeholders); "+
+			"if it is a single-file script, use [script] instead. Either way that is about 8 lines of toml, "+
+			"and you do not need anyone's approval to add it", ErrNoArtifact, t.Name)
 	}
 
 	// bin：PATH 上的名字 -> 解压后包内的相对路径。
@@ -114,9 +116,9 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 	}
 
 	if hasArtifact && len(t.Bin) == 0 {
-		return nil, fmt.Errorf("toyfile: %q 有 [artifact] 却没有 [bin]，"+
-			"装完之后没有任何命令会出现在 PATH 上。加一行 [bin] 段，"+
-			"形如 %s = \"%s\"，等号右边是解压后包内的相对路径", t.Name, t.Name, t.Name)
+		return nil, fmt.Errorf("toyfile: %q has [artifact] but no [bin], so installing it puts no command on "+
+			"your PATH. Add a [bin] section, e.g. %s = \"%s\" -- the right-hand side is the path inside the "+
+			"extracted package", t.Name, t.Name, t.Name)
 	}
 
 	for plat, asset := range t.Artifact {
@@ -137,19 +139,19 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 			return nil, err
 		}
 		if !isHex64(sum) {
-			return nil, fmt.Errorf("toyfile: [sha256] 里 %q 的值 %q 不是 64 位小写 hex。"+
-				"用 sha256sum 算出来的那一串原样贴过来，不要带文件名、不要大写", plat, sum)
+			return nil, fmt.Errorf("toyfile: the [sha256] value for %q is %q, which is not 64 lowercase hex "+
+				"characters. Paste the digest sha256sum prints, verbatim -- no filename, no uppercase", plat, sum)
 		}
 		// key 打错一个字母，校验就会被静默跳过 —— 而铁律 4 说有 sha256 就必须强制校验，
 		// 所以这里宁可拒绝，也不要装一个没人验过的二进制。
 		if _, ok := t.Artifact[plat]; !ok {
 			if hasScript {
-				return nil, fmt.Errorf("toyfile: %q 是 [script] 形态，没有按平台区分的资产，"+
-					"所以 [sha256] 里的 %q 永远不会被用到。单文件脚本靠首次安装钉住哈希（TOFU），"+
-					"把整个 [sha256] 段删掉即可", t.Name, plat)
+				return nil, fmt.Errorf("toyfile: %q is a [script] package and has no per-platform assets, so the "+
+					"[sha256] entry for %q would never be used. Single-file scripts pin their checksum on first "+
+					"install (trust on first use), so just delete the whole [sha256] section", t.Name, plat)
 			}
-			return nil, fmt.Errorf("toyfile: [sha256] 里有 %q，但 [artifact] 里没有这个平台。"+
-				"两边的 key 必须一模一样，否则这条 hash 永远不会被用到，等于没写", plat)
+			return nil, fmt.Errorf("toyfile: [sha256] has %q but [artifact] does not. The keys must match "+
+				"exactly, or this checksum is never used -- the same as not writing it at all", plat)
 		}
 	}
 
@@ -177,8 +179,8 @@ func (t *Toyfile) Asset(goos, goarch, version, tag string) (asset, sha256 string
 // 都得说出来，铁律 8）。
 func (t *Toyfile) AssetFor(candidates []string, version, tag string) (asset, sha256, matched string, err error) {
 	if t.IsScript() {
-		return "", "", "", fmt.Errorf("toyfile: %q 是单文件脚本形态（[script]），没有按平台区分的资产。"+
-			"调用方应当先看 IsScript()，再直接用 Script 里的每一项", t.Name)
+		return "", "", "", fmt.Errorf("toyfile: %q is a single-file script package ([script]) and has no "+
+			"per-platform assets. Callers should check IsScript() first and use each Script entry directly", t.Name)
 	}
 
 	for _, plat := range candidates {
@@ -199,12 +201,12 @@ func (t *Toyfile) AssetFor(candidates []string, version, tag string) (asset, sha
 	// 建议补的那个 key 要取底座（两段），不能直接用首选候选：linux 上的首选候选
 	// 是我们自己合成的 linux/amd64/gnu，而没有任何人会去发布一个叫 gnu 的资产 ——
 	// 让用户拿着这句话去给作者提 issue，提的就是一个错的要求。
-	want := "当前平台"
+	want := "the current platform"
 	if len(candidates) > 0 {
 		want = baseKey(candidates[0])
 	}
-	return "", "", "", fmt.Errorf("%w：试过 %s，这个 toy.toml 只声明了 %s。"+
-		"想用的话去上游提 issue，请作者在 release 里补一个 %s 的资产并在 toy.toml 里加一行",
+	return "", "", "", fmt.Errorf("%w: tried %s, but this toy.toml only declares %s. "+
+		"To get it, open an issue upstream asking for a %s asset in the release plus one more line in toy.toml",
 		ErrNoPlatform, describePlatforms(candidates), describePlatforms(t.Platforms()), want)
 }
 
@@ -240,21 +242,21 @@ func Expand(tmpl, version, tag string) string {
 
 func describePlatforms(plats []string) string {
 	if len(plats) == 0 {
-		return "一个平台都没有"
+		return "none"
 	}
-	return strings.Join(plats, "、")
+	return strings.Join(plats, ", ")
 }
 
 // checkName：name 会变成 ~/.toy/pkg 下的一级目录名，所以不能是路径。
 func checkName(name string) error {
 	switch {
 	case name == "":
-		return errors.New(`toyfile: toy.toml 缺少 name。加一行 name = "你的工具名"，` +
-			`它就是装完之后出现在 ~/.toy 里的目录名`)
+		return errors.New(`toyfile: toy.toml is missing name. Add a line name = "your-tool-name" -- ` +
+			`it becomes the directory name under ~/.toy once installed`)
 	case strings.ContainsAny(name, `/\`):
-		return fmt.Errorf("toyfile: name %q 不能含路径分隔符，它只是一个名字，不是路径", name)
+		return fmt.Errorf("toyfile: name %q must not contain a path separator; it is a name, not a path", name)
 	case name == "." || name == ".." || strings.Contains(name, ".."):
-		return fmt.Errorf(`toyfile: name %q 不能含 ".."，它会被当成目录名用`, name)
+		return fmt.Errorf(`toyfile: name %q must not contain ".."; it is used as a directory name`, name)
 	}
 	return checkPrintable("name", name)
 }
@@ -263,34 +265,35 @@ func checkName(name string) error {
 func checkBinName(section, name string) error {
 	switch {
 	case name == "":
-		return fmt.Errorf("toyfile: [%s] 里有一个空的名字。等号左边是它在 PATH 上的命令名", section)
+		return fmt.Errorf("toyfile: [%s] has an entry with an empty name. "+
+			"The left-hand side is the command name on your PATH", section)
 	case strings.ContainsAny(name, `/\`):
-		return fmt.Errorf("toyfile: [%s] 里的名字 %q 不能含路径分隔符 —— "+
-			"等号左边是 PATH 上的命令名，右边才是路径", section, name)
+		return fmt.Errorf("toyfile: the name %q in [%s] must not contain a path separator -- "+
+			"the left-hand side is the command name on PATH, the right-hand side is the path", name, section)
 	case name == "." || name == "..":
-		return fmt.Errorf("toyfile: [%s] 里的名字 %q 不是一个能用的命令名", section, name)
+		return fmt.Errorf("toyfile: the name %q in [%s] is not a usable command name", name, section)
 	case strings.ContainsAny(name, " \t"):
-		return fmt.Errorf("toyfile: [%s] 里的名字 %q 含空白字符，"+
-			"它是要软链进 ~/.toy/bin 的命令名，带空格的话在 shell 里根本敲不出来", section, name)
+		return fmt.Errorf("toyfile: the name %q in [%s] contains whitespace. It is symlinked into ~/.toy/bin "+
+			"as a command name, and a name with spaces is unusable from a shell", name, section)
 	}
-	return checkPrintable(fmt.Sprintf("[%s] 里的名字 %q", section, name), name)
+	return checkPrintable(fmt.Sprintf("the name %q in [%s]", name, section), name)
 }
 
 // checkRelPath：等号右边必须是包内的相对路径，逃不出去（铁律 5、7）。
 func checkRelPath(section, name, target string) error {
 	switch {
 	case target == "":
-		return fmt.Errorf("%w：[%s] 里 %q 的路径是空的，写上解压后包内的相对路径",
-			ErrUnsafeTarget, section, name)
+		return fmt.Errorf("%w: the path for %q in [%s] is empty. Write the relative path inside the "+
+			"extracted package", ErrUnsafeTarget, name, section)
 	case strings.HasPrefix(target, "/") || filepath.IsAbs(target):
-		return fmt.Errorf("%w：[%s] 里 %q 指向绝对路径 %q。"+
-			"这里只能写包内的相对路径 —— 绝对路径在别人的机器上指向的是别的东西",
-			ErrUnsafeTarget, section, name, target)
+		return fmt.Errorf("%w: %q in [%s] points at the absolute path %q. Only a path inside the package "+
+			"belongs here -- an absolute path means something else entirely on someone else's machine",
+			ErrUnsafeTarget, name, section, target)
 	}
 	for _, seg := range strings.Split(filepath.ToSlash(target), "/") {
 		if seg == ".." {
-			return fmt.Errorf(`%w：[%s] 里 %q 的路径 %q 含 ".." 段，会逃出包目录`,
-				ErrUnsafeTarget, section, name, target)
+			return fmt.Errorf(`%w: the path %q for %q in [%s] contains a ".." segment, which escapes the `+
+				`package directory`, ErrUnsafeTarget, target, name, section)
 		}
 	}
 	// [artifact] 和 [script] 的值会被原样拼进下载地址（host.ReleaseURL / RawURL），
@@ -305,18 +308,18 @@ func checkRelPath(section, name, target string) error {
 	// file:///etc/shadow 和 169.254.169.254），而客户端照着 toy.toml 打印的
 	// 仍然是作者写的那个来源 —— 那句话就成了假话（铁律 8）。
 	if i := strings.Index(target, "://"); i > 0 && isURLScheme(target[:i]) {
-		return fmt.Errorf("%w：[%s] 里 %q 的值 %q 是一个 URL。这里只能写 release 里的"+
-			"资产名（或包内相对路径）—— 地址由 toy 自己按托管方拼，写死 URL 会让它"+
-			"指向 toy.toml 说的来源之外的地方",
-			ErrUnsafeTarget, section, name, target)
+		return fmt.Errorf("%w: the value %q for %q in [%s] is a URL. Only the release asset name "+
+			"(or a path inside the package) belongs here -- toy builds the address itself from the host, "+
+			"and a hardcoded URL would point somewhere other than the source toy.toml claims",
+			ErrUnsafeTarget, target, name, section)
 	}
 	if i := strings.IndexAny(target, "?#"); i >= 0 {
-		return fmt.Errorf("%w：[%s] 里 %q 的路径 %q 含 %q。它会被拼进下载地址，"+
-			"而 ? 和 # 在 URL 里会把后面的部分切掉，取回来的是另一个文件。"+
-			"资产名里真有这两个字符就在 release 里改个名",
-			ErrUnsafeTarget, section, name, target, string(target[i]))
+		return fmt.Errorf("%w: the path %q for %q in [%s] contains %q. It is appended to the download URL, "+
+			"where ? and # cut off everything after them, so a different file comes back. If the asset name "+
+			"really contains that character, rename it in the release",
+			ErrUnsafeTarget, target, name, section, string(target[i]))
 	}
-	return checkPrintable(fmt.Sprintf("[%s] 里 %q 的路径", section, name), target)
+	return checkPrintable(fmt.Sprintf("the path for %q in [%s]", name, section), target)
 }
 
 // isURLScheme 按 RFC 3986 判断 s 是不是一个 scheme（字母开头，后跟字母数字 +-.）。
@@ -343,20 +346,20 @@ func checkPlatformKey(section, plat string) error {
 	// runtime.GOOS/GOARCH 永远是小写、不带空格。写成 "Linux/AMD64" 或 " linux/amd64 "
 	// 不会报错，只会永远匹配不上。这条要先判，因为下面的分段比较是逐字节的。
 	if plat != strings.ToLower(plat) || strings.ContainsAny(plat, " \t") {
-		return fmt.Errorf("toyfile: [%s] 里的 key %q 必须全小写且不带空格，"+
-			"它要和 Go 的 GOOS/GOARCH 逐字节相等才匹配得上，比如 \"linux/amd64\"", section, plat)
+		return fmt.Errorf("toyfile: the key %q in [%s] must be all lowercase with no whitespace -- it has to "+
+			"equal Go's GOOS/GOARCH byte for byte to ever match, e.g. \"linux/amd64\"", plat, section)
 	}
 	parts := strings.Split(plat, "/")
 	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
-		return fmt.Errorf("toyfile: [%s] 里的 key %q 不是 GOOS/GOARCH 形式，"+
-			`比如 "linux/amd64"、"darwin/arm64"，或者带一段 libc 的 "linux/amd64/musl"`, section, plat)
+		return fmt.Errorf("toyfile: the key %q in [%s] is not in GOOS/GOARCH form -- "+
+			`e.g. "linux/amd64", "darwin/arm64", or with a libc segment, "linux/amd64/musl"`, plat, section)
 	}
 	// arch 那一段不做白名单：Go 每加一个 GOARCH 都会让白名单变成一条假报错，
 	// 而 armv6 / armv7 这种「GOARCH 分不出来的代次」本来就得能写进去。
 	if len(parts) == 3 && parts[2] != "musl" && parts[2] != "gnu" {
-		return fmt.Errorf("toyfile: [%s] 里的 key %q 的第三段 %q 不认识 —— "+
-			"第三段是 libc，只能是 \"musl\"（Alpine 那类）或 \"gnu\"（glibc）。"+
-			"别的东西写在这里永远匹配不上，等于这一行没写", section, plat, parts[2])
+		return fmt.Errorf("toyfile: the key %q in [%s] has an unrecognized third segment %q -- that segment "+
+			"is the libc and can only be \"musl\" (Alpine and friends) or \"gnu\" (glibc). Anything else "+
+			"will never match, so the line does nothing", plat, section, parts[2])
 	}
 	return nil
 }
@@ -368,8 +371,9 @@ func checkPlatformKey(section, plat string) error {
 func checkPrintable(what, s string) error {
 	for _, r := range s {
 		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("toyfile: %s 含控制字符 %q。这些字段会原样打印在终端上，"+
-				"换行和转义序列可以把信任等级那一行覆盖掉，所以一概不收", what, r)
+			return fmt.Errorf("toyfile: %s contains the control character %q. These fields are printed to your "+
+				"terminal verbatim, and newlines or escape sequences can overwrite the trust level line, "+
+				"so none of them are accepted", what, r)
 		}
 	}
 	return nil
@@ -381,7 +385,7 @@ func describeKeys(keys []toml.Key) string {
 		out = append(out, k.String())
 	}
 	sort.Strings(out)
-	return strings.Join(out, "、")
+	return strings.Join(out, ", ")
 }
 
 func isHex64(s string) bool {

@@ -50,7 +50,7 @@ func TestArtifactValueCannotBeAURL(t *testing.T) {
 			"换个 toy.toml 就可能又漏过去：%v", err)
 	}
 	// 作者会看到这句话，它得说清楚问题在哪、该写什么。
-	for _, want := range []string{"URL", "资产名"} {
+	for _, want := range []string{"URL", "asset name"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("报错里没有 %q，作者看不出该改什么：%v", want, err)
 		}

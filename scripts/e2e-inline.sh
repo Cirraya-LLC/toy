@@ -117,7 +117,7 @@ reset; mode ok; idx "$INLINE"
 "$TOY" install alice/hello >"$W/r1.log" 2>&1
 chk "装出来的是上游那份的命令名 upstreamcmd"   "test -L '$TOY_HOME/bin/upstreamcmd'"
 chk "内联那份的命令名没有出现"                 "! test -e '$TOY_HOME/bin/inlinecmd'"
-chk "没有降档"                                 "! grep -q '打包说明来自索引' '$W/r1.log'"
+chk "没有降档"                                 "! grep -q 'packaging instructions come from the index' '$W/r1.log'"
 
 echo "== 规则 2：上游 404 且有内联 → 用内联，降档并说清哪一半是谁的 =="
 reset; mode 404; idx "$INLINE"
@@ -125,8 +125,8 @@ reset; mode 404; idx "$INLINE"
 chk "装出来的是内联那份的命令名 inlinecmd"     "test -L '$TOY_HOME/bin/inlinecmd'"
 chk "装好的命令真的能跑"                       "'$TOY_HOME/bin/inlinecmd' | grep -q INLINE-OK"
 chk "清单里的信任等级是 index-toyfile"          "grep -q 'index-toyfile' \"\$(manifest)\""
-chk "说了「打包说明来自索引」"                  "grep -q '打包说明来自索引' '$W/r2.log'"
-chk "说清了字节仍来自作者的 release"             "grep -q '作者' '$W/r2.log'"
+chk "说了「打包说明来自索引」"                  "grep -q 'packaging instructions come from the index' '$W/r2.log'"
+chk "说清了字节仍来自作者的 release"             "grep -q \"the bytes are from the author's own release\" '$W/r2.log'"
 
 echo "== 规则 3：上游 500 / 伪造原因短语 / 连不上，都绝不回落到内联 =="
 for m in 500 500-poison; do
@@ -169,8 +169,8 @@ assert 'sig' in e and 'toyfile' in e, e
 json.dump({'version':1,'packages':[e]},open('$W/idx.json','w'),ensure_ascii=False)"
   "$TOY" install alice/hello >"$W/r5.log" 2>&1
   chk "publish --inline 产出的条目 sig 和 toyfile 都在" "true"
-  chk "没有打出「✓ 已签名」的勾"        "! grep -q '✓ 已签名' '$W/r5.log'"
-  chk "仍然是「打包说明来自索引」这一档"  "grep -q '打包说明来自索引' '$W/r5.log'"
+  chk "没有打出「✓ 已签名」的勾"        "! grep -q '✓ signed' '$W/r5.log'"
+  chk "仍然是「打包说明来自索引」这一档"  "grep -q 'packaging instructions come from the index' '$W/r5.log'"
   chk "清单里的信任等级不是 signed"       "! grep -q 'trust = \"signed\"' \"\$(manifest)\""
 else
   bad "publish --inline 没产出条目"; cat "$W/pub.err"
@@ -183,11 +183,11 @@ chk "先按上游那份装上"                  "test -L '$TOY_HOME/bin/upstream
 mode 404
 "$TOY" install --reinstall alice/hello >"$W/r6a.log" 2>&1
 chk "同版重装时降档被拦下"              "! test -e '$TOY_HOME/bin/inlinecmd'"
-chk "拦下来的理由说的是信任等级降了"      "grep -q '信任等级比上一次低' '$W/r6a.log'"
+chk "拦下来的理由说的是信任等级降了"      "grep -q 'trusts less than the last one did' '$W/r6a.log'"
 chk "被拦时上游那份还在"                "test -L '$TOY_HOME/bin/upstreamcmd'"
 "$TOY" install --reinstall --force alice/hello >"$W/r6b.log" 2>&1
 chk "--force 才放行"                    "test -L '$TOY_HOME/bin/inlinecmd'"
-chk "--force 逐条说明了放行了什么"        "grep -q '放行' '$W/r6b.log'"
+chk "--force 逐条说明了放行了什么"        "grep -q -- '--force waived:' '$W/r6b.log'"
 
 # 升级到新版本这条路（不带 --reinstall，最常见的真实场景）
 reset; mode ok; idx "$INLINE"
@@ -206,7 +206,7 @@ tar -C "$B" -czf "$SRV/dist/hello_1.4.0_${G}_${A}.tar.gz" hello
 ( cd "$UP" && git tag v1.4.0 )
 "$TOY" install alice/hello >"$W/r6e.log" 2>&1
 chk "上游后来有了自己的 toy.toml：不拦"    "test -L '$TOY_HOME/bin/upstreamcmd'"
-chk "并且主动说明打包说明不再由索引提供"    "grep -q '不再由索引提供' '$W/r6e.log'"
+chk "并且主动说明打包说明不再由索引提供"    "grep -q 'no longer come from the index' '$W/r6e.log'"
 
 echo
 echo "通过 $pass，失败 $fail"

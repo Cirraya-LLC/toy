@@ -157,7 +157,7 @@
   "t1_who_html": {
     "zh-Hans": "索引里登记的那把 ed25519 公钥",
     "zh-Hant": "索引裡登記的那把 ed25519 公開金鑰",
-    "en": "<span lang=\"zh-Hans\">已签名</span> &mdash; signed. You are trusting the ed25519 public key registered in the index."
+    "en": "You are trusting the ed25519 public key registered in the index."
   },
   "t1_not_html": {
     "zh-Hans": "<strong>不证明是仓库主人签的。</strong>签名消息是 <code>id + source + toy.toml 原文</code>，三样都公开可读，<strong>里面没有一个字节把这把公钥和仓库的 owner 绑起来</strong>。索引谁都能 fork、谁都能提 PR，抄一把公钥零成本 —— 一个人完全可以 fork 一份、用自己的密钥给同一个 <code>id</code> 重新签一条、把 <code>source</code> 指向自己的仓库。它保证的是<strong>连续性</strong>（公钥首次安装即钉住，换了拒绝安装），不是身份。<strong>第一次安装该看的是 <code>source</code> 指向哪里，不是有没有勾。</strong>",
@@ -168,7 +168,7 @@
   "t2_who_html": {
     "zh-Hans": "托管方的账号体系：GitHub 说这个仓库属于这个账号，TLS 说你连到的是 GitHub",
     "zh-Hant": "代管方的帳號體系：GitHub 說這個儲存庫屬於這個帳號，TLS 說你連到的是 GitHub",
-    "en": "<span lang=\"zh-Hans\">未签名</span> &mdash; unsigned, from a forge. You're trusting GitHub's account system to say this repo belongs to this account, and TLS to say you reached GitHub."
+    "en": "You are trusting GitHub's account system to say this repo belongs to this account, and TLS to say you reached GitHub."
   },
   "t2_not_html": {
     "zh-Hans": "没有作者签名，也不需要 —— 这是绝大多数包的默认状态，而且它是一个诚实的状态，不是一个降级。",
@@ -179,7 +179,7 @@
   "t3_who_html": {
     "zh-Hans": "字节是作者的，打包说明不是",
     "zh-Hant": "位元組是作者的，打包說明不是",
-    "en": "<span lang=\"zh-Hans\">打包说明来自索引</span> &mdash; packaging instructions came from the index. The bytes are the author's; the instructions are not."
+    "en": "The bytes are the author's; the packaging instructions are not."
   },
   "t3_not_html": {
     "zh-Hans": "作者没写过 <code>toy.toml</code>，索引条目里内联了一份。索引能改的是「装哪个资产、软链成什么命令名」，改不了下载地址。<strong>内联的 toyfile 永远到不了那个勾</strong> —— 签名者是提交索引记录的人，不是作者。",
@@ -190,7 +190,7 @@
   "t4_who_html": {
     "zh-Hans": "裸 URL：<strong>你什么都没信</strong>",
     "zh-Hant": "裸 URL：<strong>你什麼都沒信</strong>",
-    "en": "<span lang=\"zh-Hans\">未签名 · 首次安装，已钉住 sha256</span> &mdash; a bare URL. <strong>You are trusting nothing.</strong>"
+    "en": "<strong>You are trusting nothing.</strong>"
   },
   "t4_not_html": {
     "zh-Hans": "但内容变了会被拦下来。TOFU 的第一次就是无条件信任 —— 第一次装到的如果就是坏的，toy 会忠实地把它钉住。",
@@ -199,9 +199,9 @@
   },
 
   "trust_fine_html": {
-    "zh-Hans": "有 <code>[sha256]</code> 就强制校验，没有则首次安装钉住，之后变了拒绝安装（模型抄的是 SSH 的 <code>known_hosts</code>）。<code>--reinstall</code> 和 <code>--force</code> 是两件事：前者只是「我知道已经装了这一版，再装一次」，<strong>不放行任何安全检查</strong>；后者才是「我看过了，接受这些变化」，而且会逐条打印自己放行了什么。完整的威胁模型 —— 包括 <strong>toy 不防的那一栏</strong> —— 在 <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>。",
-    "zh-Hant": "有 <code>[sha256]</code> 就強制驗證，沒有則首次安裝釘住，之後變了就拒絕安裝（模型抄的是 SSH 的 <code>known_hosts</code>）。<code>--reinstall</code> 和 <code>--force</code> 是兩回事：前者只是「我知道已經裝過這一版，再裝一次」，<strong>不放行任何安全檢查</strong>；後者才是「我看過了，接受這些變化」，而且會逐條印出自己放行了什麼。完整的威脅模型 —— 包括 <strong>toy 不防的那一欄</strong> —— 在 <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>。<span class=\"fine\">上表左欄是用戶端目前實際印出的字串，只有簡體中文一種；右邊兩欄是說明，不是輸出。</span>",
-    "en": "With a <code>[sha256]</code> block the hash is enforced; without one it is pinned on first install and a later change is refused &mdash; the model is SSH's <code>known_hosts</code>, deliberately not something new. <code>--reinstall</code> and <code>--force</code> are different things: the first only means &ldquo;I know this version is installed, do it again&rdquo; and <strong>waives no security check at all</strong>; the second means &ldquo;I looked, I accept these changes&rdquo;, and it prints every check it waived. The full threat model &mdash; including <strong>the column of things toy does not defend against</strong> &mdash; is in <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>. <span class=\"fine\">The left column above is the literal string the client prints today; it currently only speaks Simplified Chinese. The other two columns are commentary, not output.</span>"
+    "zh-Hans": "有 <code>[sha256]</code> 就强制校验，没有则首次安装钉住，之后变了拒绝安装（模型抄的是 SSH 的 <code>known_hosts</code>）。<code>--reinstall</code> 和 <code>--force</code> 是两件事：前者只是「我知道已经装了这一版，再装一次」，<strong>不放行任何安全检查</strong>；后者才是「我看过了，接受这些变化」，而且会逐条打印自己放行了什么。完整的威胁模型 —— 包括 <strong>toy 不防的那一栏</strong> —— 在 <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>。<span class=\"fine\">上表左栏是客户端实际打印的原文（英文）；右边两栏是说明，不是输出。</span>",
+    "zh-Hant": "有 <code>[sha256]</code> 就強制驗證，沒有則首次安裝釘住，之後變了就拒絕安裝（模型抄的是 SSH 的 <code>known_hosts</code>）。<code>--reinstall</code> 和 <code>--force</code> 是兩回事：前者只是「我知道已經裝過這一版，再裝一次」，<strong>不放行任何安全檢查</strong>；後者才是「我看過了，接受這些變化」，而且會逐條印出自己放行了什麼。完整的威脅模型 —— 包括 <strong>toy 不防的那一欄</strong> —— 在 <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>。<span class=\"fine\">上表左欄是用戶端實際印出的原文（英文）；右邊兩欄是說明，不是輸出。</span>",
+    "en": "With a <code>[sha256]</code> block the hash is enforced; without one it is pinned on first install and a later change is refused &mdash; the model is SSH's <code>known_hosts</code>, deliberately not something new. <code>--reinstall</code> and <code>--force</code> are different things: the first only means &ldquo;I know this version is installed, do it again&rdquo; and <strong>waives no security check at all</strong>; the second means &ldquo;I looked, I accept these changes&rdquo;, and it prints every check it waived. The full threat model &mdash; including <strong>the column of things toy does not defend against</strong> &mdash; is in <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>. <span class=\"fine\">The left column above is the literal string the client prints; the other two columns are commentary, not output.</span>"
   },
 
   "inst_h2": { "zh-Hans": "装 toy 自己", "zh-Hant": "安裝 toy 本身", "en": "Installing toy itself" },

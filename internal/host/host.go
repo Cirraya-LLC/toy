@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-var ErrUnknownHost = errors.New("host: 不认识这个托管方")
+var ErrUnknownHost = errors.New("host: unknown host")
 
 // Host 是四个 URL 模板。占位符：{owner} {repo} {ref} {path} {tag} {asset}
 type Host struct {
@@ -97,18 +97,18 @@ func Builtin() map[string]Host {
 // 带 \n\t 的多行模板到了用户眼前就是一串字面量 "\x0a\x09"，比不给还糟。
 // 行内表是合法 TOML 1.0、BurntSushi/toml 认，而且照样能整行复制粘贴。
 func selfHostedHint(name string) string {
-	const tmpl = `hosts.%s = { raw = "https://你的域名/{owner}/{repo}/raw/tag/{ref}/{path}", ` +
-		`clone = "https://你的域名/{owner}/{repo}", ` +
-		`release = "https://你的域名/{owner}/{repo}/releases/download/{tag}/{asset}", ` +
-		`web = "https://你的域名/{owner}/{repo}" }`
-	return "在 ~/.toy/config.toml 里加一行（整行复制）：" + fmt.Sprintf(tmpl, name)
+	const tmpl = `hosts.%s = { raw = "https://your.host/{owner}/{repo}/raw/tag/{ref}/{path}", ` +
+		`clone = "https://your.host/{owner}/{repo}", ` +
+		`release = "https://your.host/{owner}/{repo}/releases/download/{tag}/{asset}", ` +
+		`web = "https://your.host/{owner}/{repo}" }`
+	return "Add this line to ~/.toy/config.toml (copy the whole line): " + fmt.Sprintf(tmpl, name)
 }
 
 // Lookup 先查 overrides 再查内置表。
 func Lookup(name string, overrides map[string]Host) (Host, error) {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	if lower == "" {
-		return Host{}, fmt.Errorf("%w：托管方名字是空的（应该写成 github:owner/repo）", ErrUnknownHost)
+		return Host{}, fmt.Errorf("%w: the host name is empty (write it as github:owner/repo)", ErrUnknownHost)
 	}
 	// overrides 的 key 是用户自己起的名字，先按原样找，再退回小写。
 	// Name 一律落成小写：它会变成 ~/.toy/pkg/<host>/… 的目录名（规格 §6），
@@ -116,9 +116,10 @@ func Lookup(name string, overrides map[string]Host) (Host, error) {
 	for _, key := range []string{name, lower} {
 		if h, ok := overrides[key]; ok {
 			if h.isEmpty() {
-				return Host{}, fmt.Errorf("%w：config.toml 里的 [hosts.%s] 一个模板都没配"+
-					"（四个键是 raw / clone / release / web，写错键名不会报错、只会变成空的），"+
-					"而它盖住了同名的内置托管方。%s", ErrUnknownHost, key, selfHostedHint(key))
+				return Host{}, fmt.Errorf("%w: [hosts.%s] in config.toml sets no templates at all "+
+					"(the four keys are raw / clone / release / web; a misspelled key is not an error, "+
+					"it just leaves the entry empty), and it shadows the built-in host of the same name. %s",
+					ErrUnknownHost, key, selfHostedHint(key))
 			}
 			h.Name = lower
 			return h, nil
@@ -129,8 +130,9 @@ func Lookup(name string, overrides map[string]Host) (Host, error) {
 		// 形状不是托管方：直接用会打到一个不存在的域名上，报出来是一句 DNS 错误，
 		// 用户完全看不出自己该去配什么。在这里拦住并把模板给他。
 		if h.isPlaceholder() {
-			return Host{}, fmt.Errorf("%w：%q 是 gitea/forgejo 的**形状**，不是一家托管方 —— "+
-				"自建实例的域名只有你自己知道。%s", ErrUnknownHost, name, selfHostedHint(lower))
+			return Host{}, fmt.Errorf("%w: %q is the URL **shape** of gitea/forgejo, not a hosting "+
+				"provider — only you know your own instance's domain. %s",
+				ErrUnknownHost, name, selfHostedHint(lower))
 		}
 		return h, nil
 	}
@@ -153,8 +155,8 @@ func Lookup(name string, overrides map[string]Host) (Host, error) {
 	}
 	sort.Strings(known)
 	return Host{}, fmt.Errorf(
-		"%w：%q。现在认识的是 %s；自建实例%s",
-		ErrUnknownHost, name, strings.Join(known, "、"), selfHostedHint(lower))
+		"%w: %q. Known hosts are %s; a self-hosted instance needs its own entry. %s",
+		ErrUnknownHost, name, strings.Join(known, ", "), selfHostedHint(lower))
 }
 
 // expand 把模板里的占位符换掉。模板为空返回空串，调用方据此判断这家没配这个能力。
@@ -252,15 +254,16 @@ func lookupGit() (string, error) {
 		return cand, nil
 	}
 	if inToyBin != "" {
-		return "", fmt.Errorf("host: 拒绝执行 —— PATH 上唯一的 git 是 %s，"+
-			"它在 toy 自己的 bin 目录里，也就是说它来自某个装上来的包。"+
-			"toy 靠 `git ls-remote` 发现版本，跑它就等于让那个包拿到执行 —— "+
-			"**这很可能是一次攻击**。用 `toy list` 找出是谁装的、卸掉它，"+
-			"再装一个真的 git（Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install）",
+		return "", fmt.Errorf("host: refusing to run git — the only git on your PATH is %s, "+
+			"which sits in toy's own bin directory, meaning it came from a package you installed. "+
+			"toy discovers versions with `git ls-remote`, so running it would hand that package "+
+			"code execution — **this is very likely an attack**. Run `toy list` to find which "+
+			"package put it there, uninstall it, then install a real git "+
+			"(Debian/Ubuntu: sudo apt install git; macOS: xcode-select --install)",
 			inToyBin)
 	}
-	return "", errors.New("host: 找不到 git 命令。toy 靠 `git ls-remote` 发现版本，请先装 git" +
-		"（Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install）")
+	return "", errors.New("host: git not found. toy discovers versions with `git ls-remote`, " +
+		"so install git first (Debian/Ubuntu: sudo apt install git; macOS: xcode-select --install)")
 }
 
 // executableFile 判断 p 是不是一个能跑的普通文件。跟随软链（bin/ 里全是软链）。
@@ -310,15 +313,16 @@ func (c *cappedBuffer) String() string { return c.b.String() }
 func Tags(ctx context.Context, cloneURL string) ([]string, error) {
 	cloneURL = strings.TrimSpace(cloneURL)
 	if cloneURL == "" {
-		return nil, errors.New("host: clone 地址是空的 —— 这家托管方没配 clone 模板，没法发现版本")
+		return nil, errors.New("host: the clone URL is empty — this host has no clone template, so versions cannot be discovered")
 	}
 	// 铁律 1：toy 任何时候都不执行别人的代码。而 `git ls-remote <url>` 里的 url
 	// 只要以 '-' 开头，git 就把它当成选项 —— `--upload-pack=<命令>` 是一条现成的
 	// 任意命令执行（实测 git 真的会跑它）。下面既传 `--` 分隔符、这里也直接拒绝：
 	// 一个以 '-' 开头的字符串无论如何都不是合法的 clone 地址。
 	if strings.HasPrefix(cloneURL, "-") {
-		return nil, fmt.Errorf("host: 拒绝执行 —— clone 地址 %q 以 '-' 开头，"+
-			"git 会把它当成命令行选项（比如 --upload-pack=<命令>，那就是一条任意命令执行）", cloneURL)
+		return nil, fmt.Errorf("host: refusing to run git — the clone URL %q starts with '-', "+
+			"which git reads as a command-line option (--upload-pack=<command> is arbitrary "+
+			"command execution)", cloneURL)
 	}
 	// 绝对路径，而且保证不来自 ~/.toy/bin —— 见上面 lookupGit。
 	// 不缓存：一次 PATH 走查是几个 stat，而它后面跟着的是一次网络往返；
@@ -352,8 +356,8 @@ func Tags(ctx context.Context, cloneURL string) ([]string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return nil, fmt.Errorf("host: 找不到 git 命令。toy 靠 `git ls-remote` 发现版本，请先装 git" +
-				"（Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install）")
+			return nil, fmt.Errorf("host: git not found. toy discovers versions with `git ls-remote`, " +
+				"so install git first (Debian/Ubuntu: sudo apt install git; macOS: xcode-select --install)")
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// %w 而不是 %v：上层（runUpdate / main）靠 errors.Is(err, context.Canceled)
@@ -363,12 +367,13 @@ func Tags(ctx context.Context, cloneURL string) ([]string, error) {
 				// 取消不是超时，别把用户自己按的 Ctrl-C 说成网络故障。
 				return nil, ctxErr
 			}
-			return nil, fmt.Errorf("host: 读 %s 的 tag 超时了（%w）—— 可能是网络不通，或者这个仓库不存在/需要登录", cloneURL, ctxErr)
+			return nil, fmt.Errorf("host: timed out reading tags from %s (%w) — the network may be "+
+				"down, or the repository does not exist / needs authentication", cloneURL, ctxErr)
 		}
 		if msg := firstLine(stderr.String()); msg != "" {
-			return nil, fmt.Errorf("host: `git ls-remote --tags %s` 失败：%s", cloneURL, msg)
+			return nil, fmt.Errorf("host: `git ls-remote --tags %s` failed: %s", cloneURL, msg)
 		}
-		return nil, fmt.Errorf("host: `git ls-remote --tags %s` 失败：%w", cloneURL, err)
+		return nil, fmt.Errorf("host: `git ls-remote --tags %s` failed: %w", cloneURL, err)
 	}
 	return parseLsRemote(string(out)), nil
 }

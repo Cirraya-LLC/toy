@@ -19,9 +19,11 @@ import (
 )
 
 var (
-	ErrBadSignature = errors.New("sign: 签名验证失败")
-	ErrChanged      = errors.New("sign: 与首次安装时钉住的值不一致")
-	ErrNoKey        = errors.New("sign: 本机还没有密钥对，先跑 toy keygen")
+	ErrBadSignature = errors.New("sign: signature verification failed")
+	// 措辞不下断言：这两种可能性从字节上分不出来，客户端不该替用户选一个。
+	ErrChanged = errors.New("sign: value does not match the one pinned on first install " +
+		"(the author may have re-released the same version, or the content may have been swapped)")
+	ErrNoKey = errors.New("sign: no keypair on this machine yet; run `toy keygen` first")
 )
 
 // 密钥文件名。公钥和私钥都存 hex 文本，因为 Verify 收的就是 hex 公钥，
@@ -39,7 +41,7 @@ type KeyPair struct {
 func Generate() (KeyPair, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return KeyPair{}, fmt.Errorf("sign: 生成密钥对失败: %w", err)
+		return KeyPair{}, fmt.Errorf("sign: could not generate keypair: %w", err)
 	}
 	return KeyPair{Public: pub, Private: priv}, nil
 }
@@ -53,7 +55,7 @@ func LoadKeyPair(dir string) (KeyPair, error) {
 		return KeyPair{}, ErrNoKey
 	}
 	if err != nil {
-		return KeyPair{}, fmt.Errorf("sign: 读不到 %s: %w", secPath, err)
+		return KeyPair{}, fmt.Errorf("sign: cannot read %s: %w", secPath, err)
 	}
 	// 跟 ssh 一样：私钥对别人可读就拒绝加载，并且直接告诉他怎么修。
 	// 判据是"group/other 一位都不能有"，不是"恰好 0600"：0400 比 0600 更严
@@ -61,18 +63,18 @@ func LoadKeyPair(dir string) (KeyPair, error) {
 	// "修复：chmod 600" 是在教用户把一个只读的私钥改成可写。
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		return KeyPair{}, fmt.Errorf(
-			"sign: 私钥 %s 的权限是 %04o，同组或其他人能读到它。修复：chmod 600 %s",
+			"sign: private key %s has mode %04o, so your group or other users can read it. Fix it with: chmod 600 %s",
 			secPath, perm, secPath)
 	}
 
-	priv, err := readHexFile(secPath, ed25519.PrivateKeySize, "私钥")
+	priv, err := readHexFile(secPath, ed25519.PrivateKeySize, "private key")
 	if err != nil {
 		return KeyPair{}, err
 	}
 	pubPath := filepath.Join(dir, pubFile)
-	pub, err := readHexFile(pubPath, ed25519.PublicKeySize, "公钥")
+	pub, err := readHexFile(pubPath, ed25519.PublicKeySize, "public key")
 	if errors.Is(err, os.ErrNotExist) {
-		return KeyPair{}, fmt.Errorf("sign: 有私钥但缺公钥 %s，删掉 %s 重新跑 toy keygen", pubPath, secFile)
+		return KeyPair{}, fmt.Errorf("sign: private key present but public key %s is missing; delete %s and run `toy keygen` again", pubPath, secFile)
 	}
 	if err != nil {
 		return KeyPair{}, err
@@ -81,7 +83,7 @@ func LoadKeyPair(dir string) (KeyPair, error) {
 	kp := KeyPair{Public: ed25519.PublicKey(pub), Private: ed25519.PrivateKey(priv)}
 	// 私钥后 32 字节就是公钥，对不上说明两个文件不是一对。
 	if !bytes.Equal(kp.Private.Public().(ed25519.PublicKey), kp.Public) {
-		return KeyPair{}, fmt.Errorf("sign: %s 和 %s 不是同一对密钥，删掉它们重新跑 toy keygen", pubFile, secFile)
+		return KeyPair{}, fmt.Errorf("sign: %s and %s are not the same keypair; delete both and run `toy keygen` again", pubFile, secFile)
 	}
 	return kp, nil
 }
@@ -93,10 +95,10 @@ func readHexFile(path string, want int, what string) ([]byte, error) {
 	}
 	b, err := hex.DecodeString(strings.TrimSpace(string(raw)))
 	if err != nil {
-		return nil, fmt.Errorf("sign: %s %s 不是合法的十六进制: %w", what, path, err)
+		return nil, fmt.Errorf("sign: %s %s is not valid hex: %w", what, path, err)
 	}
 	if len(b) != want {
-		return nil, fmt.Errorf("sign: %s %s 长度是 %d 字节，应该是 %d", what, path, len(b), want)
+		return nil, fmt.Errorf("sign: %s %s is %d bytes, expected %d", what, path, len(b), want)
 	}
 	return b, nil
 }
@@ -104,24 +106,24 @@ func readHexFile(path string, want int, what string) ([]byte, error) {
 // SaveKeyPair 写 key.pub(0644) 和 key.sec(0600)。已存在时拒绝覆盖。
 func SaveKeyPair(dir string, kp KeyPair) error {
 	if len(kp.Public) != ed25519.PublicKeySize || len(kp.Private) != ed25519.PrivateKeySize {
-		return errors.New("sign: 密钥对长度不对，不能保存")
+		return errors.New("sign: keypair has the wrong length, refusing to save it")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("sign: 建目录 %s 失败: %w", dir, err)
+		return fmt.Errorf("sign: could not create directory %s: %w", dir, err)
 	}
 	pubPath := filepath.Join(dir, pubFile)
 	secPath := filepath.Join(dir, secFile)
 	for _, p := range []string{pubPath, secPath} {
 		if _, err := os.Stat(p); err == nil {
-			return fmt.Errorf("sign: %s 已经存在，不覆盖。要换新密钥就先自己把它挪走或删掉", p)
+			return fmt.Errorf("sign: %s already exists and will not be overwritten. To use a new key, move or delete it yourself first", p)
 		}
 	}
 	// 先写私钥：公钥先落地而私钥失败会留下一个没用的半套。
 	if err := writeNew(secPath, hex.EncodeToString(kp.Private)+"\n", 0o600); err != nil {
-		return fmt.Errorf("sign: 写私钥 %s 失败: %w", secPath, err)
+		return fmt.Errorf("sign: could not write private key %s: %w", secPath, err)
 	}
 	if err := writeNew(pubPath, hex.EncodeToString(kp.Public)+"\n", 0o644); err != nil {
-		return fmt.Errorf("sign: 写公钥 %s 失败: %w", pubPath, err)
+		return fmt.Errorf("sign: could not write public key %s: %w", pubPath, err)
 	}
 	return nil
 }
@@ -159,10 +161,10 @@ const fingerprintHexLen = 32
 // 渲染成一个看起来正常的指纹 —— 界面上一句 "key a3…" 会被读成"这个包有签名者"。
 func Fingerprint(pub ed25519.PublicKey) string {
 	if len(pub) == 0 {
-		return "(无公钥)"
+		return "(no public key)"
 	}
 	if len(pub) != ed25519.PublicKeySize {
-		return "(公钥无效)"
+		return "(invalid public key)"
 	}
 	return hex.EncodeToString(pub)[:fingerprintHexLen] + "…"
 }
@@ -181,14 +183,14 @@ func Sign(priv ed25519.PrivateKey, msg []byte) string {
 func Verify(pubHex string, msg []byte, sigB64 string) error {
 	pub, err := hex.DecodeString(strings.TrimSpace(pubHex))
 	if err != nil {
-		return fmt.Errorf("sign: 公钥不是合法的十六进制: %w", err)
+		return fmt.Errorf("sign: public key is not valid hex: %w", err)
 	}
 	if len(pub) != ed25519.PublicKeySize {
-		return fmt.Errorf("sign: 公钥长度是 %d 字节，应该是 %d", len(pub), ed25519.PublicKeySize)
+		return fmt.Errorf("sign: public key is %d bytes, expected %d", len(pub), ed25519.PublicKeySize)
 	}
 	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sigB64))
 	if err != nil {
-		return fmt.Errorf("sign: 签名不是合法的 base64: %w", err)
+		return fmt.Errorf("sign: signature is not valid base64: %w", err)
 	}
 	if !ed25519.Verify(ed25519.PublicKey(pub), msg, sig) {
 		return ErrBadSignature
@@ -224,10 +226,10 @@ type Ring struct{ Dir string }
 
 func OpenRing(dir string) (*Ring, error) {
 	if dir == "" {
-		return nil, errors.New("sign: 钥匙环目录不能为空")
+		return nil, errors.New("sign: keyring directory cannot be empty")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("sign: 建钥匙环目录 %s 失败: %w", dir, err)
+		return nil, fmt.Errorf("sign: could not create keyring directory %s: %w", dir, err)
 	}
 	return &Ring{Dir: dir}, nil
 }
@@ -288,16 +290,16 @@ func (r *Ring) Pin(id, kind, value string) error {
 // 所以不为 Windows 加一对 build tag 文件。真要上 Windows 时在这里分平台。
 func (r *Ring) withLock(kind string, fn func() error) error {
 	if err := os.MkdirAll(r.Dir, 0o700); err != nil {
-		return fmt.Errorf("sign: 建钥匙环目录 %s 失败: %w", r.Dir, err)
+		return fmt.Errorf("sign: could not create keyring directory %s: %w", r.Dir, err)
 	}
 	lockPath := r.path(kind) + ".lock"
 	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
-		return fmt.Errorf("sign: 打不开钥匙环锁 %s: %w", lockPath, err)
+		return fmt.Errorf("sign: could not open keyring lock %s: %w", lockPath, err)
 	}
 	defer f.Close()
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("sign: 锁不住钥匙环 %s: %w", lockPath, err)
+		return fmt.Errorf("sign: could not lock the keyring %s: %w", lockPath, err)
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
@@ -307,29 +309,29 @@ func (r *Ring) withLock(kind string, fn func() error) error {
 // 所以它必须是个安全的名字而不是一段路径。
 func validEntry(id, kind, value string) error {
 	if id == "" {
-		return errors.New("sign: id 不能为空")
+		return errors.New("sign: id cannot be empty")
 	}
 	if value == "" {
-		return errors.New("sign: 要钉住的值不能为空")
+		return errors.New("sign: the value to pin cannot be empty")
 	}
 	if strings.ContainsAny(id, " \t\r\n") {
-		return fmt.Errorf("sign: id %q 里不能有空白字符", id)
+		return fmt.Errorf("sign: id %q must not contain whitespace", id)
 	}
 	// load 把 # 开头的行当注释跳过，所以这种 id 会 Pin 成功、Check 永远读不回来
 	// —— 一条永远钉不住的记录等于这个包的 TOFU 被静默关掉了。拒绝比丢掉好。
 	if strings.HasPrefix(id, "#") {
-		return fmt.Errorf("sign: id %q 不能以 # 开头（那是钥匙环的注释符）", id)
+		return fmt.Errorf("sign: id %q must not start with # (that is the keyring comment marker)", id)
 	}
 	if strings.ContainsAny(value, " \t\r\n") {
-		return fmt.Errorf("sign: 值 %q 里不能有空白字符", value)
+		return fmt.Errorf("sign: value %q must not contain whitespace", value)
 	}
 	if kind == "" {
-		return errors.New("sign: kind 不能为空（用 \"key\" 或 \"sha256\"）")
+		return errors.New("sign: kind cannot be empty (use \"key\" or \"sha256\")")
 	}
 	for _, c := range kind {
 		ok := c == '-' || c == '_' || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 		if !ok {
-			return fmt.Errorf("sign: kind %q 只能是小写字母、数字、- 和 _", kind)
+			return fmt.Errorf("sign: kind %q may only contain lowercase letters, digits, - and _", kind)
 		}
 	}
 	return nil
@@ -345,7 +347,7 @@ func (r *Ring) load(kind string) (map[string]string, error) {
 		return out, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("sign: 读钥匙环 %s 失败: %w", r.path(kind), err)
+		return nil, fmt.Errorf("sign: could not read keyring %s: %w", r.path(kind), err)
 	}
 	defer f.Close()
 
@@ -364,7 +366,7 @@ func (r *Ring) load(kind string) (map[string]string, error) {
 		out[id] = strings.TrimSpace(value)
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("sign: 读钥匙环 %s 失败: %w", r.path(kind), err)
+		return nil, fmt.Errorf("sign: could not read keyring %s: %w", r.path(kind), err)
 	}
 	return out, nil
 }
@@ -381,35 +383,35 @@ func (r *Ring) save(kind string, pinned map[string]string) error {
 		fmt.Fprintf(&buf, "%s %s\n", id, pinned[id])
 	}
 	if err := os.MkdirAll(r.Dir, 0o700); err != nil {
-		return fmt.Errorf("sign: 建钥匙环目录 %s 失败: %w", r.Dir, err)
+		return fmt.Errorf("sign: could not create keyring directory %s: %w", r.Dir, err)
 	}
 	// 先写临时文件再 rename：中途挂掉不会留下一个被截断的钥匙环。
 	tmp, err := os.CreateTemp(r.Dir, kind+".txt.*")
 	if err != nil {
-		return fmt.Errorf("sign: 写钥匙环失败: %w", err)
+		return fmt.Errorf("sign: could not write the keyring: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // rename 成功之后这一下是空操作。
 	if _, err := tmp.Write(buf.Bytes()); err != nil {
 		tmp.Close()
-		return fmt.Errorf("sign: 写钥匙环失败: %w", err)
+		return fmt.Errorf("sign: could not write the keyring: %w", err)
 	}
 	// 没有这一下，rename 的原子性只保证"要么旧文件要么新文件名"，不保证新文件
 	// 里有内容：断电后常见的结果是一个长度为 0 的钥匙环，也就是全部钉住记录
 	// 静默消失、每个包都退回第一次安装。
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return fmt.Errorf("sign: 钥匙环落盘失败: %w", err)
+		return fmt.Errorf("sign: could not flush the keyring to disk: %w", err)
 	}
 	if err := tmp.Chmod(0o644); err != nil {
 		tmp.Close()
-		return fmt.Errorf("sign: 设置钥匙环权限失败: %w", err)
+		return fmt.Errorf("sign: could not set keyring file permissions: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("sign: 写钥匙环失败: %w", err)
+		return fmt.Errorf("sign: could not write the keyring: %w", err)
 	}
 	if err := os.Rename(tmpName, r.path(kind)); err != nil {
-		return fmt.Errorf("sign: 写钥匙环 %s 失败: %w", r.path(kind), err)
+		return fmt.Errorf("sign: could not write keyring %s: %w", r.path(kind), err)
 	}
 	return nil
 }

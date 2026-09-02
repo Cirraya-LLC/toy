@@ -62,10 +62,10 @@ type Index struct {
 func Load(data []byte, name string) (*Index, int, error) {
 	var raw Index
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, 0, fmt.Errorf("索引 %s：JSON 解析失败：%w", name, err)
+		return nil, 0, fmt.Errorf("index %s: invalid JSON: %w", name, err)
 	}
 	if raw.Version != Version {
-		return nil, 0, fmt.Errorf("索引 %s：版本是 %d，本客户端只认 version %d，请升级 toy 或换一个索引",
+		return nil, 0, fmt.Errorf("index %s: format version %d, but this client only understands version %d — upgrade toy or use another index",
 			name, raw.Version, Version)
 	}
 
@@ -147,7 +147,7 @@ func (i *Index) Marshal() ([]byte, error) {
 	// 缩进 + 结尾换行：索引文件是要进 git 的，diff 得好读。
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("索引 %s：序列化失败：%w", i.Name, err)
+		return nil, fmt.Errorf("index %s: cannot serialize: %w", i.Name, err)
 	}
 	return append(b, '\n'), nil
 }

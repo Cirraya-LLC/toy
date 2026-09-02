@@ -273,10 +273,10 @@ func TestGenIsolatesFailuresAndClassifiesThem(t *testing.T) {
 	// 每种失败的措辞各自检查一遍：一句笼统的「没有可用资产」会让人挨个
 	// 去仓库页面上看到底是哪种。
 	for _, tc := range []struct{ id, want string }{
-		{"nobody/gone", "仓库不存在"},
-		{"nobody/norelease", "还没发布过 release"},
-		{"nobody/sourceonly", "纯源码"},
-		{"nobody/limited", "限流"},
+		{"nobody/gone", "does not exist"},
+		{"nobody/norelease", "never published a release"},
+		{"nobody/sourceonly", "source-only"},
+		{"nobody/limited", "rate limit"},
 	} {
 		r := genOne(context.Background(), cfg, &index.Index{Version: index.Version}, tc.id)
 		if r.err == nil {
@@ -316,10 +316,10 @@ func TestRateLimitTellsYouToSetAToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("应该报限流")
 	}
-	if !strings.Contains(err.Error(), "GITHUB_TOKEN") || !strings.Contains(err.Error(), "配额") {
+	if !strings.Contains(err.Error(), "GITHUB_TOKEN") || !strings.Contains(err.Error(), "quota") {
 		t.Errorf("限流报错没说该怎么办：%v", err)
 	}
-	if !strings.Contains(c.Quota(), "还剩 0") {
+	if !strings.Contains(c.Quota(), "0 remaining") {
 		t.Errorf("Quota() = %q", c.Quota())
 	}
 }

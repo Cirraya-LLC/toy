@@ -44,14 +44,15 @@ func runKeygen(ctx context.Context, args []string) error {
 		// SaveKeyPair 已经说清楚是哪个文件挡住了，这里补的是「为什么不给 --force」：
 		// 覆盖私钥等于永久丢掉这个名字 —— 旧钥匙签过的条目再也签不出来，
 		// 索引里那个 key 字段一换，所有认得旧钥匙的人看到的就是一次密钥变更。
-		return fmt.Errorf("%w。toy 不提供覆盖选项：换一把钥匙就等于放弃用旧钥匙认领过的名字，"+
-			"旧钥匙签过的条目谁也再签不出来 —— 真要重来只能自己动手把那个文件挪走", err)
+		return fmt.Errorf("%w. toy offers no overwrite flag: swapping keys means giving up every name the old "+
+			"key claimed, and nobody can re-sign the entries it signed — if you really want to start over, "+
+			"move that file aside yourself", err)
 	}
 
-	ui.Info("密钥对已生成：%s（私钥 key.sec 是 0600，别拷给任何人、也别提交进仓库）", st.KeysDir())
-	ui.Info("指纹 %s —— 别人安装时打印的就是这一串", sign.Fingerprint(kp.Public))
-	ui.Info("下一步：把下面这行公钥贴进索引条目的 \"key\" 字段，那就是认领这个名字；")
-	ui.Info("在项目目录里跑 `toy publish` 会直接生成好带 key 的整条条目。")
+	ui.Info("Key pair written to %s (key.sec is mode 0600 — do not copy it anywhere, do not commit it)", st.KeysDir())
+	ui.Info("Fingerprint %s — this is the string other people see when they install", sign.Fingerprint(kp.Public))
+	ui.Info("Next: paste the public key below into the \"key\" field of an index entry — that is how you claim a name.")
+	ui.Info("Running `toy publish` in the project directory writes the whole entry, key included.")
 	// 机器可读的走 stdout（规格 §9），这样 `toy keygen | pbcopy` 拿到的就是纯公钥。
 	fmt.Println(hex.EncodeToString(kp.Public))
 	return nil
@@ -86,8 +87,8 @@ func autSignMessage(id, source string, toyTOML []byte) []byte {
 // 现存几千个 CLI 工具一个都没有 toy.toml。
 func runPublish(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
-	source := fs.String("source", "", "索引条目的 source，形如 github:owner/repo；不写就从 git 的 origin 推")
-	inline := fs.Bool("inline", false, "把这份 toy.toml 原文内联进条目：给一个【不是你的】仓库写打包说明（上游自己加了 toy.toml 就会自动让位）")
+	source := fs.String("source", "", "the entry's source, like github:owner/repo; inferred from the git origin if omitted")
+	inline := fs.Bool("inline", false, "inline this toy.toml verbatim into the entry: packaging instructions for a repository that is NOT yours (it steps aside the moment upstream ships its own toy.toml)")
 	// 借 install 那套解析：-h 才会把上面两行说明打出来，而 --inline 和普通 publish
 	// 是两件事，那个区别只写在这里。
 	if err := insParseFlags(fs, args); err != nil {
@@ -104,13 +105,13 @@ func runPublish(ctx context.Context, args []string) error {
 	path := filepath.Join(dir, "toy.toml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("读不到 %s：%w。publish 读的是这个目录里的 toy.toml —— "+
-			"8 行就够（name / [bin] / [artifact]），不用求任何人批准", path, err)
+		return fmt.Errorf("cannot read %s: %w. publish reads the toy.toml in this directory — "+
+			"eight lines is enough (name / [bin] / [artifact]), and nobody has to approve it", path, err)
 	}
 	// 先校验再签名：签一个自己都装不上的 toy.toml，只是把错误推迟到别人机器上。
 	tf, err := toyfile.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%s 还不能发布：%w", path, err)
+		return fmt.Errorf("%s is not ready to publish: %w", path, err)
 	}
 
 	st, cfg, err := openStore()
@@ -126,20 +127,21 @@ func runPublish(ctx context.Context, args []string) error {
 	}
 	r, err := ref.Parse(src)
 	if err != nil {
-		return fmt.Errorf("source %q 解析不了：%w", src, err)
+		return fmt.Errorf("the source %q does not parse: %w", src, err)
 	}
 	if r.Kind != ref.KindHost {
-		return fmt.Errorf("source 要写成 github:owner/repo 这种形态（前缀可以是 gitlab: / codeberg: "+
-			"或者你在 ~/.toy/config.toml 里自己加的托管方），拿到的是 %q。"+
-			"裸 owner/repo 会让客户端回头再查一次索引（那是个环）；"+
-			"直接指向一个 toy.toml 地址的条目现在只能手写，因为那种写法里没有 owner/repo 可以当 id", src)
+		return fmt.Errorf("the source has to look like github:owner/repo (the prefix can be gitlab: / codeberg: "+
+			"or any host you added in ~/.toy/config.toml), got %q. A bare owner/repo would send the client back "+
+			"to an index lookup, which is a loop; and an entry pointing straight at a toy.toml URL still has to "+
+			"be written by hand, because that form carries no owner/repo to use as the id", src)
 	}
 	if r.Version != "" {
-		return fmt.Errorf("source 里不要带 @%s：索引条目指的是仓库，装哪一版由 git tag 决定（规格 §5）。"+
-			"钉死版本的话，你以后每发一版都得回来改索引", r.Version)
+		return fmt.Errorf("leave the @%s off the source: an index entry names a repository, and which version "+
+			"gets installed is decided by the git tags. Pin a version here and you have to come back and edit "+
+			"the index on every release", r.Version)
 	}
 	if tf.Desc == "" {
-		ui.Warn("toy.toml 里没有 desc，条目的描述会是空的 —— 而 `toy search` 主要就搜它")
+		ui.Warn("toy.toml has no desc, so the entry's description will be empty — and that is mostly what `toy search` searches")
 	}
 
 	entry := index.Entry{
@@ -158,46 +160,48 @@ func runPublish(ctx context.Context, args []string) error {
 		// 哈希就是对的，那里该留着 —— 只有替别人写的这条不能留。）
 		if stripped, ok := autStripSHA256(raw); ok {
 			raw = stripped
-			ui.Warn("已从内联的 toy.toml 里去掉 [sha256]：它钉的是这一个版本的字节，")
-			ui.Info("而内联条目跟着上游最新的 tag 走 —— 留着的话上游一发新版，")
-			ui.Info("所有人都会拿到「哈希对不上」而那只是作者正常发版。首次安装仍有 TOFU 钉住。")
+			ui.Warn("Stripped [sha256] from the inlined toy.toml: it pins the bytes of one specific version,")
+			ui.Info("while an inline entry follows whatever tag upstream publishes next. Left in, the author's")
+			ui.Info("next release would hand everyone a checksum mismatch. First installs are still pinned by TOFU.")
 		}
 		// 原文进条目：客户端验签名验的就是这份原文（autSignMessage），
 		// 重新序列化一遍等于换了一份文本（同 rsvGetToyfile 那条注释）。
 		entry.Toyfile = string(raw)
-		ui.Warn("这是一条【内联】条目：你在替 %s 写打包说明，而那不是你的仓库。", entry.Source)
-		ui.Info("装它的人会看到一行降档标识：二进制取自作者的 release，但装哪个资产、")
-		ui.Info("命令叫什么名字是索引说的 —— 所以 [bin] 那几个名字要照作者的本意写。")
-		ui.Info("上游哪天自己加了 toy.toml，客户端立刻改用作者那份，这条内联的自动让位。")
+		ui.Warn("This is an INLINE entry: you are writing packaging instructions for %s, which is not your repository.", entry.Source)
+		ui.Info("Whoever installs it sees a reduced-trust line: the binary comes from the author's release, but")
+		ui.Info("which asset and what the command is called come from the index — so write the [bin] names")
+		ui.Info("the way the author meant them. The day upstream adds its own toy.toml, clients switch to it")
+		ui.Info("and this inline entry steps aside on its own.")
 	}
 
 	// 签名是可选升级不是入场券（规格 §4）：没有密钥对照样输出条目，照样能被收进索引。
 	switch kp, err := sign.LoadKeyPair(st.KeysDir()); {
 	case errors.Is(err, sign.ErrNoKey):
-		ui.Info("本机还没有密钥对，这条是未签名的条目 —— 它一样能被收进索引、一样能装。")
-		ui.Info("跑 `toy keygen` 生成一把钥匙就能认领 %s 这个名字，之后 publish 会自动带上 key 和 sig。", entry.ID)
+		ui.Info("There is no key pair on this machine, so this entry is unsigned — it can still be listed and still installs.")
+		ui.Info("Run `toy keygen` to make one and claim the name %s; after that publish adds the key and sig for you.", entry.ID)
 	case err != nil:
 		return err
 	default:
 		entry.Key = hex.EncodeToString(kp.Public)
 		entry.Sig = sign.Sign(kp.Private, autSignMessage(entry.ID, entry.Source, raw))
-		ui.Info("已用 %s 签名（签的是 id + source + 这份 toy.toml 的原文）", sign.Fingerprint(kp.Public))
+		ui.Info("Signed with %s (the signature covers id + source + the verbatim bytes of this toy.toml)", sign.Fingerprint(kp.Public))
 		if *inline {
 			// 内联那一档永远到不了「✓ 已签名」（规则 2）：签名者是写这条记录的人，
 			// 不是作者。这里必须说明白，否则维护者会以为签了名就等于背书。
-			ui.Info("内联条目的签名只证明这条记录没被人改过，**不会**让它显示成「✓ 已签名」——")
-			ui.Info("那个勾说的是「作者本人签的」，而这份打包说明是你写的。")
+			ui.Info("A signature on an inline entry only proves this record was not altered. It will NOT make it")
+			ui.Info("show up as \"✓ signed\" — that check mark means the author signed, and you wrote these instructions.")
 		}
 	}
 
 	out, err := json.MarshalIndent(entry, "  ", "  ")
 	if err != nil {
-		return fmt.Errorf("生成索引条目失败：%w", err)
+		return fmt.Errorf("cannot render the index entry: %w", err)
 	}
 	// 条目走 stdout，说明走 stderr（规格 §9），所以 `toy publish > entry.json` 拿到的是纯 JSON。
 	fmt.Printf("  %s\n", out)
-	ui.Info("把上面这段粘进索引 JSON 的 packages 数组里就发布完了（想加 tags 就自己补一行 \"tags\": [\"web\"]）。")
-	ui.Info("toy 不替你联网、不替你提交 —— 索引就是一个 JSON 文件，谁 fork 一份谁就有一个平行索引。")
+	ui.Info("Paste the block above into the packages array of an index JSON and you have published (add a line")
+	ui.Info("like \"tags\": [\"web\"] yourself if you want tags). toy does not go online for you and does not commit")
+	ui.Info("for you — an index is just a JSON file, and anyone who forks one has a parallel index.")
 	return nil
 }
 
@@ -214,9 +218,9 @@ func autGitSource(ctx context.Context, dir, binDir string, overrides map[string]
 	}
 	name := autHostName(domain, overrides)
 	if name == "" {
-		return "", fmt.Errorf("origin 指向 %s，但 toy 的托管方表里没有这个域名。"+
-			"要么用 --source 直接指定（如 --source github:%s/%s），"+
-			"要么在 ~/.toy/config.toml 里加一段 [hosts.你起的名字]（四个模板：raw / clone / release / web）",
+		return "", fmt.Errorf("origin points at %s, and that domain is not in toy's host table. "+
+			"Either name it directly (--source github:%s/%s), or add a [hosts.<name you pick>] section "+
+			"in ~/.toy/config.toml with the four templates: raw / clone / release / web",
 			domain, owner, repo)
 	}
 	return name + ":" + owner + "/" + repo, nil
@@ -252,12 +256,13 @@ func autGitPath(binDir string) (string, error) {
 		return cand, nil
 	}
 	if inToyBin != "" {
-		return "", fmt.Errorf("拒绝执行 —— PATH 上唯一的 git 是 %s，它在 toy 自己的 bin 目录里，"+
-			"也就是说它来自某个装上来的包。跑它就等于让那个包拿到执行（铁律 1）。"+
-			"用 `toy list` 找出是谁装的、卸掉它，再装一个真的 git；"+
-			"或者用 --source github:owner/repo 直接指定，那条路根本不碰 git", inToyBin)
+		return "", fmt.Errorf("refusing to run it: the only git on PATH is %s, which lives in toy's own bin "+
+			"directory — meaning it came from a package somebody installed. Running it would hand that package "+
+			"execution, and toy never executes anything from a package. This is very likely an attack. "+
+			"Use `toy list` to find which package put it there, remove it, and install a real git; "+
+			"or pass --source github:owner/repo, which does not touch git at all", inToyBin)
 	}
-	return "", errors.New("找不到 git 命令，推不出 source。用 --source github:owner/repo 直接指定")
+	return "", errors.New("no git command found, so the source cannot be inferred. Pass --source github:owner/repo instead")
 }
 
 // autSameDir / autCanonDir：先转绝对路径再解软链（/usr/bin 常常是 /bin 的软链），
@@ -287,12 +292,12 @@ func autGitRemote(ctx context.Context, dir, binDir string) (string, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
-		return "", fmt.Errorf("%s 不是 git 仓库，或者它没有叫 origin 的 remote —— "+
-			"推不出这个包在哪。用 --source github:owner/repo 直接指定", dir)
+		return "", fmt.Errorf("%s is not a git repository, or it has no remote called origin, so there is no "+
+			"way to tell where this package lives. Pass --source github:owner/repo instead", dir)
 	}
 	remote := strings.TrimSpace(string(out))
 	if remote == "" {
-		return "", errors.New("origin 的地址是空的。用 --source github:owner/repo 直接指定")
+		return "", errors.New("the origin URL is empty. Pass --source github:owner/repo instead")
 	}
 	return remote, nil
 }
@@ -310,7 +315,7 @@ func autParseRemote(remote string) (domain, owner, repo string, err error) {
 	case strings.Contains(s, "://"):
 		u, perr := url.Parse(s)
 		if perr != nil {
-			return "", "", "", fmt.Errorf("origin %q 不是合法的地址：%w。用 --source github:owner/repo 直接指定", s, perr)
+			return "", "", "", fmt.Errorf("the origin %q is not a valid URL: %w. Pass --source github:owner/repo instead", s, perr)
 		}
 		hostPart, path = u.Hostname(), u.Path
 	case strings.Contains(s, ":") && !strings.HasPrefix(s, "/"):
@@ -321,8 +326,8 @@ func autParseRemote(remote string) (domain, owner, repo string, err error) {
 		}
 	default:
 		// 本地路径的 origin（/srv/git/x.git 之类）没有域名，推不出托管方。
-		return "", "", "", fmt.Errorf("origin 是 %q，看不出是哪家托管方（本地路径的 remote 没有域名）。"+
-			"用 --source github:owner/repo 直接指定", s)
+		return "", "", "", fmt.Errorf("the origin is %q, which does not say which host it is — a remote that is "+
+			"a local path has no domain. Pass --source github:owner/repo instead", s)
 	}
 
 	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
@@ -330,9 +335,9 @@ func autParseRemote(remote string) (domain, owner, repo string, err error) {
 	if hostPart == "" || len(segs) != 2 || segs[0] == "" || segs[1] == "" {
 		// GitLab 的子组（a/b/c）会落到这里：ref 只有 owner/repo 一层，装不了，
 		// 与其推出一个错的 source，不如说清楚（铁律 8 的同一个道理）。
-		return "", "", "", fmt.Errorf("从 origin %q 里认不出 owner/repo —— "+
-			"toy 的包引用只有 owner/repo 一层（GitLab 子组这种多层路径现在不支持）。"+
-			"用 --source github:owner/repo 直接指定", s)
+		return "", "", "", fmt.Errorf("cannot make out owner/repo from the origin %q — a toy package reference "+
+			"has exactly one level of owner/repo, and deeper paths like GitLab subgroups are not supported yet. "+
+			"Pass --source github:owner/repo instead", s)
 	}
 	return strings.ToLower(hostPart), segs[0], segs[1], nil
 }
@@ -374,8 +379,11 @@ const autShutdownGrace = 5 * time.Second
 // 因为内容是 hash 寻址的，这个镜像天然不需要被信任。规格 §8。
 func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	addr := fs.String("addr", "127.0.0.1:8080", "监听地址。默认只听本机，要给别人用就写 0.0.0.0:8080")
-	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
+	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on. The default is local-only; use 0.0.0.0:8080 to serve others")
+	if err := insParseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
 		return errUsage
 	}
 	st, _, err := openStore()
@@ -387,24 +395,26 @@ func runServe(ctx context.Context, args []string) error {
 	// "已启动" 去 curl 一个不存在的服务。
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
-		return fmt.Errorf("监听 %s 失败：%w", *addr, err)
+		return fmt.Errorf("cannot listen on %s: %w", *addr, err)
 	}
 	shown := ln.Addr().String()
 	if autWildcard(*addr) {
-		ui.Warn("正在对整个网络提供服务（%s）。缓存里的每个文件名都是它自己的 sha256，"+
-			"所以内容没法被换掉；但谁在下什么你就看不住了，公网上跑之前想一下这件事", shown)
+		ui.Warn("Serving on every interface (%s). Every file in the cache is named after its own sha256, so "+
+			"the contents cannot be swapped — but you no longer control who downloads what. Think about that "+
+			"before running this on a public network", shown)
 		if _, port, perr := net.SplitHostPort(shown); perr == nil {
-			shown = "你这台机器的地址:" + port
+			shown = "your-machine-address:" + port
 		}
 	}
 
-	ui.Info("镜像已启动，服务的是 %s", st.CacheDir())
-	ui.Info("别人这样用它（写进他的 ~/.toy/config.toml）：")
+	ui.Info("Mirror is up, serving %s", st.CacheDir())
+	ui.Info("Other people use it by putting this in their ~/.toy/config.toml:")
 	ui.Info("")
 	ui.Info("    mirrors = [\"http://%s\"]", shown)
 	ui.Info("")
-	ui.Info("镜像只在 toy.toml 写了 [sha256] 时才会被用到 —— 没有 hash 就没法验证镜像给的是不是那个东西。")
-	ui.Info("Ctrl-C 停止。")
+	ui.Info("A mirror is only ever consulted when toy.toml declares [sha256] — without a hash there is no way")
+	ui.Info("to check that a mirror handed back the right thing.")
+	ui.Info("Ctrl-C to stop.")
 
 	srv := &http.Server{
 		Handler: autMirrorHandler(st.CacheDir()),
@@ -419,12 +429,12 @@ func runServe(ctx context.Context, args []string) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return fmt.Errorf("镜像挂了：%w", err)
+		return fmt.Errorf("the mirror stopped: %w", err)
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), autShutdownGrace)
 		defer cancel()
 		if err := srv.Shutdown(shutCtx); err != nil {
-			ui.Warn("有下载还没结束，直接断掉了：%v", err)
+			ui.Warn("downloads were still in flight and got cut off: %v", err)
 		}
 		return ctx.Err() // main 把它打成「已取消」并 exit 130
 	}
@@ -438,7 +448,7 @@ func autMirrorHandler(cacheDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "这个镜像只支持 GET 和 HEAD", http.StatusMethodNotAllowed)
+			http.Error(w, "this mirror only supports GET and HEAD", http.StatusMethodNotAllowed)
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/")

@@ -19,9 +19,9 @@ import (
 // 一句 error string。分类判断一律走 errors.Is，绝不按错误文本匹配 ——
 // 那段文本里有服务器原样发来的内容（同规格 §5.1 第 3 条、§14.10 第 1 条）。
 var (
-	errNoRepo      = errors.New("仓库不存在，或者是私有的（当前 token 看不到）")
-	errNoRelease   = errors.New("这个仓库还没发布过 release")
-	errRateLimited = errors.New("托管方 API 限流")
+	errNoRepo      = errors.New("repo does not exist, or is private and invisible to this token")
+	errNoRelease   = errors.New("this repo has never published a release")
+	errRateLimited = errors.New("host API rate limit")
 )
 
 // ghMaxBody 是单次 API 响应的读取上限。响应是远端内容，不设上限等于让上游
@@ -79,15 +79,16 @@ func (c *ghClient) Quota() string {
 	if c.remaining < 0 {
 		return ""
 	}
-	s := fmt.Sprintf("API 配额还剩 %d", c.remaining)
+	s := strconv.Itoa(c.remaining)
 	if c.limit > 0 {
 		s += "/" + strconv.Itoa(c.limit)
 	}
+	s = "API quota: " + s + " remaining"
 	if !c.reset.IsZero() {
-		s += fmt.Sprintf("，%s 重置", c.reset.Local().Format("15:04:05"))
+		s += fmt.Sprintf(", resets at %s", c.reset.Local().Format("15:04:05"))
 	}
 	if c.token == "" {
-		s += "。没带 token（未认证只有 60 次/小时）：设一个 $GITHUB_TOKEN 就是 5000"
+		s += ". No token in use, and unauthenticated is only 60/hour: set $GITHUB_TOKEN to get 5000"
 	}
 	return s
 }
@@ -158,7 +159,7 @@ func (c *ghClient) get(ctx context.Context, path string, v any) error {
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("请求 %s 失败：%w", path, err)
+		return fmt.Errorf("request to %s failed: %w", path, err)
 	}
 	defer resp.Body.Close()
 	c.noteQuota(resp.Header)
@@ -170,23 +171,23 @@ func (c *ghClient) get(ctx context.Context, path string, v any) error {
 		// 403 在 GitHub 上既是限流也是权限不足，靠剩余配额区分：
 		// 报错文案指错方向的话，人会去查 token 权限而不是去等配额。
 		if c.remaining == 0 {
-			return fmt.Errorf("%w：%s", errRateLimited, c.Quota())
+			return fmt.Errorf("%w: %s", errRateLimited, c.Quota())
 		}
-		return fmt.Errorf("%s 被拒（HTTP %d）。%s", path, resp.StatusCode, c.Quota())
+		return fmt.Errorf("%s was refused (HTTP %d). %s", path, resp.StatusCode, c.Quota())
 	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("%s 返回 HTTP %d", path, resp.StatusCode)
+		return fmt.Errorf("%s returned HTTP %d", path, resp.StatusCode)
 	}
 
 	// 响应是远端内容：不限长等于让上游决定我们的内存用量。
 	body, err := io.ReadAll(io.LimitReader(resp.Body, ghMaxBody+1))
 	if err != nil {
-		return fmt.Errorf("读 %s 的响应失败：%w", path, err)
+		return fmt.Errorf("reading the response from %s failed: %w", path, err)
 	}
 	if int64(len(body)) > ghMaxBody {
-		return fmt.Errorf("%s 的响应超过 %d 字节，不像是 API 的正常返回", path, int64(ghMaxBody))
+		return fmt.Errorf("the response from %s is over %d bytes, which is not what this API normally returns", path, int64(ghMaxBody))
 	}
 	if err := json.Unmarshal(body, v); err != nil {
-		return fmt.Errorf("%s 的响应不是预期的 JSON：%w", path, err)
+		return fmt.Errorf("the response from %s is not the JSON we expected: %w", path, err)
 	}
 	return nil
 }

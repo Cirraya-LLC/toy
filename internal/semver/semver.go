@@ -4,6 +4,7 @@ package semver
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,10 +27,10 @@ type V struct {
 func Parse(s string) (V, error) {
 	raw := strings.TrimSpace(s)
 	if raw == "" {
-		return V{}, fmt.Errorf("版本号是空的")
+		return V{}, errors.New("version is empty")
 	}
 	if len(raw) > maxLen {
-		return V{}, fmt.Errorf("版本号太长了（%d 个字符，最多 %d）", len(raw), maxLen)
+		return V{}, fmt.Errorf("version is too long (%d characters, %d max)", len(raw), maxLen)
 	}
 	body := strings.TrimPrefix(raw, "v")
 	// 构建元数据（'+' 之后的部分）按 semver 不参与比较，但**必须校验字符**：
@@ -38,7 +39,7 @@ func Parse(s string) (V, error) {
 	// 往我们的路径和 URL 里塞斜杠。校验完再丢掉。
 	if i := strings.IndexByte(body, '+'); i >= 0 {
 		if err := checkIdents(body[i+1:]); err != nil {
-			return V{}, fmt.Errorf("%q 的构建元数据不合法：%w", raw, err)
+			return V{}, fmt.Errorf("build metadata in %q is invalid: %w", raw, err)
 		}
 		body = body[:i]
 	}
@@ -48,19 +49,19 @@ func Parse(s string) (V, error) {
 		// 写成 "1.0.0-" 时 pre 是空的，绝不能因为「空标签 = 正式版」而被放行。
 		pre, body = body[i+1:], body[:i]
 		if err := checkIdents(pre); err != nil {
-			return V{}, fmt.Errorf("%q 的预发布标签不合法：%w", raw, err)
+			return V{}, fmt.Errorf("pre-release tag in %q is invalid: %w", raw, err)
 		}
 	}
 
 	nums := strings.Split(body, ".")
 	if len(nums) != 3 {
-		return V{}, fmt.Errorf("%q 不是 semver：版本号要写成 主.次.修订 三段数字，例如 v1.2.3", raw)
+		return V{}, fmt.Errorf("%q is not semver: a version is three numbers, major.minor.patch, as in v1.2.3", raw)
 	}
 	v := V{Pre: pre, Raw: raw}
 	for i, dst := range []*int{&v.Major, &v.Minor, &v.Patch} {
 		n, err := parseNum(nums[i])
 		if err != nil {
-			return V{}, fmt.Errorf("%q 不是 semver：%w", raw, err)
+			return V{}, fmt.Errorf("%q is not semver: %w", raw, err)
 		}
 		*dst = n
 	}
@@ -70,16 +71,16 @@ func Parse(s string) (V, error) {
 // parseNum 只接受纯数字，所以 "-2"、"x"、"" 这些都会被挡下来。
 func parseNum(s string) (int, error) {
 	if s == "" {
-		return 0, fmt.Errorf("有一段版本号是空的")
+		return 0, errors.New("one of the three number parts is empty")
 	}
 	for _, c := range s {
 		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("%q 不是数字", s)
+			return 0, fmt.Errorf("%q is not a number", s)
 		}
 	}
 	n, err := strconv.Atoi(s)
 	if err != nil {
-		return 0, fmt.Errorf("%q 这个数字太大了", s)
+		return 0, fmt.Errorf("%q is too large a number", s)
 	}
 	return n, nil
 }
@@ -89,12 +90,12 @@ func parseNum(s string) (int, error) {
 func checkIdents(s string) error {
 	for _, id := range strings.Split(s, ".") {
 		if id == "" {
-			return fmt.Errorf("有一段是空的（别写连着的点或者结尾的点）")
+			return errors.New("one of the dot-separated parts is empty (no doubled or trailing dots)")
 		}
 		for _, c := range id {
 			ok := c == '-' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 			if !ok {
-				return fmt.Errorf("%q 里有非法字符 %q，只能用字母、数字和连字符", id, c)
+				return fmt.Errorf("%q contains the illegal character %q; only letters, digits and hyphens are allowed", id, c)
 			}
 		}
 	}
@@ -196,9 +197,9 @@ func Max(tags []string, allowPre bool) (V, error) {
 		return best, nil
 	}
 	if skippedPre > 0 {
-		return V{}, fmt.Errorf("只找到 %d 个预发布版本，没有正式版；用 --version 指定具体的 tag 才会装预发布版", skippedPre)
+		return V{}, fmt.Errorf("found %d pre-release version(s) but no stable release; pass --version with a specific tag to install a pre-release", skippedPre)
 	}
-	return V{}, fmt.Errorf("这 %d 个 tag 里没有 semver 版本（要形如 v1.2.3）；这个仓库可能还没打过版本 tag", len(tags))
+	return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3); this repository may not have tagged a release yet", len(tags))
 }
 
 // Number 返回不带 'v' 前缀的版本号，用于 toy.toml 里的 {version} 占位符。

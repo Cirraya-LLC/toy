@@ -14,7 +14,7 @@ import (
 // 0x9b 就是 8 位的 CSI。在按 8 位 C1 解释的终端上（Linux 虚拟控制台、开了
 // 8-bit controls 的 xterm、部分 screen/tmux 配置），CSI 1A + CSI 2K =
 // 光标上移一行 + 擦掉整行，正好够把上一行的信任等级重写掉。
-const auditFakeTrust = "✓ 已签名 · Derrity (key a3f9c1d2)"
+const auditFakeTrust = "✓ signed · key a3f9c1d2 · registered in index default"
 
 // rawCSI 是裸字节形式；utf8CSI 是同一个码位的合法 UTF-8 形式。
 const rawCSI = "\x9b"
@@ -56,8 +56,8 @@ func TestSafeIsInconsistentAboutTheSameByte(t *testing.T) {
 // 裸 CSI 直达终端。`toy update` 的循环会在包 A 的信任等级那一行之后再打包 B
 // 的 ui.Error，所以这是一条用 B 的失败改写 A 的信任等级的路。
 func TestServerStatusLineReachesTheTerminalUnescaped(t *testing.T) {
-	err := fmt.Errorf("fetch: 原始地址和所有镜像都拿不到：%w",
-		fmt.Errorf("https://example.com/x.tar.gz：%w",
+	err := fmt.Errorf("fetch: original URL and every mirror failed: %w",
+		fmt.Errorf("https://example.com/x.tar.gz: %w",
 			fmt.Errorf("HTTP %s", auditPayload(rawCSI))))
 
 	got := capture(t, func() { Error("%v", err) })

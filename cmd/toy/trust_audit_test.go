@@ -47,10 +47,10 @@ func TestListNameCanForgeItsOwnRowAndHideEveryTrustColumn(t *testing.T) {
 	// 断言的是【应该有的】行为，所以今天它是红的：一行表格里，信任列必须落在
 	// 一个常规终端看得见的地方，而 name 不许把它顶出去。
 	head := visibleCols(evil, width)
-	if !strings.Contains(head, "未签名") {
+	if !strings.Contains(head, "unsigned") {
 		t.Errorf("恶意包的真实信任等级被顶出了第 %d 列，第一屏看到的是一条伪造的已签名记录：\n  %s", width, head)
 	}
-	if strings.Contains(head, "✓ 已签名 9f3c1a20") {
+	if strings.Contains(head, "✓ signed 9f3c1a20") {
 		t.Errorf("name 里塞的假信任等级被当成正文渲染出来了：\n  %s", head)
 	}
 	// 附带伤害：同一张表里正经包的信任列也一起被顶出去了 —— 一个恶意包

@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	ErrChecksum  = errors.New("fetch: sha256 校验失败")
-	ErrAllFailed = errors.New("fetch: 原始地址和所有镜像都拿不到")
+	ErrChecksum  = errors.New("fetch: sha256 checksum mismatch")
+	ErrAllFailed = errors.New("fetch: could not fetch from the original URL or any mirror")
 )
 
 // Sink 是进度回调。定义在这里而不是依赖 ui，是为了让依赖方向朝下。
@@ -88,7 +88,7 @@ var client = &http.Client{
 	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
-			return fmt.Errorf("重定向超过 %d 次，疑似死循环", maxRedirects)
+			return fmt.Errorf("more than %d redirects; this looks like a redirect loop", maxRedirects)
 		}
 		// https 一旦被重定向到 http 就当场拒绝（反过来是升级，放行）。
 		// 明文链路上任何人都能改字节：对有 [sha256] 的 artifact 哈希还兜得住，
@@ -101,8 +101,8 @@ var client = &http.Client{
 		if req.URL.Scheme != "https" {
 			for _, prev := range via {
 				if prev.URL.Scheme == "https" {
-					return fmt.Errorf("拒绝跟随重定向：%s 把 https 降级成了 %s；"+
-						"明文链路上内容可以被中途改掉，而 toy.toml 和索引没有 sha256 可校验",
+					return fmt.Errorf("refusing to follow this redirect: %s downgrades https to %s. "+
+						"Anyone on a plaintext hop can rewrite the bytes, and toy.toml and the index carry no sha256 to catch it",
 						redactURL(prev.URL.String()), redactURL(req.URL.String()))
 				}
 			}
@@ -138,10 +138,10 @@ func normalize(opt *Options) error {
 		return nil
 	}
 	if len(opt.SHA256) != 64 {
-		return fmt.Errorf("fetch: sha256 %q 不是 64 位十六进制，检查 toy.toml 的 [sha256] 段", opt.SHA256)
+		return fmt.Errorf("fetch: sha256 %q is not 64 hex characters; check the [sha256] section of toy.toml", opt.SHA256)
 	}
 	if _, err := hex.DecodeString(opt.SHA256); err != nil {
-		return fmt.Errorf("fetch: sha256 %q 里有非十六进制字符，检查 toy.toml 的 [sha256] 段", opt.SHA256)
+		return fmt.Errorf("fetch: sha256 %q contains non-hex characters; check the [sha256] section of toy.toml", opt.SHA256)
 	}
 	return nil
 }
@@ -232,7 +232,7 @@ func open(ctx context.Context, src string) (io.ReadCloser, int64, error) {
 		// 两条路合成同一个判断，调用方只写一个 errors.Is。
 		err := fmt.Errorf("HTTP %s", resp.Status)
 		if resp.StatusCode == http.StatusNotFound {
-			err = fmt.Errorf("%w：%w", os.ErrNotExist, err)
+			err = fmt.Errorf("%w: %w", os.ErrNotExist, err)
 		}
 		return nil, 0, err
 	}
@@ -242,19 +242,19 @@ func open(ctx context.Context, src string) (io.ReadCloser, int64, error) {
 func filePath(src string) (string, error) {
 	u, err := url.Parse(src)
 	if err != nil {
-		return "", fmt.Errorf("file:// 地址解析不了：%w", err)
+		return "", fmt.Errorf("cannot parse file:// URL: %w", err)
 	}
 	if u.Host != "" && u.Host != "localhost" {
-		return "", fmt.Errorf("file:// 不支持主机名 %q，写成 file:///绝对路径", u.Host)
+		return "", fmt.Errorf("file:// does not take a host name (%q); write it as file:///absolute/path", u.Host)
 	}
 	if u.Path == "" {
-		return "", fmt.Errorf("file:// 地址 %q 里没有路径", src)
+		return "", fmt.Errorf("file:// URL %q has no path", src)
 	}
 	// 调用方一般是 "file://" + 路径拼出来的。路径里只要有 ? 或 #，url.Parse 会把它
 	// 之后的部分切成 query/fragment，于是我们【静默地打开另一个文件】——
 	// file:///x/a#b 会去开 /x/a。文件地址不该有这两样，宁可报错也不猜（铁律 8）。
 	if u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("file:// 地址 %q 里有 ? 或 #，它们会被当成 query/fragment 指向别的文件；文件名里真有这两个字符就写成 %%3F / %%23", src)
+		return "", fmt.Errorf("file:// URL %q contains ? or #; those get parsed as query/fragment and would silently open a different file. If the name really contains them, escape as %%3F / %%23", src)
 	}
 	return filepath.FromSlash(u.Path), nil
 }
@@ -284,14 +284,14 @@ func Get(ctx context.Context, u string, opt Options) (Result, error) {
 		if err == nil {
 			return res, nil
 		}
-		errs = append(errs, fmt.Errorf("%s：%w", redactURL(src), err))
+		errs = append(errs, fmt.Errorf("%s: %w", redactURL(src), err))
 		if ctx.Err() != nil {
 			break
 		}
 	}
 	// 每条子错误自己已经带上了是哪个地址，这里不再重复一遍 u ——
 	// 没有镜像的时候那就是同一个地址连写两次，读起来像出了两次错。
-	return Result{}, fmt.Errorf("%w：%w", ErrAllFailed, errors.Join(errs...))
+	return Result{}, fmt.Errorf("%w: %w", ErrAllFailed, errors.Join(errs...))
 }
 
 // fetchOne 从一个来源取到本地：先写临时文件，边写边算 hash，验过了才原子 rename
@@ -300,13 +300,13 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 	dir := opt.CacheDir
 	if dir != "" {
 		if err = os.MkdirAll(dir, 0o755); err != nil {
-			return Result{}, fmt.Errorf("建不了缓存目录 %s：%w", dir, err)
+			return Result{}, fmt.Errorf("cannot create cache directory %s: %w", dir, err)
 		}
 	}
 	// 临时文件和最终位置必须在同一个目录里，跨文件系统的 rename 不是原子的（而且会直接失败）。
 	tmp, err := os.CreateTemp(dir, ".toy-tmp-*")
 	if err != nil {
-		return Result{}, fmt.Errorf("建不了临时文件：%w", err)
+		return Result{}, fmt.Errorf("cannot create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	placed, started := false, false
@@ -337,24 +337,24 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 	// 多读一个字节，好区分"正好到上限"和"超了"。
 	n, err := io.Copy(io.MultiWriter(tmp, h, sinkWriter{opt.Sink}), io.LimitReader(body, limit+1))
 	if err != nil {
-		return Result{}, fmt.Errorf("下载中断：%w", err)
+		return Result{}, fmt.Errorf("download interrupted: %w", err)
 	}
 	// 判据是【真正写进来的字节数】，不是 total —— 那只是服务器自己说的 Content-Length，
 	// chunked 响应压根没有这个头，而报一个大得离谱的数也不要钱。半截文件由上面的
 	// defer 删掉（placed 还是 false），所以缓存目录里不会留下残骸（铁律 4 那条同样成立）。
 	if n > limit {
-		err = fmt.Errorf("下载超过 %d MiB 上限，已中止并删掉半截文件；"+
-			"服务器自报的长度不作数，这里数的是真正写进来的字节。"+
-			"确实要装更大的包就调大 Options.MaxBytes", limit>>20)
+		err = fmt.Errorf("download exceeded the %d MiB size limit; aborted and the partial file was deleted. "+
+			"The count is the bytes actually written, not the length the server claimed. "+
+			"Raise Options.MaxBytes if you really do need a package this large", limit>>20)
 		return Result{}, err
 	}
 	if err = tmp.Close(); err != nil {
-		return Result{}, fmt.Errorf("写临时文件失败：%w", err)
+		return Result{}, fmt.Errorf("failed to write temp file: %w", err)
 	}
 
 	sum := hex.EncodeToString(h.Sum(nil))
 	if opt.SHA256 != "" && sum != opt.SHA256 {
-		err = fmt.Errorf("%w：期望 %s，实际 %s。已删掉下载的文件，不会安装", ErrChecksum, opt.SHA256, sum)
+		err = fmt.Errorf("%w: expected %s, got %s. The downloaded file was deleted; nothing will be installed", ErrChecksum, opt.SHA256, sum)
 		return Result{}, err
 	}
 
@@ -366,7 +366,7 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 		}
 		path = filepath.Join(opt.CacheDir, sum)
 		if err = os.Rename(tmpName, path); err != nil {
-			return Result{}, fmt.Errorf("放进缓存失败：%w", err)
+			return Result{}, fmt.Errorf("failed to move the file into the cache: %w", err)
 		}
 	}
 	placed = true
@@ -385,12 +385,12 @@ func GetBytes(ctx context.Context, u string, opt Options) ([]byte, error) {
 		if err == nil {
 			return b, nil
 		}
-		errs = append(errs, fmt.Errorf("%s：%w", redactURL(src), err))
+		errs = append(errs, fmt.Errorf("%s: %w", redactURL(src), err))
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return nil, fmt.Errorf("%w：%w", ErrAllFailed, errors.Join(errs...))
+	return nil, fmt.Errorf("%w: %w", ErrAllFailed, errors.Join(errs...))
 }
 
 func getBytesOne(ctx context.Context, src string, opt Options) ([]byte, error) {
@@ -406,12 +406,12 @@ func getBytesOne(ctx context.Context, src string, opt Options) ([]byte, error) {
 		return nil, err
 	}
 	if len(b) > maxBytes {
-		return nil, fmt.Errorf("内容超过 %d MiB 上限；这条路只用来取 toy.toml 和索引 JSON，检查一下地址对不对", maxBytes>>20)
+		return nil, fmt.Errorf("content exceeded the %d MiB size limit; this path only fetches toy.toml and index JSON, so check that the URL is right", maxBytes>>20)
 	}
 	if opt.SHA256 != "" {
 		s := sha256.Sum256(b)
 		if sum := hex.EncodeToString(s[:]); sum != opt.SHA256 {
-			return nil, fmt.Errorf("%w：期望 %s，实际 %s", ErrChecksum, opt.SHA256, sum)
+			return nil, fmt.Errorf("%w: expected %s, got %s", ErrChecksum, opt.SHA256, sum)
 		}
 	}
 	return b, nil

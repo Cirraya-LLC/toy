@@ -360,7 +360,7 @@ func TestTagsTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("想要报错")
 	}
-	if !strings.Contains(err.Error(), "超时") {
+	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("没说是超时: %v", err)
 	}
 }
@@ -432,8 +432,8 @@ func TestLookupRefusesPlaceholder(t *testing.T) {
 	if err == nil {
 		t.Fatal("想要报错")
 	}
-	if i := strings.Index(err.Error(), "现在认识的是"); i >= 0 {
-		list, _, _ := strings.Cut(err.Error()[i:], "；")
+	if i := strings.Index(err.Error(), "Known hosts are"); i >= 0 {
+		list, _, _ := strings.Cut(err.Error()[i:], ";")
 		if strings.Contains(list, "gitea") {
 			t.Errorf("已知列表里不该有被拒绝的 gitea: %q", list)
 		}
@@ -471,11 +471,11 @@ func TestKnownHostsListedOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("想要报错")
 	}
-	i := strings.Index(err.Error(), "现在认识的是")
+	i := strings.Index(err.Error(), "Known hosts are")
 	if i < 0 {
 		t.Fatalf("报错里没有已知列表: %v", err)
 	}
-	list, _, _ := strings.Cut(err.Error()[i:], "；")
+	list, _, _ := strings.Cut(err.Error()[i:], ";")
 	if n := strings.Count(strings.ToLower(list), "github"); n != 1 {
 		t.Errorf("github 在已知列表里出现了 %d 次: %q", n, list)
 	}
@@ -606,7 +606,7 @@ func TestTagsSurvivesOrphanHoldingPipes(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "超时") {
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
 			t.Errorf("想要超时报错，拿到 %v", err)
 		}
 	case <-time.After(15 * time.Second):
@@ -675,7 +675,7 @@ func TestTagsPropagatesContextError(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("超时的错误认不出 context.DeadlineExceeded：%v", err)
 	}
-	if err == nil || !strings.Contains(err.Error(), "超时") {
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("超时了却没说是超时：%v", err)
 	}
 }

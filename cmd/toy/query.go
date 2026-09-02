@@ -150,21 +150,21 @@ func qryTrustLabel(trust, signer string) string {
 	case store.TrustSigned:
 		if signer == "" {
 			// 说"已签名"却说不出是谁签的，等于替一把不知道是谁的钥匙背书。
-			return "⚠ 声称已签名但没有签名者"
+			return "⚠ claims signed, no signer"
 		}
-		return "✓ 已签名 " + signer
+		return "✓ signed " + signer
 	case store.TrustHost:
-		return "· 托管方账号"
+		return "· host account"
 	case store.TrustIndexed:
 		// 这一列要看得出「打包说明是索引提供的」（规则 3）：装哪个资产、
 		// 命令叫什么名字不是作者写的，那是这张表里该一眼看见的事。
-		return "⚠ 打包说明来自索引"
+		return "⚠ packaging from index"
 	case store.TrustUnverified:
-		return "⚠ 未签名"
+		return "⚠ unsigned"
 	case "":
-		return "⚠ 清单里没记信任等级"
+		return "⚠ no trust level in manifest"
 	default:
-		return fmt.Sprintf("⚠ 未知等级 %q", trust)
+		return fmt.Sprintf("⚠ unknown level %q", trust)
 	}
 }
 
@@ -226,15 +226,15 @@ func runList(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(ms) == 0 {
-		ui.Info("还没装任何东西。")
-		ui.Info("`toy search <关键词>` 在索引里找找看；知道仓库在哪的话，")
-		ui.Info("`toy install github:owner/repo` 不经过索引也能直接装。")
+		ui.Info("Nothing installed yet.")
+		ui.Info("`toy search <query>` looks through the indexes. And if you already know")
+		ui.Info("where the repository is, `toy install github:owner/repo` skips them entirely.")
 		return nil
 	}
 
 	// 信任放第一列：它是这张表里唯一不能被挤掉的东西，而放在第一列就不存在
 	// 「被左边那格顶出屏幕」这回事（铁律 8）。
-	rows := [][]string{{"信任", "名字", "版本", "来源"}}
+	rows := [][]string{{"TRUST", "NAME", "VERSION", "SOURCE"}}
 	for _, m := range ms {
 		name := m.Name
 		if name == "" {
@@ -257,7 +257,7 @@ func runList(ctx context.Context, args []string) error {
 	// 信任那一格要放得下完整指纹，所以它的上限比别的列宽。
 	qryTable(rows, 48, qryCellWidth, 16, 0)
 	ui.Info("")
-	ui.Info("共 %d 个。`toy info <ref>` 看详情，`toy update` 升级。", len(ms))
+	ui.Info("%d installed. `toy info <ref>` for details, `toy update` to upgrade.", len(ms))
 	return nil
 }
 
@@ -285,17 +285,17 @@ type qrySearchHit struct {
 
 func runSearch(ctx context.Context, args []string) error {
 	fs := qryFlags("search")
-	limit := fs.Int("limit", qrySearchLimit, "最多显示几条")
-	asJSON := fs.Bool("json", false, "机器可读的输出，走 stdout")
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+	limit := fs.Int("limit", qrySearchLimit, "how many results to show")
+	asJSON := fs.Bool("json", false, "machine-readable output on stdout")
+	if err := insParseFlags(fs, args); err != nil {
+		return err
 	}
 	query := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if query == "" {
 		return errUsage
 	}
 	if *limit <= 0 {
-		return fmt.Errorf("--limit 要是正数，给的是 %d", *limit)
+		return fmt.Errorf("--limit has to be positive, got %d", *limit)
 	}
 
 	st, cfg, err := openStore()
@@ -319,7 +319,7 @@ func runSearch(ctx context.Context, args []string) error {
 	// 装没装过是本地信息，读不出来不该让整次搜索失败 —— 那一列缺了就是缺了。
 	ms, err := st.ListManifests()
 	if err != nil {
-		ui.Warn("读不了安装清单（%v），这次不显示「装没装过」那一列", err)
+		ui.Warn("cannot read the install manifests (%v), so the \"installed\" column is missing this time", err)
 	}
 	installed := qryInstalledIndex(ms)
 
@@ -354,31 +354,32 @@ func runSearch(ctx context.Context, args []string) error {
 		// 搜不到不等于装不了：索引只是个目录，托管方才是真相（规格 §5，
 		// 「下架无害」说的就是这件事）。一句光秃秃的「没找到」会让人以为
 		// 这个工具装不了，而它多半就躺在 GitHub 上等着。
-		ui.Info("索引里没有匹配 %q 的包。", query)
+		ui.Info("No package in the indexes matches %q.", query)
 		ui.Info("")
-		ui.Info("索引只是一份目录，托管方才是真相 —— 知道它在哪就直接装，不用等它被收录：")
+		ui.Info("An index is only a directory; the host is the source of truth. If you know where it")
+		ui.Info("lives, install it now — there is no need to wait for anyone to list it:")
 		ui.Info("    toy install github:owner/repo")
-		ui.Info("（在别家就换成 gitlab: / codeberg: 前缀，或者 `toy index add` 加一个别人的索引。）")
+		ui.Info("(Use a gitlab: / codeberg: prefix for other hosts, or `toy index add` someone else's index.)")
 		return nil
 	}
 
-	rows := [][]string{{"包", "状态", "索引", "描述"}}
+	rows := [][]string{{"PACKAGE", "STATUS", "INDEX", "DESCRIPTION"}}
 	for _, h := range hits {
 		state := "—"
 		if h.Installed {
-			state = "已装"
+			state = "installed"
 			if h.InstalledVersion != "" {
 				state += " " + h.InstalledVersion
 			}
 		}
 		rows = append(rows, []string{h.ID, state, h.Index, qryTrunc(h.Desc, qryDescWidth)})
 	}
-	qryTable(rows, 48, 16, qryCellWidth, 0)
+	qryTable(rows, 48, 20, qryCellWidth, 0)
 	ui.Info("")
 	if len(hits) == *limit {
-		ui.Info("只显示了 %d 条（--limit 可以调）。`toy info <包>` 看详情。", len(hits))
+		ui.Info("Showing %d (raise it with --limit). `toy info <package>` for details.", len(hits))
 	} else {
-		ui.Info("共 %d 条。`toy info <包>` 看详情，`toy install <包>` 装。", len(hits))
+		ui.Info("%s. `toy info <package>` for details, `toy install <package>` to install.", qryPlural(len(hits), "result", "results"))
 	}
 	return nil
 }
@@ -404,14 +405,15 @@ func qrySearchJSON(query string, hits []qrySearchHit) error {
 // 而 `toy install github:owner/repo` 那条路从头到尾不经过索引。所以这里只讲
 // 「怎么加一个」和「不加也能装」，一个叉都不打。
 func qryNoIndexHelp() {
-	ui.Info("还没配任何索引，所以搜不到东西 —— 这是默认状态，不是出错了。")
+	ui.Info("No index is configured, so there is nothing to search. This is the default, not a fault.")
 	ui.Info("")
-	ui.Info("加一个（名字只在本地用，随便起）：")
-	ui.Info("    toy index add local file:///绝对路径/toy-index.json   # 本地文件")
-	ui.Info("    toy index add local ./index/toy-index.json           # 裸路径也行，会自动补成 file://")
+	ui.Info("Add one (the name is local to you, pick anything):")
+	ui.Info("    toy index add local file:///absolute/path/toy-index.json   # a local file")
+	ui.Info("    toy index add local ./index/toy-index.json                # a bare path works too, it becomes file://")
 	ui.Info("    toy index add community https://example.com/index.json")
 	ui.Info("")
-	ui.Info("索引只是一份目录，托管方才是真相 —— 知道仓库在哪就直接装，本来也不需要索引：")
+	ui.Info("An index is only a directory; the host is the source of truth. If you know where the")
+	ui.Info("repository is, you never needed an index in the first place:")
 	ui.Info("    toy install github:owner/repo")
 }
 
@@ -448,29 +450,29 @@ func runInfo(ctx context.Context, args []string) error {
 	}
 	tf := res.Toyfile
 
-	rows := [][]string{{"名字", tf.Name}}
+	rows := [][]string{{"name", tf.Name}}
 	add := func(label, value string) { rows = append(rows, []string{label, value}) }
 
-	add("引用", res.Ref.String())
+	add("reference", res.Ref.String())
 	if tf.Desc != "" {
-		add("描述", tf.Desc)
+		add("description", tf.Desc)
 	}
 	if res.Entry != nil && res.Entry.Desc != "" && res.Entry.Desc != tf.Desc {
 		// 索引里的描述和作者自己写的可能不一样，两个都给 —— 哪个是哪个要说清楚。
-		add("索引里的描述", res.Entry.Desc)
+		add("index description", res.Entry.Desc)
 	}
-	add("许可证", qryOr(tf.License, "作者没声明"))
+	add("license", qryOr(tf.License, "not declared by the author"))
 	if tf.Homepage != "" {
-		add("主页", tf.Homepage)
+		add("homepage", tf.Homepage)
 	} else if web := res.Host.WebURL(res.Owner, res.Repo); web != "" {
-		add("仓库", web)
+		add("repository", web)
 	}
 
 	if res.Tag != "" {
-		add("最新版本", res.Tag)
+		add("latest version", res.Tag)
 	} else {
 		// 裸地址那条路压根没有 tag 可挑，编一个版本号出来就是撒谎（铁律 8）。
-		add("版本", "未知 —— 裸地址里没有版本信息，装出来的就是此刻那个文件")
+		add("version", "unknown — a plain URL carries no version; you get whatever that file is right now")
 	}
 
 	// 只比一个精确 key 会把「其实能装」（Rosetta、musl 退回通用构建）报成
@@ -480,67 +482,67 @@ func runInfo(ctx context.Context, args []string) error {
 	// linux/amd64/gnu，把它当成「你的平台」写出来会让人去找一个不存在的资产。
 	cur, matched := platform.Base(), cands[0]
 	if tf.IsScript() {
-		add("形态", "单文件脚本：下载 + chmod +x，零解压零构建")
-		add("支持平台", "不区分平台（脚本自己决定跑不跑得起来）")
+		add("kind", "single-file script: download + chmod +x, nothing unpacked, nothing built")
+		add("platforms", "platform-independent (whether it runs is up to the script)")
 	} else {
-		add("形态", "release 二进制：下载 + 解压，一行脚本都不跑")
+		add("kind", "release binary: download + unpack, not one line of script is run")
 		plats := tf.Platforms()
-		add("支持平台", strings.Join(plats, "  "))
+		add("platforms", strings.Join(plats, "  "))
 		// 「是不是真的回退」只有一处判据 —— install 打的那句话就是它决定的。
 		// info 和 install 对同一个包给出不同说法，比两边都说错更糟。
 		switch hit := qryMatchPlatform(plats, cands); {
 		case hit == "":
-			add("当前平台", cur+"  ✗ 没有对应的构建，装不了")
-			add("", "试过 "+strings.Join(cands, "、")+
-				"。去上游提个 issue，请作者在 release 里补一个 "+cur+" 的资产并在 toy.toml 里加一行")
+			add("this machine", cur+"  ✗ no matching build, cannot install")
+			add("", "tried "+strings.Join(cands, ", ")+
+				". Open an issue upstream asking the author to publish a "+cur+" asset and add one line for it in toy.toml")
 		default:
 			matched = hit // 下面挑 sha256 要用真正命中的那个 key
 			// 装得上，但装的不是为这台机器构建的那个 —— 原因直接用 install 那句话，
 			// 别在这里另写一版：cur 和 hit 在「作者按 libc 分了档」时是同一个字符串，
 			// 拼成「回退：linux/amd64」会指着自己说自己。
 			if note := insFallbackNote(cands, hit, plats); note != "" {
-				add("当前平台", cur+"  ✓ 装得上，但不是为这台机器专门构建的那个")
+				add("this machine", cur+"  ✓ installable, but not the build made for this machine")
 				add("", note)
 			} else {
-				add("当前平台", cur+"  ✓ 有对应的构建")
+				add("this machine", cur+"  ✓ has a matching build")
 			}
 		}
 	}
 
 	// 装完之后会出现在 PATH 上的名字 —— 这是「装之前该看的那一屏」里最实在的一格。
-	declared, what := tf.Bin, "包内路径"
+	declared, what := tf.Bin, "path in the package"
 	if tf.IsScript() {
-		declared, what = tf.Script, "release 资产"
+		declared, what = tf.Script, "release asset"
 	}
-	label := "命令"
+	label := "commands"
 	for _, name := range slices.Sorted(maps.Keys(declared)) {
-		add(label, fmt.Sprintf("%s  →  %s %s", name, what, declared[name]))
+		add(label, fmt.Sprintf("%s  →  %s: %s", name, what, declared[name]))
 		label = ""
 	}
 
 	switch {
 	case tf.IsScript():
-		add("完整性", "脚本形态没有按平台声明的 sha256，首次安装钉住哈希（TOFU），之后变了会拒绝")
+		add("integrity", "scripts declare no per-platform sha256; the hash is pinned on first install (TOFU) and a later change is refused")
 	case tf.SHA256[matched] != "":
-		add("完整性", "当前平台声明了 sha256，安装时强制校验，对不上一律拒绝")
+		add("integrity", "this platform declares a sha256; it is checked on install and a mismatch is always refused")
 	case len(tf.SHA256) > 0:
-		add("完整性", fmt.Sprintf("作者只给了 %d 个平台的 sha256，当前平台不在其中 —— 走 TOFU 钉住", len(tf.SHA256)))
+		add("integrity", fmt.Sprintf("the author gave a sha256 for %d platform(s), not this one — so the hash gets pinned on first install (TOFU)", len(tf.SHA256)))
 	default:
-		add("完整性", "作者没写 sha256，首次安装钉住哈希（TOFU），之后变了会拒绝")
+		add("integrity", "the author declared no sha256; the hash is pinned on first install (TOFU) and a later change is refused")
 	}
 
 	ms, err := st.ListManifests()
 	if err != nil {
-		ui.Warn("读不了安装清单（%v），这次说不出装没装过", err)
+		ui.Warn("cannot read the install manifests (%v), so this cannot say whether it is installed", err)
 	}
 	keys := []string{res.Ref.String(), res.Ref.ID()}
 	if res.HostName != "" && res.Owner != "" && res.Repo != "" {
 		keys = append([]string{res.HostName + ":" + res.Owner + "/" + res.Repo}, keys...)
 	}
 	if m, ok := qryLookupInstalled(qryInstalledIndex(ms), keys...); ok {
-		add("已安装", qryOr(m.Version, m.Tag)+"（"+qryTrustLabel(m.Trust, m.Signer)+"）")
+		add("installed", qryOr(m.Version, m.Tag)+" ("+qryTrustLabel(m.Trust, m.Signer)+")")
 	} else {
-		add("已安装", "否")
+		add("installed", "no")
 	}
 
 	qryTable(rows, 16, 0)
@@ -607,17 +609,17 @@ func runIndex(ctx context.Context, args []string) error {
 		}
 		return qryIndexList(st, cfg)
 	default:
-		return fmt.Errorf("不认识的子命令 %q —— 只有 add / rm / list", args[0])
+		return fmt.Errorf("no such subcommand %q — there is only add / rm / list", args[0])
 	}
 }
 
 func qryIndexAdd(st *store.Store, cfg store.Config, name, rawURL string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("索引得有个名字：`toy index add <名字> <地址>`。名字只在本地用，随便起")
+		return fmt.Errorf("an index needs a name: `toy index add <name> <url>`. The name is local to you, pick anything")
 	}
 	if qryCell(name) != name {
-		return fmt.Errorf("索引名 %q 里有控制字符 —— 它会被原样打印在终端上，换个名字", name)
+		return fmt.Errorf("the index name %q contains control characters — it gets printed to your terminal as-is, so pick another one", name)
 	}
 	u, err := qryIndexURL(rawURL)
 	if err != nil {
@@ -625,21 +627,21 @@ func qryIndexAdd(st *store.Store, cfg store.Config, name, rawURL string) error {
 	}
 	for _, spec := range cfg.Indexes {
 		if strings.EqualFold(strings.TrimSpace(spec.Name), name) {
-			return fmt.Errorf("已经有一个叫 %q 的索引了（%s）。先 `toy index rm %s` 再加",
+			return fmt.Errorf("there is already an index called %q (%s). Run `toy index rm %s` first, then add it again",
 				spec.Name, spec.URL, name)
 		}
 		if spec.URL == u {
 			// 允许，但要说 —— 同一个地址挂两个名字会被拉两遍，搜索结果里靠后
 			// 那份会被去重掉，看起来像是「加了没生效」。
-			ui.Warn("索引 %q 用的也是这个地址；同一份索引挂两个名字只会被拉两遍", spec.Name)
+			ui.Warn("index %q already points at this URL; the same index under two names just gets fetched twice", spec.Name)
 		}
 	}
 	cfg.Indexes = append(cfg.Indexes, store.IndexRef{Name: name, URL: u})
 	if err := st.SaveConfig(cfg); err != nil {
 		return err
 	}
-	ui.Info("加好了：%s → %s", name, u)
-	ui.Info("`toy doctor` 验一下它可不可达，`toy search <关键词>` 直接开搜。")
+	ui.Info("added: %s -> %s", name, u)
+	ui.Info("`toy doctor` checks that it is reachable; `toy search <query>` starts searching right away.")
 	return nil
 }
 
@@ -653,19 +655,19 @@ func qryIndexRm(st *store.Store, cfg store.Config, name string) error {
 		if err := st.SaveConfig(cfg); err != nil {
 			return err
 		}
-		ui.Info("删了：%s → %s", spec.Name, spec.URL)
+		ui.Info("removed: %s -> %s", spec.Name, spec.URL)
 		// 缓存留着不删：它只在离线回退时被读，而那时这条索引已经不在配置里了，
 		// 没人会去读它。真要清就删 ~/.toy/index/ 下对应那个文件。
 		if len(cfg.Indexes) == 0 {
-			ui.Warn("现在一个索引都没有了，`toy search` 什么也搜不到。" +
-				"`toy install github:owner/repo` 不经过索引，仍然能装")
+			ui.Warn("no indexes are left, so `toy search` will find nothing. " +
+				"`toy install github:owner/repo` does not go through an index and still works")
 		}
 		return nil
 	}
 	if len(cfg.Indexes) == 0 {
-		return fmt.Errorf("没有叫 %q 的索引 —— 配置里一个索引都没有", name)
+		return fmt.Errorf("no index called %q — there are no indexes configured at all", name)
 	}
-	return fmt.Errorf("没有叫 %q 的索引。现有的是：%s", name, strings.Join(qryIndexNames(cfg), "、"))
+	return fmt.Errorf("no index called %q. The configured ones are: %s", name, strings.Join(qryIndexNames(cfg), ", "))
 }
 
 func qryIndexNames(cfg store.Config) []string {
@@ -680,11 +682,11 @@ func qryIndexList(st *store.Store, cfg store.Config) error {
 	if len(cfg.Indexes) == 0 {
 		qryNoIndexHelp()
 		ui.Info("")
-		ui.Info("配置文件在 %s。", filepath.Join(st.Root, "config.toml"))
+		ui.Info("The config file is %s.", filepath.Join(st.Root, "config.toml"))
 		return nil
 	}
 	// 包数和缓存时间都只看本地缓存 —— 列个索引不该联网，那是 `toy doctor` 的活。
-	rows := [][]string{{"名字", "包数", "上次缓存", "地址"}}
+	rows := [][]string{{"NAME", "PACKAGES", "LAST CACHED", "URL"}}
 	for _, spec := range cfg.Indexes {
 		name := strings.TrimSpace(spec.Name)
 		if name == "" {
@@ -695,8 +697,8 @@ func qryIndexList(st *store.Store, cfg store.Config) error {
 	}
 	qryTable(rows)
 	ui.Info("")
-	ui.Info("包数和时间来自本地缓存（%s），不代表现在的远端内容；`toy search` 会重新拉。", st.IndexDir())
-	ui.Info("「—」表示这个索引还没拉过。`toy doctor` 会挨个探一遍可达性。")
+	ui.Info("Counts and times come from the local cache (%s), not from the remote as it is now; `toy search` re-fetches.", st.IndexDir())
+	ui.Info("A \"—\" means that index has never been fetched. `toy doctor` probes each one for reachability.")
 	return nil
 }
 
@@ -713,11 +715,11 @@ func qryIndexCacheInfo(st *store.Store, name string) (count, when string) {
 	when = fi.ModTime().Local().Format("2006-01-02 15:04")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "读不了", when
+		return "unreadable", when
 	}
 	idx, _, err := index.Load(data, name)
 	if err != nil {
-		return "坏了", when
+		return "broken", when
 	}
 	return fmt.Sprint(len(idx.Packages)), when
 }
@@ -728,22 +730,22 @@ func qryIndexCacheInfo(st *store.Store, name string) (count, when string) {
 func qryIndexURL(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return "", fmt.Errorf("索引地址是空的（https://… 或者本地那个 json 的路径）")
+		return "", fmt.Errorf("the index URL is empty (give an https://… URL, or the path to a local json file)")
 	}
 	if !strings.Contains(s, "://") {
 		abs, err := filepath.Abs(s)
 		if err != nil {
-			return "", fmt.Errorf("%q 不是 URL，当本地路径也转不成绝对路径：%w", s, err)
+			return "", fmt.Errorf("%q is not a URL, and as a local path it cannot be made absolute either: %w", s, err)
 		}
 		s = "file://" + filepath.ToSlash(abs)
 	}
 	r, err := ref.Parse(s)
 	if err != nil {
-		return "", fmt.Errorf("%q 不是一个能用的索引地址（要 https://… 或 file:///绝对路径）：%w", s, err)
+		return "", fmt.Errorf("%q is not a usable index location (it has to be https://… or file:///absolute/path): %w", s, err)
 	}
 	// ref.Parse 见到 "://" 就只会给出 KindURL 或报错，这里只是把那个前提写下来。
 	if r.Kind != ref.KindURL {
-		return "", fmt.Errorf("%q 不是一个地址 —— 索引要写成 https://… 或 file:///绝对路径", s)
+		return "", fmt.Errorf("%q is not a location — an index has to be https://… or file:///absolute/path", s)
 	}
 	return r.URL, nil
 }
@@ -771,16 +773,16 @@ func runDoctor(ctx context.Context, args []string) error {
 	var checks []qryCheck
 	checks = append(checks, qryCheckPath(st))
 	checks = append(checks,
-		qryCheckDir("bin 目录", st.BinDir(), false),
-		qryCheckDir("pkg 目录", filepath.Join(st.Root, "pkg"), false),
-		qryCheckDir("keys 目录", st.KeysDir(), true),
+		qryCheckDir("bin directory", st.BinDir(), false),
+		qryCheckDir("pkg directory", filepath.Join(st.Root, "pkg"), false),
+		qryCheckDir("keys directory", st.KeysDir(), true),
 	)
 	checks = append(checks, qryCheckGit(st.BinDir()))
 	checks = append(checks, qryCheckIndexes(ctx, cfg)...)
 	checks = append(checks, qryCheckLinks(st))
 	checks = append(checks, qryCheckManifests(st)...)
 
-	ui.Info("体检 %s", st.Root)
+	ui.Info("Checking %s", st.Root)
 	ui.Info("")
 	qryPlatformInfo()
 	bad := 0
@@ -795,16 +797,16 @@ func runDoctor(ctx context.Context, args []string) error {
 			ui.Info("    %s", c.note)
 		}
 		if !c.ok && c.fix != "" {
-			ui.Info("    修复：%s", c.fix)
+			ui.Info("    fix: %s", c.fix)
 		}
 	}
 	ui.Info("")
 	if bad == 0 {
-		ui.Info("%d 项全过。", len(checks))
+		ui.Info("All %d checks passed.", len(checks))
 		return nil
 	}
 	// 返回 error 就是退出码 1（见 main），错误信息本身也得说人话。
-	return fmt.Errorf("%d/%d 项没过，每一条上面都写了修复命令", bad, len(checks))
+	return fmt.Errorf("%d of %d checks failed — each one above prints the command that fixes it", bad, len(checks))
 }
 
 // qryPlatformInfo 打印这台机器会去要哪些构建。
@@ -814,11 +816,11 @@ func runDoctor(ctx context.Context, args []string) error {
 // （musl 上跑 glibc 二进制、Rosetta 没装、armv6 上跑 armv7），
 // 报错里没有一个字指向平台，而这几行是唯一能对上号的线索。
 func qryPlatformInfo() {
-	ui.Info("平台 %s", platform.Current())
-	ui.Info("    候选顺序 %s", strings.Join(platform.Candidates(), " → "))
+	ui.Info("platform %s", platform.Current())
+	ui.Info("    tried in this order: %s", strings.Join(platform.Candidates(), " -> "))
 	if lvl := platform.CPULevelHint(); lvl != "" {
 		// 只是线索：toy 不做微架构匹配（要解析 CPUID，标准库不给，引库违反规格 §10）。
-		ui.Info("    CPU 指令集大致是 %s（只是线索，不参与挑构建）", lvl)
+		ui.Info("    CPU is roughly %s (a hint only, it plays no part in picking a build)", lvl)
 	}
 	ui.Info("")
 }
@@ -827,12 +829,12 @@ func qryPlatformInfo() {
 func qryCheckPath(st *store.Store) qryCheck {
 	bin := st.BinDir()
 	if st.InPath() {
-		return qryCheck{ok: true, title: "PATH 里有 " + bin}
+		return qryCheck{ok: true, title: bin + " is on PATH"}
 	}
 	return qryCheck{
-		title: "PATH 里没有 " + bin + " —— 装上的命令敲不出来",
-		note:  "toy 只往这一个目录里放软链，它不在 PATH 上的话什么都跑不起来",
-		fix:   fmt.Sprintf(`把这一行加进 ~/.bashrc 或 ~/.zshrc 再开个新终端：export PATH="%s:$PATH"`, bin),
+		title: bin + " is not on PATH — installed commands will not be found",
+		note:  "toy puts every symlink in this one directory; if it is not on PATH, nothing you install can run",
+		fix:   fmt.Sprintf(`add this line to ~/.bashrc or ~/.zshrc, then open a new terminal: export PATH="%s:$PATH"`, bin),
 	}
 }
 
@@ -842,38 +844,38 @@ func qryCheckDir(label, dir string, strict bool) qryCheck {
 	fi, err := os.Stat(dir)
 	if err != nil {
 		return qryCheck{
-			title: label + " " + dir + " 用不了",
+			title: label + " " + dir + " is unusable",
 			note:  err.Error(),
 			fix:   "mkdir -p " + dir,
 		}
 	}
 	if !fi.IsDir() {
 		return qryCheck{
-			title: label + " " + dir + " 不是目录",
-			fix:   "把它挪开再重新跑 toy：mv " + dir + " " + dir + ".bak",
+			title: label + " " + dir + " is not a directory",
+			fix:   "move it aside and run toy again: mv " + dir + " " + dir + ".bak",
 		}
 	}
 	perm := fi.Mode().Perm()
 	if perm&0o700 != 0o700 {
 		return qryCheck{
-			title: fmt.Sprintf("%s %s 权限是 %#o，自己都读写不全", label, dir, perm),
+			title: fmt.Sprintf("%s %s is mode %#o — you cannot fully read and write it yourself", label, dir, perm),
 			fix:   "chmod u+rwx " + dir,
 		}
 	}
 	if strict && perm&0o077 != 0 {
 		return qryCheck{
-			title: fmt.Sprintf("%s %s 权限是 %#o，别人读得到里面的私钥", label, dir, perm),
+			title: fmt.Sprintf("%s %s is mode %#o — other users can read the private key in it", label, dir, perm),
 			fix:   "chmod 700 " + dir,
 		}
 	}
 	if !strict && perm&0o022 != 0 {
 		return qryCheck{
-			title: fmt.Sprintf("%s %s 权限是 %#o，别人写得进来", label, dir, perm),
-			note:  "别人能往这里写，就等于能把你 PATH 上的命令换成他自己的",
+			title: fmt.Sprintf("%s %s is mode %#o — other users can write into it", label, dir, perm),
+			note:  "anyone who can write here can replace a command on your PATH with one of their own",
 			fix:   "chmod go-w " + dir,
 		}
 	}
-	return qryCheck{ok: true, title: fmt.Sprintf("%s %s 权限 %#o", label, dir, perm)}
+	return qryCheck{ok: true, title: fmt.Sprintf("%s %s mode %#o", label, dir, perm)}
 }
 
 // qryCheckGit：没有 git 就没有版本发现，github:/gitlab: 那整条路都是废的（规格 §2）。
@@ -885,12 +887,12 @@ func qryCheckDir(label, dir string, strict bool) qryCheck {
 func qryCheckGit(binDir string) qryCheck {
 	path, err := autGitPath(binDir)
 	if err == nil {
-		return qryCheck{ok: true, title: "git 在：" + path}
+		return qryCheck{ok: true, title: "git found at " + path}
 	}
 	return qryCheck{
-		title: "找不到能用的 git",
-		note:  "toy 用 `git ls-remote --tags` 发现版本，没有它就装不了任何 github:/gitlab: 形态的包。" + ui.SafeURL(err.Error()),
-		fix:   "Debian/Ubuntu: sudo apt install git；macOS: xcode-select --install",
+		title: "no usable git",
+		note:  "toy discovers versions with `git ls-remote --tags`; without it no github:/gitlab: package can be installed. " + ui.SafeURL(err.Error()),
+		fix:   "Debian/Ubuntu: sudo apt install git — macOS: xcode-select --install",
 	}
 }
 
@@ -901,9 +903,9 @@ func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 		// 中性地说一句，办法照给（铁律 8：如实说，但别栽赃）。
 		return []qryCheck{{
 			ok:    true,
-			title: "没有配索引（`toy search` 暂时搜不到东西）",
-			note: "这是默认状态，不影响 `toy install github:owner/repo` —— 那条路本来就不经过索引。" +
-				"要开搜就 `toy index add <名字> <地址>`（地址可以是 https://…，也可以是本地那个 json 的路径）",
+			title: "no index configured (`toy search` has nothing to search yet)",
+			note: "this is the default and it does not affect `toy install github:owner/repo` — that route never goes through an index. " +
+				"To start searching, run `toy index add <name> <url>` (the url can be https://… or the path to a local json file)",
 		}}
 	}
 	out := make([]qryCheck, 0, len(cfg.Indexes))
@@ -914,8 +916,8 @@ func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 		}
 		if strings.TrimSpace(spec.URL) == "" {
 			out = append(out, qryCheck{
-				title: "索引 " + name + " 没写 url",
-				fix:   "toy index rm " + name + " 再重新 add",
+				title: "index " + name + " has no url",
+				fix:   "toy index rm " + name + ", then add it again",
 			})
 			continue
 		}
@@ -924,25 +926,25 @@ func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 		cancel()
 		if err != nil {
 			out = append(out, qryCheck{
-				title: "索引 " + name + " 拉不到",
+				title: "index " + name + " cannot be fetched",
 				note:  ui.SafeURL(err.Error()),
-				fix:   "对一下地址（" + ui.SafeURL(spec.URL) + "），不要了就 `toy index rm " + name + "`",
+				fix:   "check the url (" + ui.SafeURL(spec.URL) + "), or drop it with `toy index rm " + name + "`",
 			})
 			continue
 		}
 		idx, skipped, err := index.Load(data, name)
 		if err != nil {
 			out = append(out, qryCheck{
-				title: "索引 " + name + " 拉到了但用不了",
+				title: "index " + name + " was fetched but cannot be used",
 				note:  err.Error(),
-				fix:   "换一个地址，或者 `toy index rm " + name + "`",
+				fix:   "point it at a different url, or `toy index rm " + name + "`",
 			})
 			continue
 		}
-		c := qryCheck{ok: true, title: fmt.Sprintf("索引 %s 可达，%d 个包", name, len(idx.Packages))}
+		c := qryCheck{ok: true, title: fmt.Sprintf("index %s reachable, %d packages", name, len(idx.Packages))}
 		if skipped > 0 {
 			// 索引方的问题，不是本机的问题 —— 不算 ✗，但也不能不说。
-			c.note = fmt.Sprintf("里面有 %d 条记录不合法，已跳过（那些包搜不到，得让索引维护者修）", skipped)
+			c.note = fmt.Sprintf("%d record(s) in it are invalid and were skipped — those packages will not turn up in a search until the index maintainer fixes them", skipped)
 		}
 		out = append(out, c)
 	}
@@ -955,7 +957,7 @@ func qryCheckLinks(st *store.Store) qryCheck {
 	bin := st.BinDir()
 	entries, err := os.ReadDir(bin)
 	if err != nil {
-		return qryCheck{title: "读不了 " + bin, note: err.Error(), fix: "mkdir -p " + bin}
+		return qryCheck{title: "cannot read " + bin, note: err.Error(), fix: "mkdir -p " + bin}
 	}
 	var dangling []string
 	for _, e := range entries {
@@ -968,17 +970,17 @@ func qryCheckLinks(st *store.Store) qryCheck {
 		}
 		target, err := os.Readlink(p)
 		if err != nil {
-			target = "（读不出目标）"
+			target = "(target unreadable)"
 		}
 		dangling = append(dangling, e.Name()+" → "+target)
 	}
 	if len(dangling) == 0 {
-		return qryCheck{ok: true, title: fmt.Sprintf("bin 里 %d 项，没有悬空软链", len(entries))}
+		return qryCheck{ok: true, title: fmt.Sprintf("%d entries in bin, no dangling symlinks", len(entries))}
 	}
 	return qryCheck{
-		title: fmt.Sprintf("有 %d 条悬空软链（指向已经没了的文件）", len(dangling)),
-		note:  strings.Join(dangling, "；"),
-		fix:   "重装那个包（toy install <ref>），或者 `toy uninstall <名字>` 清掉",
+		title: fmt.Sprintf("%d dangling symlink(s) — they point at files that are gone", len(dangling)),
+		note:  strings.Join(dangling, "; "),
+		fix:   "reinstall that package (toy install <ref>), or clear it out with `toy uninstall <name>`",
 	}
 }
 
@@ -988,9 +990,9 @@ func qryCheckManifests(st *store.Store) []qryCheck {
 	ms, err := st.ListManifests()
 	if err != nil {
 		return []qryCheck{{
-			title: "读不了安装清单",
+			title: "cannot read the install manifests",
 			note:  err.Error(),
-			fix:   "按上面那条错误里的路径把坏掉的清单删了（删了那个包就得手动清 ~/.toy/pkg）",
+			fix:   "delete the broken manifest at the path in the error above (after that, clean up its package by hand under ~/.toy/pkg)",
 		}}
 	}
 	var orphans []string
@@ -999,15 +1001,24 @@ func qryCheckManifests(st *store.Store) []qryCheck {
 			continue
 		}
 		if _, err := os.Stat(m.PkgDir); err != nil {
-			orphans = append(orphans, m.ID+"（"+m.PkgDir+"）")
+			orphans = append(orphans, m.ID+" ("+m.PkgDir+")")
 		}
 	}
 	if len(orphans) == 0 {
-		return []qryCheck{{ok: true, title: fmt.Sprintf("%d 份安装清单，都对得上磁盘上的包目录", len(ms))}}
+		return []qryCheck{{ok: true, title: fmt.Sprintf("%d install manifest(s), every one matches a package directory on disk", len(ms))}}
 	}
 	return []qryCheck{{
-		title: fmt.Sprintf("有 %d 个包的清单还在、文件没了", len(orphans)),
-		note:  strings.Join(orphans, "；"),
-		fix:   "重装（toy install <上面那个 id>）或者卸掉（toy uninstall <名字>）",
+		title: fmt.Sprintf("%d package(s) still have a manifest but no files", len(orphans)),
+		note:  strings.Join(orphans, "; "),
+		fix:   "reinstall it (toy install <the id above>) or remove it (toy uninstall <name>)",
 	}}
+}
+
+// qryPlural 是最小的单复数：写 "1 result(s)" 会让整个 CLI 显得像半成品，
+// 而这一行是搜索结果的落款，用户看得最多。
+func qryPlural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }

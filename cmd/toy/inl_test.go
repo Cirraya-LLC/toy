@@ -103,12 +103,12 @@ func TestInlineToyfileInstallsWhenUpstreamHasNone(t *testing.T) {
 		t.Fatalf("清单里的信任等级 = %q，想要 %q", got, store.TrustIndexed)
 	}
 	// 铁律 8：这一行必须说清楚哪一半不是作者的，而且不许长得像已签名。
-	for _, want := range []string{"索引", "作者"} {
+	for _, want := range []string{"index", "author"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("输出里没说清楚打包说明的来历（缺 %q）：\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "✓ 已签名") {
+	if strings.Contains(out, "✓ signed") {
 		t.Fatalf("内联那一档打出了「✓ 已签名」：\n%s", out)
 	}
 }
@@ -236,7 +236,7 @@ func TestUpstreamDisappearingIsADowngrade(t *testing.T) {
 			t.Fatalf("确认之后还是装不上：%v", err)
 		}
 	})
-	if !strings.Contains(out, "--force 放行") || !strings.Contains(out, "索引") {
+	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "index") {
 		t.Fatalf("--force 放行了一次降档，输出里却看不出降到了哪一档：\n%s", out)
 	}
 	if got := inlManifest(t, e.home, "fake:alice/tool").Trust; got != store.TrustIndexed {
@@ -260,7 +260,7 @@ func TestUpstreamTakingOverIsAnnounced(t *testing.T) {
 			t.Fatalf("作者接入之后反而装不上了：%v", err)
 		}
 	})
-	if !strings.Contains(out, "不再由索引提供") {
+	if !strings.Contains(out, "no longer come from the index") {
 		t.Fatalf("打包说明的提供方换了人，输出里却没说：\n%s", out)
 	}
 	if got := inlManifest(t, e.home, "fake:alice/tool").Trust; got != store.TrustHost {

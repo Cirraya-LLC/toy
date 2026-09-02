@@ -66,7 +66,7 @@ func TestReinstallDoesNotWaiveTheVersionPin(t *testing.T) {
 			t.Fatalf("--reinstall --force 都给了还是装不上：%v", err)
 		}
 	})
-	if !strings.Contains(out, "--force 放行") || !strings.Contains(out, "sha256") {
+	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "sha256") {
 		t.Fatalf("--force 放行了一次哈希变更却没逐条说清楚放行了什么：\n%s", out)
 	}
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho EVIL\n" {
@@ -103,7 +103,7 @@ func TestDowngradeIsAllowedButAnnounced(t *testing.T) {
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho OLD\n" {
 		t.Fatalf("点名 @1.0.0 却没装成 v1.0.0：%q", b)
 	}
-	if !strings.Contains(out, "降级") {
+	if !strings.Contains(out, "downgrade") {
 		t.Fatalf("从 v2.0.0 装回 v1.0.0，输出里一个字都没提这是降级 —— "+
 			"上游撤掉最新 tag 时走的是同一条路，而那时用户完全看不出来：\n%s", out)
 	}

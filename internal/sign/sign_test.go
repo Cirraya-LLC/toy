@@ -103,7 +103,7 @@ func TestFingerprint(t *testing.T) {
 		if strings.HasSuffix(got, "…") || len(bad) == 1 && got == "a3" {
 			t.Fatalf("%d 字节的公钥被渲染成了 %q，看起来像个正常指纹", len(bad), got)
 		}
-		if !strings.Contains(got, "无效") {
+		if !strings.Contains(got, "invalid") {
 			t.Fatalf("%d 字节的公钥应该明说无效，得到 %q", len(bad), got)
 		}
 	}

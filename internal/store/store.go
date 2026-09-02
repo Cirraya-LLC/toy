@@ -20,9 +20,9 @@ import (
 )
 
 var (
-	ErrShadow       = errors.New("store: 这个命令名会遮蔽 PATH 上已有的程序")
-	ErrNotInstalled = errors.New("store: 没装过这个包")
-	ErrLinkExists   = errors.New("store: 已经有同名的链接了")
+	ErrShadow       = errors.New("store: that command name would shadow a program already on PATH")
+	ErrNotInstalled = errors.New("store: package is not installed")
+	ErrLinkExists   = errors.New("store: a link with that name already exists")
 )
 
 // Trust 等级，如实打给用户看（铁律 8）。
@@ -116,32 +116,32 @@ func Open(root string) (*Store, error) {
 	if root == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil, fmt.Errorf("store: 找不到用户主目录，也没设 TOY_HOME —— "+
-				"设一个 TOY_HOME=/某个目录 再试：%w", err)
+			return nil, fmt.Errorf("store: no home directory, and TOY_HOME is not set — "+
+				"set TOY_HOME=/some/dir and retry: %w", err)
 		}
 		root = filepath.Join(home, ".toy")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return nil, fmt.Errorf("store: %q 没法转成绝对路径：%w", root, err)
+		return nil, fmt.Errorf("store: cannot resolve %q to an absolute path: %w", root, err)
 	}
 	s := &Store{Root: abs}
 
 	// keys/ 里是私钥，只给自己看。其余目录 0755。
 	for _, d := range []string{dirBin, dirPkg, dirCache, dirInstalled, dirKnown, dirIndex} {
 		if err := os.MkdirAll(filepath.Join(abs, d), 0o755); err != nil {
-			return nil, fmt.Errorf("store: 建不出目录 %s：%w", filepath.Join(abs, d), err)
+			return nil, fmt.Errorf("store: cannot create directory %s: %w", filepath.Join(abs, d), err)
 		}
 	}
 	if err := os.MkdirAll(s.KeysDir(), 0o700); err != nil {
-		return nil, fmt.Errorf("store: 建不出目录 %s：%w", s.KeysDir(), err)
+		return nil, fmt.Errorf("store: cannot create directory %s: %w", s.KeysDir(), err)
 	}
 	// MkdirAll 对已经存在的目录是空操作 —— 一个之前被建成 0755 的 keys/ 会一直
 	// 松着，而里面是私钥。收紧失败就报错，不能装作没看见（铁律 8）。
 	if fi, err := os.Stat(s.KeysDir()); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		if err := os.Chmod(s.KeysDir(), 0o700); err != nil {
-			return nil, fmt.Errorf("store: %s 是 %o，别人读得到里面的私钥，"+
-				"而且收紧不了：%w", s.KeysDir(), fi.Mode().Perm(), err)
+			return nil, fmt.Errorf("store: %s is mode %o, so other users can read the private keys "+
+				"in it, and tightening it failed: %w", s.KeysDir(), fi.Mode().Perm(), err)
 		}
 	}
 	return s, nil
@@ -172,11 +172,11 @@ func (s *Store) LoadConfig() (Config, error) {
 		return DefaultConfig(), nil
 	}
 	if err != nil {
-		return Config{}, fmt.Errorf("store: 读不了 %s：%w", s.configPath(), err)
+		return Config{}, fmt.Errorf("store: cannot read %s: %w", s.configPath(), err)
 	}
 	var c Config
 	if err := toml.Unmarshal(data, &c); err != nil {
-		return Config{}, fmt.Errorf("store: %s 不是合法的 TOML：%w", s.configPath(), err)
+		return Config{}, fmt.Errorf("store: %s is not valid TOML: %w", s.configPath(), err)
 	}
 	if c.Mirrors == nil {
 		c.Mirrors = []string{}
@@ -194,12 +194,12 @@ func (s *Store) LoadConfig() (Config, error) {
 }
 
 func (s *Store) SaveConfig(c Config) error {
-	data, err := encodeTOML("# toy 的配置：索引列表、镜像列表、托管方覆盖。规格 §6。", c)
+	data, err := encodeTOML("# toy config: indexes, mirrors, and git host overrides.", c)
 	if err != nil {
-		return fmt.Errorf("store: 序列化配置失败：%w", err)
+		return fmt.Errorf("store: cannot serialize config: %w", err)
 	}
 	if err := writeFileAtomic(s.configPath(), data, 0o644); err != nil {
-		return fmt.Errorf("store: 写不了 %s：%w", s.configPath(), err)
+		return fmt.Errorf("store: cannot write %s: %w", s.configPath(), err)
 	}
 	return nil
 }
@@ -242,7 +242,7 @@ type Manifest struct {
 // 转义是多对一的（a/b 和 a:b 会撞），hash 后缀把唯一性还回来。
 func (s *Store) manifestPath(id string) (string, error) {
 	if strings.TrimSpace(id) == "" {
-		return "", fmt.Errorf("store: 包 id 是空的，没法定位安装清单")
+		return "", fmt.Errorf("store: package id is empty, cannot locate its install manifest")
 	}
 	sum := sha256.Sum256([]byte(id))
 	file := safeSlug(id) + "-" + hex.EncodeToString(sum[:])[:8] + ".toml"
@@ -329,12 +329,12 @@ func (s *Store) SaveManifest(m Manifest) error {
 	// 落盘之前把 URL 里的密码抹掉：清单是一个长期躺在磁盘上、还会被 `toy list`
 	// 打出来的文件，而 fetch 用的是内存里那份原样的 URL，不受影响。
 	m.Source = redactURL(m.Source)
-	data, err := encodeTOML("# toy 安装清单，自动生成。删了就没法 uninstall / update。", m)
+	data, err := encodeTOML("# toy install manifest, generated. Delete it and this package can no longer be uninstalled or updated.", m)
 	if err != nil {
-		return fmt.Errorf("store: 序列化安装清单失败：%w", err)
+		return fmt.Errorf("store: cannot serialize the install manifest: %w", err)
 	}
 	if err := writeFileAtomic(path, data, 0o644); err != nil {
-		return fmt.Errorf("store: 写不了安装清单 %s：%w", path, err)
+		return fmt.Errorf("store: cannot write install manifest %s: %w", path, err)
 	}
 	return nil
 }
@@ -346,7 +346,7 @@ func (s *Store) LoadManifest(id string) (Manifest, error) {
 	}
 	m, err := readManifest(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Manifest{}, fmt.Errorf("%w：%s。`toy list` 看看装了什么", ErrNotInstalled, id)
+		return Manifest{}, fmt.Errorf("%w: %s. Run `toy list` to see what is installed", ErrNotInstalled, id)
 	}
 	return m, err
 }
@@ -358,7 +358,7 @@ func readManifest(path string) (Manifest, error) {
 	}
 	var m Manifest
 	if err := toml.Unmarshal(data, &m); err != nil {
-		return Manifest{}, fmt.Errorf("store: 安装清单 %s 坏了：%w（删掉它可以恢复，但那个包就得手动清）", path, err)
+		return Manifest{}, fmt.Errorf("store: install manifest %s is corrupt: %w (deleting it recovers, but you will have to clean that package up by hand)", path, err)
 	}
 	return m, nil
 }
@@ -372,7 +372,7 @@ func (s *Store) ListManifests() ([]Manifest, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: 读不了 %s：%w", dir, err)
+		return nil, fmt.Errorf("store: cannot read %s: %w", dir, err)
 	}
 	var out []Manifest
 	for _, e := range entries {
@@ -396,10 +396,10 @@ func (s *Store) RemoveManifest(id string) error {
 	}
 	err = os.Remove(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w：%s", ErrNotInstalled, id)
+		return fmt.Errorf("%w: %s", ErrNotInstalled, id)
 	}
 	if err != nil {
-		return fmt.Errorf("store: 删不掉安装清单 %s：%w", path, err)
+		return fmt.Errorf("store: cannot remove install manifest %s: %w", path, err)
 	}
 	return nil
 }
@@ -409,7 +409,7 @@ func (s *Store) RemoveManifest(id string) error {
 func (s *Store) FindByName(name string) (Manifest, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return Manifest{}, fmt.Errorf("store: 要找的名字是空的")
+		return Manifest{}, fmt.Errorf("store: the name to look up is empty")
 	}
 	all, err := s.ListManifests()
 	if err != nil {
@@ -430,15 +430,15 @@ func (s *Store) FindByName(name string) (Manifest, error) {
 	case 1:
 		return hits[0], nil
 	case 0:
-		return Manifest{}, fmt.Errorf("%w：%q。`toy list` 看看装了什么", ErrNotInstalled, name)
+		return Manifest{}, fmt.Errorf("%w: %q. Run `toy list` to see what is installed", ErrNotInstalled, name)
 	default:
 		ids := make([]string, 0, len(hits))
 		for _, m := range hits {
 			ids = append(ids, m.ID)
 		}
 		sort.Strings(ids)
-		return Manifest{}, fmt.Errorf("store: %q 对上了 %d 个已装的包：%s。"+
-			"写全上面某一个完整 id 再试", name, len(hits), strings.Join(ids, "、"))
+		return Manifest{}, fmt.Errorf("store: %q matches %d installed packages: %s. "+
+			"Retry with one of those full ids", name, len(hits), strings.Join(ids, ", "))
 	}
 }
 
@@ -464,19 +464,19 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 	}
 	absTarget, err := filepath.Abs(target)
 	if err != nil {
-		return "", fmt.Errorf("store: 链接目标 %q 没法转成绝对路径：%w", target, err)
+		return "", fmt.Errorf("store: cannot resolve link target %q to an absolute path: %w", target, err)
 	}
 	// 相对目标会相对 bin/ 解析，几乎永远不是作者想要的；顺手确认它真的存在，
 	// 免得建出一条断链、用户运行时才看到「命令找不到」。
 	fi, err := os.Stat(absTarget)
 	if err != nil {
-		return "", fmt.Errorf("store: 链接目标 %s 用不了（包里可能没有这个文件，"+
-			"对一下 toy.toml 的 [bin] 写的相对路径）：%w", absTarget, err)
+		return "", fmt.Errorf("store: link target %s is unusable — the package may not contain that file; "+
+			"check the relative path on the right of toy.toml's [bin]: %w", absTarget, err)
 	}
 	// 链到一个目录上会造出一个「存在但跑不了」的命令，和断链是同一种坏法。
 	if fi.IsDir() {
-		return "", fmt.Errorf("store: 链接目标 %s 是个目录，不是可执行文件 —— "+
-			"toy.toml 的 [bin] 要写到具体文件", absTarget)
+		return "", fmt.Errorf("store: link target %s is a directory, not an executable — "+
+			"toy.toml's [bin] must point at a file", absTarget)
 	}
 
 	binDir := s.BinDir()
@@ -493,12 +493,12 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 				found = abs
 			}
 			if !sameDir(filepath.Dir(found), binDir) {
-				return "", fmt.Errorf("%w：%q 在 PATH 上已经是 %s。装上去会把它顶掉；"+
-					"确认要覆盖再加 --force", ErrShadow, name, found)
+				return "", fmt.Errorf("%w: %q on PATH is already %s. Installing this would shadow it; "+
+					"pass --force if you really mean to override it", ErrShadow, name, found)
 			}
 		}
 		if _, err := os.Lstat(linkPath); err == nil {
-			return "", fmt.Errorf("%w：%s 已经存在。先 `toy uninstall` 那个包，或者加 --force 替换",
+			return "", fmt.Errorf("%w: %s already exists. Run `toy uninstall` on that package, or pass --force to replace it",
 				ErrLinkExists, linkPath)
 		}
 	}
@@ -515,7 +515,7 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 	}
 
 	if err := symlinkAtomic(absTarget, linkPath); err != nil {
-		return "", fmt.Errorf("store: 建不了软链 %s：%w", linkPath, err)
+		return "", fmt.Errorf("store: cannot create symlink %s: %w", linkPath, err)
 	}
 	return linkPath, nil
 }
@@ -542,8 +542,8 @@ func (s *Store) disownLink(linkPath, newTarget string) error {
 		}
 		m.Links = kept
 		if err := s.SaveManifest(m); err != nil {
-			return fmt.Errorf("store: %s 的软链换了主人，但改不了 %s 的安装清单 —— "+
-				"就这么装上去的话，卸载 %s 会把这条链删掉：%w", linkPath, m.ID, m.ID, err)
+			return fmt.Errorf("store: %s changed owner, but %s's install manifest cannot be updated — "+
+				"installing anyway means uninstalling %s would delete this link: %w", linkPath, m.ID, m.ID, err)
 		}
 	}
 	return nil
@@ -594,24 +594,24 @@ func validLinkName(name string) error {
 	// 折成小写再比：macOS 的 APFS 和 Windows 都大小写不敏感，bin/GIT 在那里
 	// 就是 bin/git。
 	if reservedLinkNames[strings.ToLower(name)] {
-		return fmt.Errorf("store: 命令名 %q 是 toy 自己要执行的程序 —— 让它落进 %s 就等于"+
-			"下一条 toy 命令去跑这个包里的文件（铁律 1）。这一条 --force 也不放行", name, dirBin)
+		return fmt.Errorf("store: command name %q is a program toy itself executes — letting it land in %s "+
+			"means the next toy command runs a file out of this package. --force does not waive this one", name, dirBin)
 	}
 	switch {
 	case name == "":
-		return fmt.Errorf("store: 命令名是空的（toy.toml 的 [bin] 段里 key 就是 PATH 上的名字）")
+		return fmt.Errorf("store: command name is empty (in toy.toml's [bin], the key is the name that lands on PATH)")
 	case name == "." || name == "..":
-		return fmt.Errorf("store: 命令名不能是 %q", name)
+		return fmt.Errorf("store: %q is not a usable command name", name)
 	case strings.ContainsRune(name, os.PathSeparator), strings.ContainsRune(name, '/'):
-		return fmt.Errorf("store: 命令名 %q 里不能有斜杠 —— 它是 PATH 上的一个名字，不是路径", name)
+		return fmt.Errorf("store: command name %q cannot contain a slash — it is a name on PATH, not a path", name)
 	case strings.TrimSpace(name) != name:
 		// 首尾空白的名字在 shell 里根本敲不出来，而它长得跟正常名字一模一样：
 		// "sudo " 既装得上又逃过遮蔽检查（LookPath("sudo ") 什么都找不到）。
-		return fmt.Errorf("store: 命令名 %q 首尾有空白，敲不出来这个名字", name)
+		return fmt.Errorf("store: command name %q has leading or trailing whitespace — nobody can type that name", name)
 	}
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("store: 命令名 %q 里有控制字符，那不是一个能敲出来的命令名", name)
+			return fmt.Errorf("store: command name %q contains control characters — that is not a name anyone can type", name)
 		}
 	}
 	return nil
@@ -650,15 +650,15 @@ func symlinkAtomic(target, linkPath string) error {
 func (s *Store) Unlink(path string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return fmt.Errorf("store: %q 没法转成绝对路径：%w", path, err)
+		return fmt.Errorf("store: cannot resolve %q to an absolute path: %w", path, err)
 	}
 	binDir := s.BinDir()
 	if !sameDir(filepath.Dir(abs), binDir) {
-		return fmt.Errorf("store: 拒绝删 %s —— 它不在 %s 里，toy 只删自己建的软链", abs, binDir)
+		return fmt.Errorf("store: refusing to delete %s — it is not inside %s, and toy only deletes symlinks it created itself", abs, binDir)
 	}
 	err = os.Remove(abs)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("store: 删不掉 %s：%w", abs, err)
+		return fmt.Errorf("store: cannot delete %s: %w", abs, err)
 	}
 	return nil
 }

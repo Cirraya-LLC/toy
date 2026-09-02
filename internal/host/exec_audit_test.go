@@ -35,7 +35,7 @@ func TestTagsRefusesGitFromToyBinDir(t *testing.T) {
 			t.Fatal("想要报错")
 		}
 		// 铁律 8：不许含糊成一句「没找到 git」。用户得知道这不是环境没装好。
-		if !strings.Contains(err.Error(), "攻击") || !strings.Contains(err.Error(), binDir) {
+		if !strings.Contains(err.Error(), "attack") || !strings.Contains(err.Error(), binDir) {
 			t.Errorf("报错没说清这是一次可能的攻击、也没指出是哪个文件：%v", err)
 		}
 	})

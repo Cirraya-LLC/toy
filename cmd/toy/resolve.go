@@ -63,7 +63,7 @@ func openStore() (*store.Store, store.Config, error) {
 	// （加索引、加镜像、加自建托管方都要改它）。写不出来不致命，警告一声照跑。
 	if _, err := os.Stat(filepath.Join(st.Root, "config.toml")); errors.Is(err, os.ErrNotExist) {
 		if err := st.SaveConfig(store.DefaultConfig()); err != nil {
-			ui.Warn("写不出默认配置：%v（这次先用内置默认）", err)
+			ui.Warn("cannot write the default config: %v (falling back to the built-in defaults for this run)", err)
 		}
 	}
 	cfg, err := st.LoadConfig()
@@ -86,7 +86,7 @@ func loadIndexes(ctx context.Context, st *store.Store, cfg store.Config) ([]*ind
 			name = url
 		}
 		if url == "" {
-			ui.Warn("配置里有一条索引没写 url（name = %q），跳过", spec.Name)
+			ui.Warn("an index in the config has no url (name = %q), skipping it", spec.Name)
 			failed++
 			continue
 		}
@@ -102,31 +102,31 @@ func loadIndexes(ctx context.Context, st *store.Store, cfg store.Config) ([]*ind
 		default:
 			cached, cerr := os.ReadFile(cache)
 			if cerr != nil {
-				ui.Warn("索引 %s 拉不到（%v），本地也没有缓存 —— 这次搜不到它里面的包", name, err)
+				ui.Warn("index %s cannot be fetched (%v) and there is no local cache — its packages will not turn up this time", name, err)
 				failed++
 				continue
 			}
-			ui.Warn("索引 %s 拉不到（%v），用的是 %s 之前缓存的索引", name, err, rsvCacheAge(cache))
+			ui.Warn("index %s cannot be fetched (%v), using the copy cached %s ago", name, err, rsvCacheAge(cache))
 			data = cached
 		}
 
 		idx, skipped, err := index.Load(data, name)
 		if err != nil {
-			ui.Warn("索引 %s 用不了：%v", name, err)
+			ui.Warn("index %s is unusable: %v", name, err)
 			failed++
 			continue
 		}
 		// 静默跳过等于骗人：用户搜不到某个包时，得知道是索引里那条记录坏了。
 		if skipped > 0 {
-			ui.Warn("索引 %s 里有 %d 条记录不合法，已跳过（id 不是 owner/repo 形态、"+
-				"source 解析不了 / 又指回索引 / 不是 https:// 的裸地址、id 重复）", name, skipped)
+			ui.Warn("index %s has %d invalid record(s), skipped (id is not owner/repo, source does not parse, "+
+				"source points back at an index, a plain URL that is not https://, or a duplicate id)", name, skipped)
 		}
 		out = append(out, idx)
 	}
 	// 一个都没成，就不能装作「搜不到这个包」——那句话是假的。
 	if len(out) == 0 && failed > 0 {
-		return nil, fmt.Errorf("配置里的 %d 个索引一个都用不了（原因在上面）。"+
-			"`toy install github:owner/repo` 这条路不经过索引，仍然能装", failed)
+		return nil, fmt.Errorf("none of the %d configured indexes could be used — reasons above. "+
+			"`toy install github:owner/repo` does not go through an index and still works", failed)
 	}
 	return out, nil
 }
@@ -180,14 +180,14 @@ func rsvWriteCache(path string, data []byte, name string) {
 	}
 	if err != nil {
 		// 缓存不下来只影响下次离线，这次照用。
-		ui.Warn("索引 %s 缓存不下来：%v", name, err)
+		ui.Warn("index %s could not be cached: %v", name, err)
 	}
 }
 
 func rsvCacheAge(path string) string {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return "不知道多久"
+		return "an unknown amount of time"
 	}
 	return time.Since(fi.ModTime()).Round(time.Minute).String()
 }
@@ -209,7 +209,7 @@ func resolve(ctx context.Context, st *store.Store, cfg store.Config, r ref.Ref) 
 	case ref.KindURL:
 		return rsvViaURL(ctx, r)
 	default:
-		return nil, fmt.Errorf("不认识的包引用形态：%q", r.Raw)
+		return nil, fmt.Errorf("unrecognized package reference: %q", r.Raw)
 	}
 }
 
@@ -224,9 +224,9 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 	// 一个索引都没配（默认状态，见 store.DefaultIndexURL）时说「索引里查不到」
 	// 是假的 —— 我们根本没找过任何地方（铁律 8）。
 	if len(cfg.Indexes) == 0 {
-		return nil, fmt.Errorf("还没配任何索引，所以 %s 查不出来。"+
-			"`toy index add <名字> <地址>` 加一个（地址可以是 https://…，也可以是本地那个 json 的路径）；"+
-			"知道仓库在哪的话，`toy install github:%s` 本来就不需要索引", id, id)
+		return nil, fmt.Errorf("no index is configured, so %s cannot be looked up. "+
+			"Add one with `toy index add <name> <url>` (the url can be https://… or the path to a local json file). "+
+			"And if you know where the repository is, `toy install github:%s` never needed an index", id, id)
 	}
 	for _, idx := range idxs {
 		e, ok := idx.Find(id)
@@ -235,7 +235,7 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 		}
 		src, err := ref.Parse(e.Source)
 		if err != nil {
-			return nil, fmt.Errorf("索引 %s 里 %s 的 source %q 解析不了：%w", idx.Name, e.ID, e.Source, err)
+			return nil, fmt.Errorf("the source %q of %s in index %s does not parse: %w", e.Source, e.ID, idx.Name, err)
 		}
 		src.Version = r.Version // 用户写的 @version 说了算
 
@@ -252,15 +252,15 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 			// 裸地址没有版本可挑，装不出用户点名的那一版；这时候按最新版装
 			// 是在给他一个他没要的东西，宁可说清楚。
 			if r.Version != "" {
-				return nil, fmt.Errorf("索引 %s 里 %s 指向一个固定地址（%s），没有版本可选，"+
-					"所以 @%s 装不了。找到它的仓库用 github:owner/repo@%s 这种写法装",
-					idx.Name, e.ID, e.Source, r.Version, r.Version)
+				return nil, fmt.Errorf("%s in index %s points at a fixed URL (%s), which offers no versions to choose from, "+
+					"so @%s cannot be installed. Find its repository and use github:owner/repo@%s instead",
+					e.ID, idx.Name, e.Source, r.Version, r.Version)
 			}
 			res, err = rsvViaURL(ctx, src)
 		default:
 			// index.Load 已经把这种记录当坏记录跳过了，走到这儿说明它变了。
-			return nil, fmt.Errorf("索引 %s 里 %s 的 source 是 %q，那又是一次索引查询，是个环",
-				idx.Name, e.ID, e.Source)
+			return nil, fmt.Errorf("the source of %s in index %s is %q, which is another index lookup — that is a loop",
+				e.ID, idx.Name, e.Source)
 		}
 		if err != nil {
 			return nil, err
@@ -273,10 +273,10 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 
 	// 索引查不到不代表装不了 —— github: 那条路从头到尾就是真相，这正是
 	// 这个架构的意义（规格 §5：下架无害）。
-	return nil, fmt.Errorf("索引里查不到 %s。这不代表它装不了：索引只是个目录，"+
-		"托管方才是真相 —— 知道它在哪就直接写 `toy install github:%s`"+
-		"（在别家就换成 gitlab: / codeberg: 等前缀）。`toy search %s` 也许能找到名字相近的",
-		id, id, r.Repo)
+	return nil, fmt.Errorf("no index has %s. That does not mean it cannot be installed: an index is only a "+
+		"directory and the host is the source of truth — if you know where it lives, write "+
+		"`toy install github:%s` (use a gitlab: / codeberg: prefix for other hosts). "+
+		"`toy search %s` may turn up something with a similar name", id, id, r.Repo)
 }
 
 // rsvViaHost 走规格 §2 的正路：ls-remote 拿 tag → 挑版本 → raw 取 toy.toml。
@@ -303,18 +303,18 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string)
 		return nil, err
 	}
 	if len(tags) == 0 {
-		return nil, fmt.Errorf("%s 一个 tag 都没有 —— toy 靠 tag 发现版本。"+
-			"如果这是你的仓库：打一个 v1.0.0 的 tag、发一版 release、加个 toy.toml 就能装了", clone)
+		return nil, fmt.Errorf("%s has no tags at all, and tags are how toy discovers versions. "+
+			"If this is your repository: push a v1.0.0 tag, cut a release, add a toy.toml, and it is installable", clone)
 	}
 	v, err := rsvPickVersion(tags, r.Version)
 	if err != nil {
-		return nil, fmt.Errorf("%s：%w", r.String(), err)
+		return nil, fmt.Errorf("%s: %w", r.String(), err)
 	}
 
 	rawURL := h.RawURL(r.Owner, r.Repo, v.Raw, "toy.toml")
 	if rawURL == "" {
-		return nil, fmt.Errorf("托管方 %q 没配 raw 模板，取不了 toy.toml。"+
-			"在 ~/.toy/config.toml 的 [hosts.%s] 里补上 raw = \"…/{owner}/{repo}/…/{ref}/{path}\"",
+		return nil, fmt.Errorf("host %q has no raw template, so toy.toml cannot be fetched. "+
+			"Add raw = \"…/{owner}/{repo}/…/{ref}/{path}\" under [hosts.%s] in ~/.toy/config.toml",
 			hostName, hostName)
 	}
 	where := fmt.Sprintf("%s:%s/%s@%s", hostName, r.Owner, r.Repo, v.Raw)
@@ -329,12 +329,13 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string)
 			return nil, err
 		}
 		if tf, raw, err = rsvInlineToyfile(inline); err != nil {
-			return nil, fmt.Errorf("%s 的仓库里没有 toy.toml，而索引给的那份内联 toyfile 也用不了：%w", where, err)
+			return nil, fmt.Errorf("%s has no toy.toml in its repository, and the toyfile inlined by the index is unusable too: %w", where, err)
 		}
 		trust = store.TrustIndexed
-		ui.Warn("%s 的仓库里没有 toy.toml，这次用的是索引条目里内联的那一份 —— "+
-			"装哪个资产、命令叫什么名字是索引说的，不是作者写的；"+
-			"字节仍然来自作者自己那个 release（下载地址由托管方模板拼，索引说了不算）", where)
+		ui.Warn("%s has no toy.toml in its repository, so the one inlined in the index entry was used: "+
+			"which asset gets installed and what the command is called come from the index, not from the author. "+
+			"The bytes still come from the author's own release — the download URL is built from the host template, "+
+			"and the index has no say in it", where)
 	}
 
 	return &resolved{
@@ -363,10 +364,10 @@ func rsvViaURL(ctx context.Context, r ref.Ref) (*resolved, error) {
 	for _, m := range []map[string]string{tf.Artifact, tf.Script} {
 		for k, val := range m {
 			if strings.Contains(val, "{version}") || strings.Contains(val, "{tag}") {
-				return nil, fmt.Errorf("裸地址装不了这个包：%s 的资产名是 %q，"+
-					"带 {version}/{tag} 占位符，而一个 toy.toml 的地址里没有版本信息。"+
-					"改用 `toy install github:owner/repo` 这种写法（那条路用 git tag 定版本），"+
-					"或者请作者把资产名写死", k, val)
+				return nil, fmt.Errorf("this package cannot be installed from a plain URL: the asset for %s is %q, "+
+					"which uses the {version}/{tag} placeholders, and the URL of a toy.toml carries no version. "+
+					"Use `toy install github:owner/repo` instead (that route takes the version from a git tag), "+
+					"or ask the author to write the asset name out in full", k, val)
 			}
 		}
 	}
@@ -387,15 +388,16 @@ func rsvGetToyfile(ctx context.Context, url, where string) (*toyfile.Toyfile, []
 			return nil, nil, ctx.Err()
 		}
 		// 绝大多数时候这就是 404：仓库还没接入 toy。绝不猜资产名、绝不构建（铁律 2）。
-		return nil, nil, fmt.Errorf("%s 上没有 toy.toml：%w。"+
-			"这个仓库多半还没接入 toy —— toy 只装 release 里的二进制或单文件脚本，"+
-			"不会去猜资产名，也永远不从源码构建。如果这是你的仓库：在根目录加一个 8 行的 "+
-			"toy.toml（name / [bin] / [artifact] 三段）就行，不用求任何人批准",
+		return nil, nil, fmt.Errorf("no toy.toml at %s: %w. "+
+			"This repository most likely has not adopted toy yet — toy installs release binaries and "+
+			"single-file scripts, it never guesses asset names, and it never builds from source. "+
+			"If this is your repository: add an 8-line toy.toml at the root (name / [bin] / [artifact]) "+
+			"and you are done — nobody has to approve it",
 			where, err)
 	}
 	tf, err := toyfile.Parse(data)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s 的 toy.toml 有问题：%w", where, err)
+		return nil, nil, fmt.Errorf("there is a problem with the toy.toml at %s: %w", where, err)
 	}
 	// 原始字节要留着：作者的签名签的是「用户真正下载到的那份文件」，
 	// 重新序列化一遍等于换了一份文本去验（见 autSignMessage 的注释）。
@@ -451,7 +453,7 @@ func rsvPickVersion(tags []string, want string) (semver.V, error) {
 			return v, nil
 		}
 	}
-	return semver.V{}, fmt.Errorf("没有 %q 这个版本。现有的是：%s", want, rsvShowTags(tags))
+	return semver.V{}, fmt.Errorf("there is no version %q. The ones that exist are: %s", want, rsvShowTags(tags))
 }
 
 // rsvShowTags 把 tag 列表排成一句人看得懂的话：能解析的按版本从新到旧，
@@ -472,10 +474,10 @@ func rsvShowTags(tags []string) string {
 		return strings.Compare(a, b)
 	})
 	if len(sorted) > rsvMaxTagsShown {
-		return strings.Join(sorted[:rsvMaxTagsShown], "、") +
-			fmt.Sprintf("…（共 %d 个）", len(sorted))
+		return strings.Join(sorted[:rsvMaxTagsShown], ", ") +
+			fmt.Sprintf("… (%d in total)", len(sorted))
 	}
-	return strings.Join(sorted, "、")
+	return strings.Join(sorted, ", ")
 }
 
 // rsvApplySignature 决定这条索引记录到底算不算「已签名」（规格 §4、铁律 8）。
@@ -496,14 +498,15 @@ func rsvApplySignature(idxName string, e index.Entry, res *resolved) {
 	fp := rsvFingerprint(key)
 	switch {
 	case fp == "":
-		ui.Warn("索引 %s 里 %s 的 key 不是一把合法的 ed25519 公钥，当作未签名处理", idxName, e.ID)
+		ui.Warn("the key on %s in index %s is not a valid ed25519 public key, treating it as unsigned", e.ID, idxName)
 	case strings.TrimSpace(e.Sig) == "":
-		ui.Warn("索引 %s 里 %s 有作者公钥却没有签名 —— 一把没签过任何东西的公钥证明不了什么，"+
-			"当作未签名处理（作者跑一次 `toy publish` 就会带上 sig）", idxName, e.ID)
+		ui.Warn("%s in index %s carries an author public key but no signature — a key that has signed nothing "+
+			"proves nothing, so this counts as unsigned (one run of `toy publish` by the author adds the sig)", e.ID, idxName)
 	default:
 		if err := sign.Verify(key, autSignMessage(e.ID, e.Source, res.Raw), strings.TrimSpace(e.Sig)); err != nil {
-			ui.Warn("索引 %s 里 %s 的签名验不过这一版的 toy.toml（%v），当作未签名处理 —— "+
-				"可能是作者改了 toy.toml 却没重新 `toy publish`，也可能是索引里这条被人动过", idxName, e.ID, err)
+			ui.Warn("the signature on %s in index %s does not verify against this version of toy.toml (%v), "+
+				"treating it as unsigned — either the author edited toy.toml without re-running `toy publish`, "+
+				"or somebody altered this index record", e.ID, idxName, err)
 			return
 		}
 		// 内联的 toyfile 永远到不了 TrustSigned（规则 2）：签名覆盖的是【提交这条
@@ -512,8 +515,9 @@ func rsvApplySignature(idxName string, e index.Entry, res *resolved) {
 		// 指纹仍然留下：钥匙换了要能被 TOFU 拦住（insKeyID / 规格 §4）。
 		if res.Toyfile != nil && res.Toyfile.Origin == toyfile.OriginIndex {
 			res.Signer = fp
-			ui.Info("索引 %s 里 %s 的签名验过了（key %s）—— 它只说明这条索引记录没被改过，"+
-				"不代表作者本人认可这份打包说明，所以信任等级仍然是「打包说明来自索引」", idxName, e.ID, fp)
+			ui.Info("the signature on %s in index %s verifies (key %s) — that only shows this index record "+
+				"was not altered, not that the author endorses these packaging instructions, so the trust "+
+				"level stays at \"packaging instructions from the index\"", e.ID, idxName, fp)
 			return
 		}
 		res.Trust, res.Signer = store.TrustSigned, fp

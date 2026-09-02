@@ -92,7 +92,7 @@ func TestInlineParsesWithIndexOrigin(t *testing.T) {
 // 而信任等级正是照着来源分档的。
 func TestToyfileCannotDeclareItsOwnOrigin(t *testing.T) {
 	_, err := toyfile.ParseFrom([]byte("origin = \"upstream\"\n"+inlineGood), toyfile.OriginIndex)
-	if err == nil || !strings.Contains(err.Error(), "不认识的键") {
+	if err == nil || !strings.Contains(err.Error(), "does not recognize") {
 		t.Fatalf("toy.toml 里写 origin 应该被当成不认识的键拒掉，得到 %v", err)
 	}
 }

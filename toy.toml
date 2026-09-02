@@ -5,7 +5,7 @@
 # 资产名由 .goreleaser.yaml 的 archives.name_template 产出，两边必须逐字对得上。
 # 验一遍：make verify-toyfile（造一份假 dist 再用 toy init 反推，diff 应该是空的）。
 name     = "toy"
-desc     = "装那些没人给你打包的小工具，装的时候一行脚本都不跑"
+desc     = "install the small tools nobody packaged for you -- nothing is executed at install time"
 license  = "MIT"
 homepage = "https://github.com/Cirraya-LLC/toy"
 

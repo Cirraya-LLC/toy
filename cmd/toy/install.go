@@ -46,9 +46,9 @@ func runInstall(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	// 两个开关说的是两件事，别再合并回一个（见 insPerform 上面那段注释）：
 	// --reinstall 是日常操作，--force 是「我核对过，放行安全检查报出的变化」。
-	reinstall := fs.Bool("reinstall", false, "已经装了这一版，再装一次（不放行任何安全检查）")
-	force := fs.Bool("force", false, "接受安全检查报出的变化：哈希变了 / 作者公钥换了 / 命令名遮蔽 / 信任等级降级 / 来源变了")
-	version := fs.String("version", "", "装指定的版本，而不是最高的那个 tag")
+	reinstall := fs.Bool("reinstall", false, "install this same version again (waives no safety check)")
+	force := fs.Bool("force", false, "accept what a safety check reports: checksum changed / author key changed / command name shadowing / trust downgrade / source changed")
+	version := fs.String("version", "", "install this version instead of the highest tag")
 	if err := insParseFlags(fs, args); err != nil {
 		return err
 	}
@@ -64,18 +64,18 @@ func runInstall(ctx context.Context, args []string) error {
 		// ref 里的 @version 和 --version 说的是同一件事，两个都写了还不一样
 		// 的话，装哪个都是猜 —— 宁可让他自己决定。
 		if r.Version != "" && r.Version != v {
-			return fmt.Errorf("%s 里写着 @%s，--version 又写了 %s，这两个不一样。"+
-				"留一个再试", r.Raw, r.Version, v)
+			return fmt.Errorf("%s says @%s but --version says %s. Those disagree, "+
+				"and guessing which one you meant is not something toy will do — drop one and try again", r.Raw, r.Version, v)
 		}
 		if r.Kind == ref.KindURL {
-			return fmt.Errorf("--version 对裸地址没有意义：%s 直接指着一个 toy.toml，"+
-				"没有 tag 可挑。改用 `toy install github:owner/repo@%s` 这种写法", r.URL, v)
+			return fmt.Errorf("--version means nothing for a plain URL: %s points straight at one toy.toml, "+
+				"so there are no tags to choose from. Use `toy install github:owner/repo@%s` instead", r.URL, v)
 		}
 		// 版本号会被拼进下载地址和 pkg 目录名，所以照 ref 自己那套规则验一遍，
 		// 别绕过去（这里借 ref.Parse，不另抄一份白名单）。
 		probe, perr := ref.Parse("owner/repo@" + v)
 		if perr != nil {
-			return fmt.Errorf("--version %q 用不了：%w", v, perr)
+			return fmt.Errorf("--version %q will not do: %w", v, perr)
 		}
 		r.Version = probe.Version
 	}
@@ -97,13 +97,13 @@ func runInstall(ctx context.Context, args []string) error {
 	// old.ID 和这次解析出来的不一样时不能走这条捷径 —— 那说明来源变了，
 	// tag 撞上了也不代表装的是同一个东西。
 	if old != nil && old.ID == insPackageID(res) && !*reinstall && res.Tag != "" && old.Tag == res.Tag {
-		hint := "要重装加 --reinstall"
+		hint := "add --reinstall to install it again"
 		if *force {
 			// --force 不再顺带触发一次重装。光给 --force 就在这里静默返回的话，
 			// 用户会以为他放行的那件事已经生效了。
-			hint = "--force 只放行安全检查报出的变化，它自己不会触发一次重装 —— 要重装再加 --reinstall"
+			hint = "--force only waives what a safety check reports; it does not itself trigger a reinstall — add --reinstall for that"
 		}
-		ui.Info("%s 已经是 %s 了，没什么可做的（%s）", old.Name, old.Tag, hint)
+		ui.Info("%s is already at %s, nothing to do (%s)", old.Name, old.Tag, hint)
 		return nil
 	}
 	// 降级是合法的 —— `toy install foo@v1.0.0` 装 v1.0.0 是用户明说的，不拦。
@@ -111,8 +111,8 @@ func runInstall(ctx context.Context, args []string) error {
 	// 自建 host 被换掉）时走的是同一条路，而那时输出里只有一句「已安装 t 1.0.0」。
 	// 铁律 8 —— 如实说，让用户自己判断这次降级是不是他要的。
 	if old != nil && insIsOlder(*old, res) {
-		ui.Warn("这是一次降级：%s 已经装着 %s，这次要装的 %s 比它旧。"+
-			"要是你没打算降级，先确认上游那个新 tag 是不是被撤掉了", old.Name, old.Tag, res.Tag)
+		ui.Warn("this is a downgrade: %s currently has %s, and %s is older. "+
+			"If you did not mean to go back a version, check whether upstream pulled the newer tag", old.Name, old.Tag, res.Tag)
 	}
 	return insPerform(ctx, st, cfg, res, old, *force)
 }
@@ -150,7 +150,7 @@ func runUninstall(ctx context.Context, args []string) error {
 	if err := st.RemoveManifest(m.ID); err != nil {
 		return err
 	}
-	ui.Info("已卸载 %s %s（缓存留着 —— 它是内容寻址的，同时也是 `toy serve` 的镜像源）",
+	ui.Info("removed %s %s (the cache stays — it is content-addressed, and it is what `toy serve` mirrors)",
 		m.Name, m.Version)
 	return nil
 }
@@ -181,7 +181,7 @@ func runUpdate(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(todo) == 0 {
-		ui.Info("一个包都没装，没什么可升级的")
+		ui.Info("nothing is installed, so there is nothing to upgrade")
 		return nil
 	}
 
@@ -196,19 +196,19 @@ func runUpdate(ctx context.Context, args []string) error {
 			return err // Ctrl-C 就是 Ctrl-C，别接着去拉下一个包
 		default:
 			// 一个包失败不该拖住别的包（它们各自独立，铁律 3）。
-			ui.Error("%s：%v", m.ID, err)
+			ui.Error("%s: %v", m.ID, err)
 			failed++
 		}
 	}
-	ui.Info("%d 个已更新，%d 个已是最新，%d 个失败", updated, current, failed)
+	ui.Info("%d upgraded, %d already current, %d failed", updated, current, failed)
 	if failed > 0 {
-		return fmt.Errorf("%d 个包没能更新（原因在上面）", failed)
+		return fmt.Errorf("%d package(s) could not be upgraded — reasons are above", failed)
 	}
 	return nil
 }
 
 // insErrUpToDate 不是错误，是 insUpdateOne 的第三种结果。
-var insErrUpToDate = errors.New("已是最新")
+var insErrUpToDate = errors.New("already up to date")
 
 func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m store.Manifest) error {
 	// 当初怎么装的就怎么升：经索引装的要再走一次索引，否则作者的签名（只写在
@@ -219,13 +219,13 @@ func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m stor
 	}
 	r, err := ref.Parse(id)
 	if err != nil {
-		return fmt.Errorf("清单里的 id %q 解析不了，没法重新查它的版本：%w", id, err)
+		return fmt.Errorf("the id %q in the manifest does not parse, so its version cannot be looked up again: %w", id, err)
 	}
 	if r.Kind == ref.KindURL {
 		// 裸地址指着一个固定的 toy.toml，没有 tag 可比 —— 想换版本只能
 		// 重新 install 一次那个地址。说清楚，不要假装检查过了。
-		ui.Info("跳过 %s：它是从一个固定地址装的，没有版本可比。要换内容就重新 "+
-			"`toy install %s`", m.Name, m.ID)
+		ui.Info("skipping %s: it came from a fixed URL, so there is no version to compare. "+
+			"To pick up new content, run `toy install %s` again", m.Name, m.ID)
 		return insErrUpToDate
 	}
 
@@ -233,10 +233,10 @@ func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m stor
 	if err != nil && m.IndexID != "" && m.IndexID != m.ID {
 		// 索引里查不到了不代表装不了 —— source 才是真相，下架无害（规格 §5）。
 		// 但要说出来：这时候作者的公钥和签名也跟着没了，信任等级会掉一档。
-		ui.Warn("%s 现在不在索引里了（%v），改用 %s 直接升级；"+
-			"索引条目没了，作者签名也就无从验起", m.Name, err, m.ID)
+		ui.Warn("%s is no longer in any index (%v), upgrading straight from %s instead; "+
+			"with the index entry gone there is no author signature left to verify", m.Name, err, m.ID)
 		if r, err = ref.Parse(m.ID); err != nil {
-			return fmt.Errorf("清单里的 id %q 解析不了，没法重新查它的版本：%w", m.ID, err)
+			return fmt.Errorf("the id %q in the manifest does not parse, so its version cannot be looked up again: %w", m.ID, err)
 		}
 		res, err = resolve(ctx, st, cfg, r)
 	}
@@ -244,7 +244,7 @@ func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m stor
 		return err
 	}
 	if !insIsNewer(m, res) {
-		ui.Info("%s %s 已是最新", m.Name, m.Tag)
+		ui.Info("%s %s is already current", m.Name, m.Tag)
 		return insErrUpToDate
 	}
 	ui.Step("%s %s → %s", m.Name, m.Tag, res.Tag)
@@ -302,27 +302,28 @@ type insItem struct {
 func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *resolved, old *store.Manifest, force bool) error {
 	if insTrustDowngraded(old, res) {
 		if !force {
-			return fmt.Errorf("这次装 %s 的信任等级比上一次低：上次是「%s」，这次是「%s」—— "+
-				"索引里那条记录可能被摘掉了 sig，也可能上游那份 toy.toml 没了、改由索引内联的那份提供，"+
-				"还可能你这次是从别的路径装的。上面那行警告说了具体原因；"+
-				"自己核对过再加 --force 继续", old.Name, insTrustWord(old.Trust), insTrustWord(res.Trust))
+			return fmt.Errorf("this install of %s trusts less than the last one did: it was %q, now it is %q. "+
+				"Maybe the sig was dropped from the index entry, maybe upstream's toy.toml is gone and the index's "+
+				"inlined one took over, maybe you installed it by a different route this time. The warning above "+
+				"says which. Check it yourself, then add --force to go ahead", old.Name, insTrustWord(old.Trust), insTrustWord(res.Trust))
 		}
-		ui.Warn("--force 放行：%s 的信任等级降了一档（%s → %s）",
+		ui.Warn("--force waived: %s dropped a trust level (%s -> %s)",
 			old.Name, insTrustWord(old.Trust), insTrustWord(res.Trust))
 	}
 	// 反方向是好事：作者后来自己加了 toy.toml，打包说明不再由索引提供（规则 6）。
 	// 不拦，但要说一句 —— 上一次装的时候「装哪个资产、命令叫什么名字」是索引说的，
 	// 这一次换成了作者说的，那是这个包身上真的变了的一件事。
 	if old != nil && old.Trust == store.TrustIndexed && res.Trust != store.TrustIndexed {
-		ui.Info("%s 的上游现在有自己的 toy.toml 了：打包说明不再由索引提供，这一版按作者写的装", old.Name)
+		ui.Info("upstream now ships its own toy.toml for %s: the packaging instructions no longer come from the index, this version installs the way the author wrote it", old.Name)
 	}
 	if insSourceChanged(old, res) {
 		if !force {
-			return fmt.Errorf("%s 上一次是从 %s 装的，这次解析出来的来源是 %s —— "+
-				"索引条目只是个指针，改一行 source 就能把已装的命令换成另一个仓库的内容。"+
-				"确认过这次的来源是你要的，再加 --force 继续", old.Name, old.ID, insPackageID(res))
+			return fmt.Errorf("%s was installed from %s last time; this time it resolves to %s. "+
+				"An index entry is only a pointer — editing one source line is enough to swap an installed "+
+				"command for the contents of a different repository. Make sure this source is the one you want, "+
+				"then add --force to go ahead", old.Name, old.ID, insPackageID(res))
 		}
-		ui.Warn("--force 放行：%s 的来源从 %s 换成了 %s", old.Name, old.ID, insPackageID(res))
+		ui.Warn("--force waived: the source of %s changed from %s to %s", old.Name, old.ID, insPackageID(res))
 	}
 	tf := res.Toyfile
 	items, err := insItems(res)
@@ -351,7 +352,7 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		if err != nil {
 			if errors.Is(err, fetch.ErrChecksum) {
 				// 铁律 4：对不上一律拒绝。期望/实际由 fetch 写在里面了。
-				return fmt.Errorf("%s 的内容和 toy.toml 里声明的 sha256 对不上，已拒绝安装：%w", it.asset, err)
+				return fmt.Errorf("checksum mismatch on %s: it does not match the sha256 declared in toy.toml, so nothing was installed: %w", it.asset, err)
 			}
 			return err
 		}
@@ -362,7 +363,7 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		// fetch 只在有 sha256 可比的时候才会去试镜像，所以走到这里必然已经比过了。
 		if dl.Source != it.url && !dl.FromCache {
 			// 镜像地址的最后一段就是 sha256，不必再把它重复一遍。
-			ui.Info("%s：原始地址没拿到，这份字节来自镜像 %s（sha256 已核对，和 toy.toml 声明的一致）",
+			ui.Info("%s: the original URL did not answer, so these bytes came from the mirror %s (sha256 checked, it matches what toy.toml declares)",
 				it.name, dl.Source)
 		}
 
@@ -373,7 +374,7 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		// 一个吓人的假警报，正好出现在最不该狼来了的地方。
 		// 两个平台指向同一个资产名时它们本来就该共用一条钉住记录，这里也是对的。
 		id := trustID + "/" + it.name
-		if err := insTOFU(ring, id, "sha256", it.sum, it.name+" 的 sha256", force); err != nil {
+		if err := insTOFU(ring, id, "sha256", it.sum, "the sha256 of "+it.name, force); err != nil {
 			return err
 		}
 		pins = append(pins, pin{id, "sha256", it.sum})
@@ -382,7 +383,7 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	// 首次安装都要钉）。换了一把钥匙就是换了一个"作者"，那正是要拦的事。
 	if res.Entry != nil && res.Signer != "" {
 		key := strings.TrimSpace(res.Entry.Key)
-		if err := insTOFU(ring, insKeyID(res), "key", key, "作者公钥", force); err != nil {
+		if err := insTOFU(ring, insKeyID(res), "key", key, "the author public key", force); err != nil {
 			return err
 		}
 		pins = append(pins, pin{insKeyID(res), "key", key})
@@ -398,7 +399,7 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		return err
 	}
 	if err := os.MkdirAll(staged, 0o755); err != nil {
-		return fmt.Errorf("建不出包目录 %s：%w", staged, err)
+		return fmt.Errorf("cannot create the package directory %s: %w", staged, err)
 	}
 	for _, it := range items {
 		if err := insUnpack(tf, it, staged); err != nil {
@@ -435,20 +436,20 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	// 「对上了 2 个已装的包」，而 doctor 给的修复建议会把搬走的那个仓库再装一遍。
 	if old != nil && old.ID != m.ID {
 		if err := st.RemoveManifest(old.ID); err != nil && !errors.Is(err, store.ErrNotInstalled) {
-			ui.Warn("旧清单 %s 删不掉：%v（`toy list` 会重复列出这个包）", old.ID, err)
+			ui.Warn("cannot delete the old manifest %s: %v (`toy list` will show this package twice)", old.ID, err)
 		}
 	}
 	// 装成了才钉。失败还钉住的话，下一次安装会拿一个坏值当"首次安装钉住的"。
 	for _, p := range pins {
 		if err := ring.Pin(p.id, p.kind, p.value); err != nil {
-			ui.Warn("钉不住 %s 的 %s：%v（下次安装会当成第一次）", p.id, p.kind, err)
+			ui.Warn("cannot pin %s for %s: %v (the next install will treat it as a first install)", p.kind, p.id, err)
 		}
 	}
 	insCleanOld(st, old, pkgDir, links)
 
-	ui.Info("已安装 %s %s → %s", tf.Name, m.Version, strings.Join(insBaseNames(links), "、"))
+	ui.Info("installed %s %s -> %s", tf.Name, m.Version, strings.Join(insBaseNames(links), ", "))
 	if !st.InPath() {
-		ui.Warn("%s 还不在 PATH 里，装好的命令暂时敲不出来。把它加进 PATH 再试（`toy doctor` 有具体做法）", st.BinDir())
+		ui.Warn("%s is not on your PATH yet, so the command you just installed will not be found. Add it to PATH — `toy doctor` prints the exact line", st.BinDir())
 	}
 	ui.Trust(res.Trust, insTrustDetail(res))
 	return nil
@@ -473,17 +474,17 @@ func insTrustDowngraded(old *store.Manifest, res *resolved) bool {
 func insTrustWord(level string) string {
 	switch level {
 	case store.TrustSigned:
-		return "已签名"
+		return "signed"
 	case store.TrustHost:
-		return "托管方账号"
+		return "host account"
 	case store.TrustIndexed:
-		return "打包说明来自索引"
+		return "packaging instructions from the index"
 	case store.TrustUnverified:
-		return "未验证"
+		return "unverified"
 	case "":
-		return "没记信任等级"
+		return "no trust level recorded"
 	default:
-		return fmt.Sprintf("认不出的等级 %q", level)
+		return fmt.Sprintf("unrecognized level %q", level)
 	}
 }
 
@@ -556,23 +557,24 @@ func insFallbackNote(cands []string, matched string, declared []string) string {
 		// 照跑不误，ripgrep / zoxide 这类只发 musl 一份的项目正是靠它才装得上。
 		// 但仍然要说：装的不是「为这台机器构建的那个」（铁律 8），而且万一那份
 		// musl 构建是动态链接的，它在这里就起不来。
-		return "这个包的 " + strings.TrimSuffix(want, "/gnu") + " 只有 musl 构建，装的就是它 —— " +
-			"musl 版一般是静态链接的，在这台 glibc 机器上照样跑；" +
-			"真要是动态链接的那种，敲下去会报「文件不存在」，那时候去上游要一个 glibc 构建"
+		return "this package only ships a musl build for " + strings.TrimSuffix(want, "/gnu") + ", so that is the one toy uses. " +
+			"musl builds are almost always statically linked, so it runs fine on this glibc machine. " +
+			"If this one happens to be dynamically linked it will say \"file not found\" when you run it — " +
+			"ask upstream for a glibc build if that happens"
 	case want == "darwin/arm64" && matched == "darwin/amd64":
-		return "这个包没有 Apple Silicon 的构建，装的是 Intel 版（darwin/amd64）—— " +
-			"它靠 Rosetta 2 翻译运行，能跑但会慢一截。没装 Rosetta 2 的话敲下去会直接报「无法打开」，" +
-			"`softwareupdate --install-rosetta` 装上即可"
+		return "this package has no Apple Silicon build, so the Intel one (darwin/amd64) is what toy uses. " +
+			"It runs under Rosetta 2 translation — it works, just slower. Without Rosetta 2 installed macOS " +
+			"will refuse to open it; `softwareupdate --install-rosetta` fixes that"
 	case want == matched+"/gnu":
 		// 走到这里说明作者确实按 libc 分了档，只是没有 glibc 那一档。
-		return "这个包按 libc 分了构建，但没有 " + want + " 这一档，装的是通用的 " + matched +
-			" —— 通用构建通常就是 glibc 版，只是作者没有明说"
+		return "this package splits its builds by libc but has no " + want + " entry, so the generic " + matched +
+			" build is the one toy uses — a generic build is usually the glibc one, the author just did not say so"
 	case strings.HasSuffix(want, "/musl"):
-		return "这台机器是 musl（Alpine 这类），而这个包只有通用 Linux 构建（" + matched + "）。" +
-			"它要是动态链接的 glibc 程序，在这里根本起不来 —— 而报错会长得像「文件不存在」" +
-			"（`not found` / `no such file or directory`），那其实是找不到动态加载器，不是文件没装上"
+		return "this machine uses musl (Alpine and friends), and this package only has a generic Linux build (" + matched + "). " +
+			"If that build is dynamically linked against glibc it will not start here — and the error looks like the file " +
+			"is missing (`not found` / `no such file or directory`) when what is really missing is the dynamic loader"
 	default:
-		return "没有 " + want + " 的构建，退回到 " + matched + " —— 装上了但不是为这台机器专门构建的那个"
+		return "there is no " + want + " build, so toy falls back to " + matched + " — usable, but not built for this machine"
 	}
 }
 
@@ -594,11 +596,11 @@ func insAssetURL(res *resolved, asset string, script bool) (string, error) {
 		// 除此之外没有任何信息能说出它在哪。
 		base, err := url.Parse(res.Ref.URL)
 		if err != nil {
-			return "", fmt.Errorf("%s 解析不了，拼不出资产地址：%w", res.Ref.URL, err)
+			return "", fmt.Errorf("%s does not parse, so the asset URL cannot be built: %w", res.Ref.URL, err)
 		}
 		rel, err := url.Parse(asset)
 		if err != nil {
-			return "", fmt.Errorf("资产名 %q 没法当成相对地址：%w", asset, err)
+			return "", fmt.Errorf("the asset name %q cannot be read as a relative URL: %w", asset, err)
 		}
 		return base.ResolveReference(rel).String(), nil
 	}
@@ -609,9 +611,9 @@ func insAssetURL(res *resolved, asset string, script bool) (string, error) {
 		u, what = res.Host.ReleaseURL(res.Owner, res.Repo, res.Tag, asset), "release"
 	}
 	if u == "" {
-		return "", fmt.Errorf("托管方 %q 没配 %s 模板，拼不出下载地址。"+
-			"在 ~/.toy/config.toml 的 [hosts.%s] 里补上 %s = \"…\"",
-			res.HostName, what, res.HostName, what)
+		return "", fmt.Errorf("host %q has no %s template, so the download URL cannot be built. "+
+			"Add %s = \"…\" under [hosts.%s] in ~/.toy/config.toml",
+			res.HostName, what, what, res.HostName)
 	}
 	return u, nil
 }
@@ -644,7 +646,7 @@ func insUnpack(tf *toyfile.Toyfile, it insItem, pkgDir string) error {
 		}
 		full := filepath.Join(pkgDir, dst)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return fmt.Errorf("建目录 %s 失败：%w", filepath.Dir(full), err)
+			return fmt.Errorf("cannot create the directory %s: %w", filepath.Dir(full), err)
 		}
 		return insCopy(it.path, full, 0o755)
 	}
@@ -658,13 +660,13 @@ func insUnpack(tf *toyfile.Toyfile, it insItem, pkgDir string) error {
 func insExtract(src, asset, pkgDir string) error {
 	tmp, err := os.MkdirTemp("", "toy-extract-")
 	if err != nil {
-		return fmt.Errorf("建不了临时目录：%w", err)
+		return fmt.Errorf("cannot create a temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 
 	named := filepath.Join(tmp, filepath.Base(asset))
 	if err := os.Symlink(src, named); err != nil {
-		return fmt.Errorf("准备解压失败：%w", err)
+		return fmt.Errorf("cannot stage the archive for extraction: %w", err)
 	}
 	if _, err := archive.Extract(named, pkgDir); err != nil {
 		return err
@@ -678,20 +680,20 @@ func insExtract(src, asset, pkgDir string) error {
 func insCopy(src, dst string, perm os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("读不了下载下来的文件 %s：%w", src, err)
+		return fmt.Errorf("cannot read the downloaded file %s: %w", src, err)
 	}
 	defer in.Close()
 
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
-		return fmt.Errorf("写不了 %s：%w", dst, err)
+		return fmt.Errorf("cannot write %s: %w", dst, err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		out.Close()
-		return fmt.Errorf("写 %s 失败：%w", dst, err)
+		return fmt.Errorf("writing %s failed: %w", dst, err)
 	}
 	if err := out.Close(); err != nil {
-		return fmt.Errorf("写 %s 失败：%w", dst, err)
+		return fmt.Errorf("writing %s failed: %w", dst, err)
 	}
 	// O_CREATE 那个 perm 会被 umask 削掉，umask 022 下就是 0755，
 	// 但 umask 077 下就成了 0700 —— 而这个文件是要给用户跑的。
@@ -732,19 +734,19 @@ func insLink(st *store.Store, tf *toyfile.Toyfile, pkgDir string, old *store.Man
 		// owned[name] 是我们上一次自己建的那条链，换掉它不是安全放行。
 		lp, err := st.Link(name, target, owned[name])
 		if err != nil && force && (errors.Is(err, store.ErrShadow) || errors.Is(err, store.ErrLinkExists)) {
-			ui.Warn("--force 放行：%v", err)
+			ui.Warn("--force waived: %v", err)
 			lp, err = st.Link(name, target, true)
 		}
 		if err != nil {
 			for _, done := range links {
 				if uerr := st.Unlink(done); uerr != nil {
-					ui.Warn("回滚时删不掉 %s：%v", done, uerr)
+					ui.Warn("cannot remove %s while rolling back: %v", done, uerr)
 				}
 			}
 			// 只有真的建过链接才可能把上一版的顶掉；一条都没建就闭嘴，
 			// 不然一次干净利落的拒绝看起来像是把已装的包弄坏了。
 			if old != nil && len(links) > 0 {
-				ui.Warn("%s 之前那一版的软链可能已经被换掉了，重跑一次 `toy install` 或 `toy update` 就能补回来", old.Name)
+				ui.Warn("the symlinks from the previous version of %s may already have been replaced; running `toy install` or `toy update` again restores them", old.Name)
 			}
 			return nil, err
 		}
@@ -764,14 +766,14 @@ func insCleanOld(st *store.Store, old *store.Manifest, pkgDir string, links []st
 			continue
 		}
 		if err := st.Unlink(l); err != nil {
-			ui.Warn("旧版留下的 %s 删不掉：%v", l, err)
+			ui.Warn("cannot remove %s left behind by the old version: %v", l, err)
 		}
 	}
 	if old.PkgDir == "" || old.PkgDir == pkgDir {
 		return
 	}
 	if err := insRemovePkgDir(st, old.PkgDir); err != nil {
-		ui.Warn("旧版的包目录清不掉：%v", err)
+		ui.Warn("cannot clean up the old version's package directory: %v", err)
 	}
 }
 
@@ -780,7 +782,7 @@ func insCleanOld(st *store.Store, old *store.Manifest, pkgDir string, links []st
 func insTOFU(ring *sign.Ring, id, kind, value, what string, force bool) error {
 	trust, old, err := ring.Check(id, kind, value)
 	if err != nil {
-		return fmt.Errorf("读不了 TOFU 记录（%s/%s）：%w", kind, id, err)
+		return fmt.Errorf("cannot read the trust-on-first-use record (%s/%s): %w", kind, id, err)
 	}
 	if trust != sign.TrustChanged {
 		return nil
@@ -788,11 +790,11 @@ func insTOFU(ring *sign.Ring, id, kind, value, what string, force bool) error {
 	if !force {
 		// 一行写完：ui 会把换行转义成 \x0a（它必须这么做 —— 能插换行就能把
 		// 信任等级那一行盖掉重写，铁律 8），所以这里的 \n 只会变成噪音。
-		return fmt.Errorf("%w：%s 的 %s 和首次安装时钉住的不一样 —— 钉住的是 %s，"+
-			"这次拿到的是 %s。这可能是作者重发了同一个版本，也可能是内容被人换掉了；"+
-			"自己核对过再加 --force 覆盖", sign.ErrChanged, id, what, old, value)
+		return fmt.Errorf("%w: %s for %s does not match what was pinned on first install — pinned %s, "+
+			"got %s this time. The author may have re-cut the same version, or somebody may have swapped the "+
+			"contents. Check it yourself, then add --force to overwrite the pin", sign.ErrChanged, what, id, old, value)
 	}
-	ui.Warn("--force 放行：%s 的 %s 变了（钉住的 %s → 这次 %s）", id, what, old, value)
+	ui.Warn("--force waived: %s for %s changed (pinned %s -> now %s)", what, id, old, value)
 	return nil
 }
 
@@ -847,13 +849,13 @@ func insSwapIn(st *store.Store, staged, pkgDir string) (string, error) {
 		}
 		if err := os.Rename(pkgDir, backup); err != nil {
 			os.RemoveAll(staged)
-			return "", fmt.Errorf("挪不开旧的包目录 %s：%w", pkgDir, err)
+			return "", fmt.Errorf("cannot move the old package directory %s out of the way: %w", pkgDir, err)
 		}
 	}
 	if err := os.Rename(staged, pkgDir); err != nil {
 		insRestore(st, backup, pkgDir)
 		os.RemoveAll(staged)
-		return "", fmt.Errorf("装不进包目录 %s：%w", pkgDir, err)
+		return "", fmt.Errorf("cannot move the new package into %s: %w", pkgDir, err)
 	}
 	return backup, nil
 }
@@ -866,7 +868,7 @@ func insRestore(st *store.Store, backup, pkgDir string) {
 	}
 	_ = insRemovePkgDir(st, pkgDir)
 	if err := os.Rename(backup, pkgDir); err != nil {
-		ui.Warn("旧的那一版放不回 %s：%v（重跑一次 `toy install` 就能补回来）", pkgDir, err)
+		ui.Warn("cannot put the previous version back at %s: %v (running `toy install` again restores it)", pkgDir, err)
 	}
 }
 
@@ -879,17 +881,17 @@ func insRemovePkgDir(st *store.Store, dir string) error {
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return fmt.Errorf("%q 没法转成绝对路径：%w", dir, err)
+		return fmt.Errorf("%q cannot be turned into an absolute path: %w", dir, err)
 	}
 	root := filepath.Clean(st.Root)
 	if abs != root && !strings.HasPrefix(filepath.Clean(abs), root+string(os.PathSeparator)) {
-		return fmt.Errorf("拒绝删 %s —— 它不在 %s 里，toy 只删自己装出来的东西", abs, root)
+		return fmt.Errorf("refusing to delete %s — it is not inside %s, and toy only deletes what it installed itself", abs, root)
 	}
 	if abs == root {
-		return fmt.Errorf("拒绝删 %s —— 那是整个 toy 目录，不是一个包", abs)
+		return fmt.Errorf("refusing to delete %s — that is the whole toy directory, not one package", abs)
 	}
 	if err := os.RemoveAll(abs); err != nil {
-		return fmt.Errorf("删不掉包目录 %s：%w", abs, err)
+		return fmt.Errorf("cannot delete the package directory %s: %w", abs, err)
 	}
 	return nil
 }
@@ -999,10 +1001,10 @@ func insTrustDetail(res *resolved) string {
 		// 这个勾能说的只有：索引里登记的这把钥匙，签过这一版的 toy.toml。
 		detail := "key " + res.Signer
 		if res.IndexName != "" {
-			detail += " · 索引 " + res.IndexName + " 登记"
+			detail += " · registered in index " + res.IndexName
 		}
 		if who := qryHostLabel(res); who != "" && who != "/" {
-			detail += "（不代表 " + who + " 本人）"
+			detail += " (this is not a claim about " + who + " themselves)"
 		}
 		return detail
 	case store.TrustHost:
@@ -1013,14 +1015,14 @@ func insTrustDetail(res *resolved) string {
 		// 是哪一份索引提供的这份打包说明，以及字节到底来自谁的 release。
 		var parts []string
 		if res.IndexName != "" {
-			parts = append(parts, "索引 "+res.IndexName+" 提供")
+			parts = append(parts, "supplied by index "+res.IndexName)
 		}
 		if who := qryHostLabel(res); who != "" && who != "/" {
-			parts = append(parts, "release 来自 "+who)
+			parts = append(parts, "release from "+who)
 		}
 		if res.Signer != "" {
 			// 内联那一档有签名也不是「作者签的」（规则 2），措辞必须把这句写死。
-			parts = append(parts, "key "+res.Signer+"（只证明这条索引记录没被改过）")
+			parts = append(parts, "key "+res.Signer+" (proves only that this index record was not altered)")
 		}
 		return strings.Join(parts, " · ")
 	default:
@@ -1034,15 +1036,15 @@ func insTrustDetail(res *resolved) string {
 func insSafeAsset(name, asset string) error {
 	switch {
 	case strings.TrimSpace(asset) == "":
-		return fmt.Errorf("[script] 里 %q 展开之后是空的，装不了", name)
+		return fmt.Errorf("[script] %q expands to nothing, so there is nothing to install", name)
 	case strings.HasPrefix(asset, "/"), filepath.IsAbs(asset):
-		return fmt.Errorf("[script] 里 %q 展开成绝对路径 %q，只能写仓库内的相对路径", name, asset)
+		return fmt.Errorf("[script] %q expands to the absolute path %q; only paths relative to the repository are allowed", name, asset)
 	case strings.ContainsAny(asset, "?#"):
-		return fmt.Errorf("[script] 里 %q 展开成 %q，含 ? 或 #，拼进地址后会取到另一个文件", name, asset)
+		return fmt.Errorf("[script] %q expands to %q, which contains ? or # — pasted into a URL that fetches a different file", name, asset)
 	}
 	for _, seg := range strings.Split(filepath.ToSlash(asset), "/") {
 		if seg == ".." {
-			return fmt.Errorf(`[script] 里 %q 展开成 %q，含 ".." 段，会指到仓库外面去`, name, asset)
+			return fmt.Errorf(`[script] %q expands to %q, which has a ".." segment and would point outside the repository`, name, asset)
 		}
 	}
 	return nil
@@ -1066,9 +1068,14 @@ func insParseFlags(fs *flag.FlagSet, args []string) error {
 			// 而 install 的 --reinstall 和 --force 恰恰是必须在这儿讲清楚的一对：
 			// 一个是日常操作，一个是「我核对过，放行安全检查报出的变化」。
 			// main 紧接着会打那行用法串，所以这里只补选项。
-			fmt.Fprintf(os.Stderr, "toy %s 的选项（写在位置参数前面）:\n", fs.Name())
-			fs.SetOutput(os.Stderr)
-			fs.PrintDefaults()
+			// 没有任何选项的子命令（update）不该印一个空的「options」标题。
+			n := 0
+			fs.VisitAll(func(*flag.Flag) { n++ })
+			if n > 0 {
+				fmt.Fprintf(os.Stderr, "options for toy %s (they go before the positional arguments):\n", fs.Name())
+				fs.SetOutput(os.Stderr)
+				fs.PrintDefaults()
+			}
 		} else {
 			ui.Error("%v", err)
 		}

@@ -136,7 +136,7 @@ func TestProbeRefusesAVersionPinnedBinPath(t *testing.T) {
 	if !strings.Contains(msg, "tinyserve_1.2.3_linux_amd64/tinyserve") {
 		t.Errorf("报错没给出探到的路径：%s", msg)
 	}
-	if !strings.Contains(msg, "版本号") {
+	if !strings.Contains(msg, "version") {
 		t.Errorf("报错没说清是为什么：%s", msg)
 	}
 }
@@ -146,8 +146,8 @@ func TestUnstableBinPathCatchesPlatformDirs(t *testing.T) {
 	for _, tc := range []struct{ path, version, want string }{
 		{"tinyserve", "1.2.3", ""},
 		{"bin/tinyserve", "1.2.3", ""},
-		{"tinyserve_1.2.3_linux_amd64/tinyserve", "1.2.3", "版本号"},
-		{"tinyserve-linux-amd64/tinyserve", "", "平台名"},
+		{"tinyserve_1.2.3_linux_amd64/tinyserve", "1.2.3", "version"},
+		{"tinyserve-linux-amd64/tinyserve", "", "platform name"},
 		// 版本号认不出来时（version 为空）不能拿空串去 Contains —— 那会命中一切。
 		{"bin/tinyserve", "", ""},
 	} {
@@ -208,7 +208,7 @@ func TestProbeFailureStillProducesAnEntryButSaysSo(t *testing.T) {
 	if p.binProbed {
 		t.Fatal("探测没成却说成探到了")
 	}
-	if !strings.Contains(strings.Join(p.notes, "\n"), "探测没成") {
+	if !strings.Contains(strings.Join(p.notes, "\n"), "probe failed") {
 		t.Fatalf("报告里没说探测失败：%v", p.notes)
 	}
 }
@@ -274,7 +274,7 @@ func TestProbedBasenameSaysNothingWhenItMatches(t *testing.T) {
 		t.Fatalf("binName = %q，想要 tinyserve", p.binName)
 	}
 	for _, n := range p.notes {
-		if strings.Contains(n, "命令名按探到的文件取成") {
+		if strings.Contains(n, "command name taken from the probed file") {
 			t.Errorf("名字没变却报了一句：%s", n)
 		}
 	}

@@ -33,18 +33,18 @@ var errUsage = errors.New("usage")
 // 这几行是用户唯一会看到的语法说明，写成 `<ref> [--force]` 就是在教一个跑不通的顺序。
 func commands() []command {
 	return []command{
-		{"init", "[--dist ./dist] [--name x] [--version v] [--force] [目录]", "从 dist 里的资产名反推一份 toy.toml", runInit},
-		{"install", "[--reinstall] [--force] [--version v] <ref>", "安装一个包", runInstall},
-		{"uninstall", "<名字>", "卸载", runUninstall},
-		{"update", "[名字]", "升级已装的包", runUpdate},
-		{"list", "", "列出已装的包", runList},
-		{"search", "[--limit n] [--json] <关键词>", "在索引里搜工具", runSearch},
-		{"info", "<ref>", "看一个包的详情和信任状态", runInfo},
-		{"index", "add <名字> <地址> | rm <名字> | list", "管理索引", runIndex},
-		{"keygen", "", "生成 ed25519 密钥对", runKeygen},
-		{"publish", "[--inline] [--source github:owner/repo] [目录]", "读 toy.toml，签名，输出索引条目", runPublish},
-		{"serve", "[--addr host:port]", "把本机缓存变成一个镜像", runServe},
-		{"doctor", "", "检查 PATH、目录权限、索引可达性", runDoctor},
+		{"init", "[--dist ./dist] [--name x] [--version v] [--force] [dir]", "write a toy.toml from the asset names in dist", runInit},
+		{"install", "[--reinstall] [--force] [--version v] <ref>", "install a package", runInstall},
+		{"uninstall", "<name>", "remove an installed package", runUninstall},
+		{"update", "[name]", "upgrade installed packages", runUpdate},
+		{"list", "", "list what is installed", runList},
+		{"search", "[--limit n] [--json] <query>", "search the indexes for a tool", runSearch},
+		{"info", "<ref>", "show a package's details and trust status", runInfo},
+		{"index", "add <name> <url> | rm <name> | list", "manage indexes", runIndex},
+		{"keygen", "", "generate an ed25519 key pair", runKeygen},
+		{"publish", "[--inline] [--source github:owner/repo] [dir]", "read toy.toml, sign it, print an index entry", runPublish},
+		{"serve", "[--addr host:port]", "serve the local cache as a mirror", runServe},
+		{"doctor", "", "check PATH, directory permissions and index reachability", runDoctor},
 	}
 }
 
@@ -79,10 +79,10 @@ func main() {
 		case errors.Is(err, errUsage):
 			// 不带参数的子命令（list / doctor / keygen）usage 是空串，
 			// 直接拼会留一个尾随空格。
-			fmt.Fprintln(os.Stderr, strings.TrimSpace("用法: toy "+c.name+" "+c.usage))
+			fmt.Fprintln(os.Stderr, strings.TrimSpace("usage: toy "+c.name+" "+c.usage))
 			os.Exit(2)
 		case errors.Is(err, context.Canceled):
-			ui.Warn("已取消")
+			ui.Warn("cancelled")
 			os.Exit(130)
 		default:
 			ui.Error("%v", err)
@@ -90,16 +90,16 @@ func main() {
 		}
 	}
 
-	ui.Error("不认识的命令 %q，跑 toy help 看看有哪些", name)
+	ui.Error("no such command %q — run `toy help` for the list", name)
 	os.Exit(2)
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "toy %s —— 装那些没人给你打包的小工具，装的时候一行脚本都不跑\n\n用法:\n  toy <命令> [参数]\n\n命令:\n", Version)
+	fmt.Fprintf(os.Stderr, "toy %s — install the small tools nobody packaged for you. Nothing in a package is ever executed.\n\nusage:\n  toy <command> [args]\n\ncommands:\n", Version)
 	w := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
 	for _, c := range commands() {
 		fmt.Fprintf(w, "  %s %s\t%s\n", c.name, c.usage, c.summary)
 	}
 	w.Flush()
-	fmt.Fprintf(os.Stderr, "\n包引用可以写成:\n  Derrity/tinyserve          查索引\n  github:Derrity/tinyserve   直接读那个托管方\n  https://…/toy.toml         裸地址\n")
+	fmt.Fprintf(os.Stderr, "\na package reference can be written as:\n  Derrity/tinyserve          look it up in the indexes\n  github:Derrity/tinyserve   go straight to that host\n  https://…/toy.toml         a plain URL, nothing vouched for\n")
 }

@@ -17,7 +17,7 @@ const (
 	KindURL               // "https://…/toy.toml"       —— 完全裸奔
 )
 
-var ErrBadRef = errors.New("ref: 无法解析这个包引用")
+var ErrBadRef = errors.New("ref: cannot parse this package reference")
 
 type Ref struct {
 	Kind    Kind
@@ -49,7 +49,7 @@ func Parse(s string) (Ref, error) {
 	raw := s
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return Ref{}, fmt.Errorf("%w: 包引用是空的，写成 owner/repo 或 github:owner/repo", ErrBadRef)
+		return Ref{}, fmt.Errorf("%w: empty package reference; write it as owner/repo or github:owner/repo", ErrBadRef)
 	}
 	// URL 形态先认出来：它里面的斜杠和冒号跟下面两种形态的规则完全不是一回事。
 	if strings.Contains(s, "://") {
@@ -71,8 +71,8 @@ func Parse(s string) (Ref, error) {
 	// 所以 host 名至少两个字符、必须字母开头。
 	if h, rest, ok := strings.Cut(body, ":"); ok {
 		if !validHostName(h) {
-			return Ref{}, fmt.Errorf("%w: %q: %q 不是合法的 host 前缀（host 名要字母开头、"+
-				"至少两个字符、只含字母数字和 .-，如 github:owner/repo）", ErrBadRef, s, h)
+			return Ref{}, fmt.Errorf("%w: %q: %q is not a valid host prefix (a host name starts with a letter, "+
+				"is at least two characters long, and contains only letters, digits, . and -, as in github:owner/repo)", ErrBadRef, s, h)
 		}
 		r.Kind = KindHost
 		r.Host = strings.ToLower(h)
@@ -81,10 +81,10 @@ func Parse(s string) (Ref, error) {
 
 	owner, repo, ok := strings.Cut(body, "/")
 	if !ok {
-		return Ref{}, fmt.Errorf("%w: %q: 缺少斜杠，要写成 owner/repo（如 Derrity/tinyserve）", ErrBadRef, s)
+		return Ref{}, fmt.Errorf("%w: %q: missing the slash; write it as owner/repo (for example Derrity/tinyserve)", ErrBadRef, s)
 	}
 	if strings.Contains(repo, "/") {
-		return Ref{}, fmt.Errorf("%w: %q: 斜杠只能有一个，owner/repo 就是全部（不支持子目录）", ErrBadRef, s)
+		return Ref{}, fmt.Errorf("%w: %q: only one slash is allowed — owner/repo is the whole reference (subdirectories are not supported)", ErrBadRef, s)
 	}
 	if err := validSegment("owner", owner); err != nil {
 		return Ref{}, fmt.Errorf("%w: %q: %v", ErrBadRef, s, err)
@@ -99,26 +99,26 @@ func Parse(s string) (Ref, error) {
 func parseURL(s, raw string) (Ref, error) {
 	u, err := url.Parse(s)
 	if err != nil {
-		return Ref{}, fmt.Errorf("%w: %q: 不是合法的 URL：%v", ErrBadRef, s, err)
+		return Ref{}, fmt.Errorf("%w: %q: not a valid URL: %v", ErrBadRef, s, err)
 	}
 	if !allowedSchemes[u.Scheme] {
-		return Ref{}, fmt.Errorf("%w: %q: 只认 http:// https:// file:// 三种地址，不认 %q", ErrBadRef, s, u.Scheme)
+		return Ref{}, fmt.Errorf("%w: %q: only http://, https:// and file:// addresses are accepted, not %q", ErrBadRef, s, u.Scheme)
 	}
 	if u.Scheme == "file" {
 		if u.Path == "" {
-			return Ref{}, fmt.Errorf("%w: %q: 本地文件要写成 file:///绝对路径/toy.toml（三个斜杠）", ErrBadRef, s)
+			return Ref{}, fmt.Errorf("%w: %q: a local file goes as file:///absolute/path/toy.toml (three slashes)", ErrBadRef, s)
 		}
 		// file:// 后面跟主机名是个陷阱：读的人只会用 u.Path，所以
 		// file://evil.com/etc/passwd 读的是【本机】的 /etc/passwd，而这一行
 		// 在日志、安装清单和信任等级里长得像一个远程地址（规格 §4 要求如实告知）。
 		// RFC 8089 只认空主机名和 localhost，别的一律拒绝而不是悄悄丢掉。
 		if h := u.Hostname(); h != "" && !strings.EqualFold(h, "localhost") {
-			return Ref{}, fmt.Errorf("%w: %q: file:// 后面不能跟主机名 %q —— 它会被忽略，"+
-				"实际读的是本机的 %q。本地文件写成 file:///绝对路径/toy.toml（三个斜杠）", ErrBadRef, s, h, u.Path)
+			return Ref{}, fmt.Errorf("%w: %q: file:// must not carry the host name %q — it is ignored, and what "+
+				"actually gets read is the local file %q. Write local files as file:///absolute/path/toy.toml (three slashes)", ErrBadRef, s, h, u.Path)
 		}
 	} else if u.Hostname() == "" {
 		// 用 Hostname() 不是 Host()："https://:8080/x" 的 Host 是 ":8080"，非空但没有主机名。
-		return Ref{}, fmt.Errorf("%w: %q: 缺少主机名，要写成 https://主机名/路径/toy.toml", ErrBadRef, s)
+		return Ref{}, fmt.Errorf("%w: %q: missing the host name; write it as https://host/path/toy.toml", ErrBadRef, s)
 	}
 	// 主机名大小写不敏感，统一小写：URL 会变成下载缓存和 TOFU 记录的 key（规格 §4、§6），
 	// 只差大小写的两个地址必须是同一个 key，否则 Example.COM 能绕过 example.com 钉住的 hash。
@@ -133,15 +133,15 @@ func parseURL(s, raw string) (Ref, error) {
 func validSegment(what, s string) error {
 	switch {
 	case s == "":
-		return fmt.Errorf("%s 是空的", what)
+		return fmt.Errorf("%s is empty", what)
 	case s == "." || s == "..":
-		return fmt.Errorf("%s 不能是 %q", what, s)
+		return fmt.Errorf("%s cannot be %q", what, s)
 	case len(s) > maxSegment:
-		return fmt.Errorf("%s 太长了（最多 %d 个字符）", what, maxSegment)
+		return fmt.Errorf("%s is too long (%d characters max)", what, maxSegment)
 	}
 	for _, c := range s {
 		if !isSegmentChar(c) {
-			return fmt.Errorf("%s %q 里有不允许的字符 %q（只允许字母、数字和 . _ -）", what, s, string(c))
+			return fmt.Errorf("%s %q contains the character %q, which is not allowed (letters, digits and . _ - only)", what, s, string(c))
 		}
 	}
 	return nil
@@ -152,15 +152,15 @@ func validSegment(what, s string) error {
 func validVersion(s string) error {
 	switch {
 	case s == "":
-		return errors.New("@ 后面要写版本号，如 @v1.2.3")
+		return errors.New("write a version after the @, as in @v1.2.3")
 	case s == "." || s == "..":
-		return fmt.Errorf("版本号不能是 %q", s)
+		return fmt.Errorf("a version cannot be %q", s)
 	case len(s) > maxSegment:
-		return fmt.Errorf("版本号太长了（最多 %d 个字符）", maxSegment)
+		return fmt.Errorf("version is too long (%d characters max)", maxSegment)
 	}
 	for _, c := range s {
 		if !isSegmentChar(c) && c != '+' {
-			return fmt.Errorf("版本号 %q 里有不允许的字符 %q（只允许字母、数字和 . _ - +）", s, string(c))
+			return fmt.Errorf("version %q contains the character %q, which is not allowed (letters, digits and . _ - + only)", s, string(c))
 		}
 	}
 	return nil

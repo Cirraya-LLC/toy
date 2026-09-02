@@ -164,11 +164,11 @@ func line(s string) {
 func Info(format string, a ...any) { line(sprintf(format, a...)) }
 
 func Warn(format string, a ...any) {
-	line(paint(ansiYellow, "警告: "+sprintf(format, a...)))
+	line(paint(ansiYellow, "warning: "+sprintf(format, a...)))
 }
 
 func Error(format string, a ...any) {
-	line(paint(ansiRed, "错误: "+sprintf(format, a...)))
+	line(paint(ansiRed, "error: "+sprintf(format, a...)))
 }
 
 func Step(format string, a ...any) {
@@ -177,10 +177,10 @@ func Step(format string, a ...any) {
 
 // Trust 打印安装完成那一行的信任等级（铁律 8、规格 §4）：
 //
-//	signed      ✓ 已签名 · Derrity (key a3f9…)
-//	host           · 来源 github.com/Derrity · 未签名
-//	index-toyfile  ⚠ 打包说明来自索引，不是作者写的
-//	unverified     ⚠ 未签名 · 首次安装，已钉住 sha256
+//	signed         ✓ signed · key a3f9… · registered in index default
+//	host           · from github.com/Derrity · unsigned
+//	index-toyfile  ⚠ packaging instructions come from the index, not the author
+//	unverified     ⚠ unsigned · first install, sha256 pinned
 //
 // level 取 store.TrustSigned / TrustHost / TrustIndexed / TrustUnverified
 // （写成字面量是为了不让 ui 依赖 store）。
@@ -192,33 +192,33 @@ func Trust(level, detail string) {
 		if detail == "" {
 			// 说"已签名"却说不出是谁签的，等于替一把不知道是谁的钥匙背书。
 			// 铁律 8：不许静默成功，说不清就别说得比知道的多。
-			line(paint(ansiBold+ansiRed, "⚠ 声称已签名但没给出签名者 · 当作未验证处理"))
+			line(paint(ansiBold+ansiRed, "⚠ claims to be signed but names no signer · treating as unverified"))
 			return
 		}
-		line(paint(ansiGreen, "✓ 已签名") + " · " + detail)
+		line(paint(ansiGreen, "✓ signed") + " · " + detail)
 	case "host":
 		if detail == "" {
-			detail = "未知"
+			detail = "unknown"
 		}
-		line(paint(ansiDim, "· 来源 "+detail+" · 未签名"))
+		line(paint(ansiDim, "· from "+detail+" · unsigned"))
 	case "index-toyfile":
 		// 说清楚哪一半是作者的、哪一半不是。"部分可信"这种含糊说法等于没说 ——
 		// 用户要能据此判断风险：装进来的字节是作者 release 里的那个资产，
 		// 但「装哪个资产、软链成什么命令名」是索引条目里内联的 toyfile 说的。
-		s := "⚠ 打包说明来自索引 · 二进制取自作者的 release，但装哪个资产、命令叫什么名字由索引提供，作者本人没有写过 toy.toml"
+		s := "⚠ packaging instructions come from the index · the bytes are from the author's own release, but which asset gets installed and what the command is called come from the index — the author never wrote a toy.toml"
 		if detail != "" {
 			s += " · " + detail
 		}
 		line(paint(ansiBold+ansiYellow, s))
 	case "unverified":
-		s := "⚠ 未签名 · 首次安装，已钉住 sha256"
+		s := "⚠ unsigned · first install, sha256 pinned (trust on first use)"
 		if detail != "" {
 			s += " · " + detail
 		}
 		line(paint(ansiBold+ansiYellow, s))
 	default:
 		// 铁律 8：不许静默成功。认不出的等级要说出来，不能当成安全的那一档糊过去。
-		line(paint(ansiBold+ansiRed, fmt.Sprintf("⚠ 未知的信任等级 %q，当作未验证处理 · %s", level, detail)))
+		line(paint(ansiBold+ansiRed, fmt.Sprintf("⚠ unknown trust level %q, treating as unverified · %s", level, detail)))
 	}
 }
 
@@ -259,7 +259,7 @@ func (p *Progress) Start(name string, total int64) {
 		)
 		return
 	}
-	line("下载 " + p.name + " (" + humanBytes(total) + ")")
+	line("downloading " + p.name + " (" + humanBytes(total) + ")")
 }
 
 func (p *Progress) Add(n int64) {
@@ -296,22 +296,22 @@ func (p *Progress) Done(err error) {
 	}
 	if err != nil {
 		// err 一路来自网络：fetch 的 "HTTP %s" 抄的就是服务器发来的状态行。
-		line(paint(ansiRed, sprintf("✗ %s 失败: %v", p.name, err)))
+		line(paint(ansiRed, sprintf("✗ %s failed: %v", p.name, err)))
 		return
 	}
 	if p.cur <= 0 {
 		// 一个字节都没数过，就别编一个大小出来。
-		line(paint(ansiGreen, "✓ "+p.name+" 完成"))
+		line(paint(ansiGreen, "✓ "+p.name+" done"))
 		return
 	}
-	line(paint(ansiGreen, sprintf("✓ %s 完成 (%s)", p.name, humanBytes(p.cur))))
+	line(paint(ansiGreen, sprintf("✓ %s done (%s)", p.name, humanBytes(p.cur))))
 }
 
 // humanBytes 把字节数写成人看的样子，例如 12.3 MB。
 // 十进制单位（1000），跟 release 页面上标的大小对得上。
 func humanBytes(n int64) string {
 	if n <= 0 {
-		return "大小未知"
+		return "size unknown"
 	}
 	if n < 1000 {
 		return fmt.Sprintf("%d B", n)

@@ -80,11 +80,11 @@ func candidatesFor(goos, goarch string, musl bool, arm int) []string {
 func describe(cands []string) string {
 	switch len(cands) {
 	case 0:
-		return "未知平台"
+		return "unknown platform"
 	case 1:
 		return cands[0]
 	default:
-		return cands[0] + "（没有的话依次退回 " + strings.Join(cands[1:], "、") + "）"
+		return cands[0] + " (falling back to " + strings.Join(cands[1:], ", ") + " if missing)"
 	}
 }
 

@@ -36,7 +36,7 @@ echo "== 全新的 store：一个索引都没有 =="
 # 免得被下面那份写死的 config.toml 影响。
 FRESH="$WORK/fresh"
 check "全新 store 的 search 说「还没配索引」而不是「没有匹配」" \
-      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q '还没配任何索引'"
+      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'No index is configured'"
 check "search 给出了 toy index add 的示例（含 file://）" \
       "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'toy index add' && \
        TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'file://'"
@@ -49,9 +49,9 @@ check "写出来的默认 config.toml 里没有内置索引" \
 # 那不是这里要断言的东西，所以先落成文件再 grep。
 TOY_HOME="$FRESH" "$TOY" doctor >"$WORK/doctor-fresh.log" 2>&1 || true
 check "doctor 对「没配索引」不打 ✗" \
-      "grep '没有配索引' '$WORK/doctor-fresh.log' | grep -q '✓'"
+      "grep 'no index configured' '$WORK/doctor-fresh.log' | grep -q '✓'"
 check "doctor 里没有任何一行 ✗ 是在说索引" \
-      "! grep '^✗' '$WORK/doctor-fresh.log' | grep -q 索引"
+      "! grep '^✗' '$WORK/doctor-fresh.log' | grep -qi index"
 
 echo "== 造一个假的上游仓库 =="
 UP="$WORK/upstream"
@@ -113,11 +113,11 @@ check "软链建在 \$TOY_HOME/bin 下"          "test -L '$TOY_HOME/bin/hello'"
 check "装好的命令真的能跑"                    "hello | grep -q 'hello from toy e2e'"
 check "写了安装清单"                          "ls '$TOY_HOME/installed'/*/*/*.toml >/dev/null 2>&1 || ls -R '$TOY_HOME/installed' | grep -q toml"
 check "缓存文件名就是 sha256（内容寻址）"      "ls '$TOY_HOME/cache' | grep -qE '^[0-9a-f]{64}'"
-check "打印了信任等级"                        "grep -qE '未签名|已签名|已钉住' '$WORK/install.log'"
+check "打印了信任等级"                        "grep -qE 'unsigned|✓ signed|sha256 pinned' '$WORK/install.log'"
 # 上面那个 toy.toml 只写了两段 key（绝大多数项目都是这样）。linux 上首选候选永远是
 # 我们自己合成的 linux/amd64/gnu，所以「没命中首选就报回退」会让每一次普通安装都
 # 多一句假警告 —— 而一条每次都响的警告会把真的 musl / Rosetta 警告一起淹掉。
-check "只发两段 key 的包不报假回退"            "! grep -q '退回' '$WORK/install.log'"
+check "只发两段 key 的包不报假回退"            "! grep -q '^warning:' '$WORK/install.log'"
 
 echo "== list / info =="
 # 规格 §9：给人看的输出走 stderr，stdout 留给机器可读的那份（--json）。
@@ -127,7 +127,7 @@ check "info 跑得通"                           "'$TOY' info local:test/hello"
 # list 和 uninstall 都认已装的那个短名字，info 以前只认 ref —— 同一个字符串在同一个
 # CLI 里有两种含义，而用户是从 list 里抄的那个名字。装过的包 info 也得认。
 check "info 认 list 里印出来的那个短名字"        "'$TOY' info hello 2>&1 | grep -q hello"
-check "真的写坏的 ref 仍然报解析错误"             "! '$TOY' info 'not a ref!!' 2>&1 | grep -q '^名字'"
+check "真的写坏的 ref 仍然报解析错误"             "! '$TOY' info 'not a ref!!' 2>&1 | grep -q '^name '"
 
 echo "== 走镜像要如实说 =="
 # 原始地址挂掉、字节从镜像拿到时必须打印出来（铁律 8）。镜像只在 toy.toml 写了
@@ -169,7 +169,7 @@ EOF
 rm -f "$TOY_HOME/cache/"*
 "$TOY" install local:test/mirrored >"$WORK/mirror.log" 2>&1 || true
 check "从镜像装成功了"                        "test -L '$TOY_HOME/bin/mirrored'"
-check "说明了这份字节来自镜像"                 "grep -q '来自镜像' '$WORK/mirror.log'"
+check "说明了这份字节来自镜像"                 "grep -q 'came from the mirror' '$WORK/mirror.log'"
 check "说明里带着那个镜像地址"                 "grep -q '$MIRROR' '$WORK/mirror.log'"
 "$TOY" uninstall mirrored >/dev/null 2>&1 || true
 # 复原成原来那份 config，后面的用例还要用。
@@ -235,7 +235,7 @@ if "$TOY" install local:test/evil >"$WORK/evil.log" 2>&1; then
 else
   ok "拒绝了会遮蔽 ls 的包"
 fi
-check "拒绝的理由说得清楚"                    "grep -qE '遮蔽|shadow' '$WORK/evil.log'"
+check "拒绝的理由说得清楚"                    "grep -q 'shadow' '$WORK/evil.log'"
 
 echo "== 铁律：sha256 对不上必须拒绝 =="
 cat > "$UP/toy.toml" <<'EOF'
@@ -264,7 +264,7 @@ fi
 # 光看退出码不够：任何一处先报错（资产名拼错、tag 没找着）都能让它非零，
 # 那样这条断言就在为一件没发生的事发绿灯。必须是【因为哈希】被拒的。
 check "拒绝的理由确实是 sha256 对不上"          "grep -q 'sha256' '$WORK/bad.log'"
-check "报错里把期望值和实际值都摆出来了"          "grep -q '1111111111111111111111111111111111111111111111111111111111111111' '$WORK/bad.log' && grep -qE '实际|actual' '$WORK/bad.log'"
+check "报错里把期望值和实际值都摆出来了"          "grep -q '1111111111111111111111111111111111111111111111111111111111111111' '$WORK/bad.log' && grep -qE 'expected .*got' '$WORK/bad.log'"
 check "哈希不对时什么都没装上"                   "! test -e '$TOY_HOME/bin/badsum'"
 
 echo "== toy init：从 dist 的文件名反推 toy.toml，然后真的装它 =="
@@ -288,7 +288,7 @@ check "算出了 [sha256]（铁律 4：从 TOFU 升到强制校验）" \
       "grep -q '^\[sha256\]' '$UP2/toy.toml' && grep -qE '^\"linux/amd64\" = \"[0-9a-f]{64}\"' '$UP2/toy.toml'"
 check "Windows 被跳过且说明了原因"               "! grep -q 'windows' '$UP2/toy.toml' && grep -q 'Windows' '$WORK/init.log'"
 check "checksums.txt 这种非资产没进 [artifact]"  "! grep -q 'checksums' '$UP2/toy.toml'"
-check "明说了哪些地方是猜的"                     "grep -q '是猜的' '$WORK/init.log'"
+check "明说了哪些地方是猜的"                     "grep -q 'were guessed' '$WORK/init.log'"
 ( cd "$UP2" && git init -q && git add -A \
   && git -c user.email=t@e.st -c user.name=t commit -q -m init && git tag v2.1.0 )
 cat > "$TOY_HOME/config.toml" <<EOF
@@ -336,9 +336,9 @@ check "doctor 跑得通"                         "'$TOY' doctor"
 # 先落成文件再 grep：`doctor | grep -q` 里 grep 一命中就退出，doctor 吃到 SIGPIPE，
 # set -o pipefail 会把整条管道判失败 —— 那和这里要断言的东西没有半点关系。
 "$TOY" doctor >"$WORK/doctor.log" 2>&1 || true
-check "doctor 打印了当前平台"                   "grep -q '^平台 ' '$WORK/doctor.log'"
-check "doctor 打印了候选顺序"                   "grep -q '候选顺序' '$WORK/doctor.log'"
-check "平台那几行不带 ✓/✗"                     "! grep -E '^[✓✗].*(候选顺序|^平台)' '$WORK/doctor.log'"
+check "doctor 打印了当前平台"                   "grep -q '^platform ' '$WORK/doctor.log'"
+check "doctor 打印了候选顺序"                   "grep -q 'tried in this order' '$WORK/doctor.log'"
+check "平台那几行不带 ✓/✗"                     "! grep -E '^[✓✗].*(tried in this order|platform )' '$WORK/doctor.log'"
 check "keygen 生成了密钥"                     "'$TOY' keygen && test -f '$TOY_HOME/keys/key.sec'"
 check "私钥权限是 0600"                       "test \"\$(stat -c %a '$TOY_HOME/keys/key.sec' 2>/dev/null || stat -f %Lp '$TOY_HOME/keys/key.sec')\" = 600"
 check "keygen 不覆盖已有密钥"                 "! '$TOY' keygen"

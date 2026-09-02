@@ -25,7 +25,7 @@ func TestSelfHostedHintHasNoControlCharsToEscape(t *testing.T) {
 // 真的能被解析回一个四个模板都齐的 Host。
 func TestSelfHostedHintPastesBackIntoAWorkingHost(t *testing.T) {
 	hint := selfHostedHint("mygitea")
-	line := hint[strings.LastIndex(hint, "：")+len("："):]
+	line := hint[strings.Index(hint, "hosts."):]
 
 	var cfg struct {
 		Hosts map[string]Host `toml:"hosts"`

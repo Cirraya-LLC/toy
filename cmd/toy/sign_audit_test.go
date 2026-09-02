@@ -249,7 +249,7 @@ func TestReinstallDoesNotWaiveAKeySwap(t *testing.T) {
 			t.Fatalf("--reinstall --force 都给了还是装不上：%v", err)
 		}
 	})
-	if !strings.Contains(out, "--force 放行") || !strings.Contains(out, "作者公钥") {
+	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "author public key") {
 		t.Fatalf("--force 放行了一次换钥匙却没说是放行了什么：\n%s", out)
 	}
 }
