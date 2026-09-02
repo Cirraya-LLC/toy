@@ -94,6 +94,31 @@ a:hover { text-decoration-thickness: 2px; }
 }
 .bar nav a:hover { color: var(--accent); }
 
+/* 语言切换器：三个普通链接，禁 JS 也能切。 */
+.langnav {
+  display: flex; gap: .6rem; flex-wrap: wrap;
+  margin-left: 0;
+  padding-left: .85rem;
+  border-left: 1px solid var(--line);
+}
+.langnav a {
+  font: 400 .8125rem/1 var(--mono);
+  color: var(--ink-3); text-decoration: none;
+}
+.langnav a:hover { color: var(--accent); }
+.langnav a.is-on {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+@media (max-width: 46rem) {
+  /* 窄屏两行：导航一行、语言一行，别把语言挤成半个字。 */
+  .bar nav:not(.langnav) { margin-left: 0; }
+  .langnav { margin-left: auto; border-left: 0; padding-left: 0; }
+}
+
 /* ---------- 排版 ---------- */
 
 section { padding: 3rem 1.25rem; border-bottom: 1px solid var(--line-2); }

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{desc}}">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="{{a}}style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🧸</text></svg>">
+{{hreflang}}
+</head>
+<body data-i18n="{{jsdata}}">
+<a class="skip" href="#main">{{skip}}</a>
+
+<header class="topbar">
+  <div class="wrap bar">
+    <a class="brand" href="/">toy</a>
+    <nav aria-label="{{nav_label}}">
+      <a href="#why">{{nav_why}}</a>
+      <a href="#packages">{{nav_packages}}</a>
+      <a href="#trust">{{nav_trust}}</a>
+      <a href="#install">{{nav_install}}</a>
+      <a href="https://github.com/Cirraya-LLC/toy">{{nav_source}}</a>
+    </nav>
+    {{langnav}}
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero wrap">
+  <h1>{{h1_html}}</h1>
+  <p class="lede">{{lede_html}}</p>
+
+  <div class="split">
+    <figure>
+      <figcaption>{{fig_install}}</figcaption>
+      <pre><code>$ toy install github:Derrity/tinyserve
+$ tinyserve</code></pre>
+    </figure>
+    <figure>
+      <figcaption>{{fig_publish_html}}</figcaption>
+      <pre><code>name    = "tinyserve"
+desc    = "{{toml_desc}}"
+license = "MIT"
+
+[bin]
+tinyserve = "tinyserve"
+
+[artifact]
+"linux/amd64"  = "tinyserve_{version}_linux_amd64.tar.gz"
+"darwin/arm64" = "tinyserve_{version}_darwin_arm64.tar.gz"</code></pre>
+    </figure>
+  </div>
+  <p class="fine">{{hero_fine_html}}</p>
+</section>
+
+<section id="why" class="wrap">
+  <h2>{{why_h2}}</h2>
+  <ol class="points">
+    <li>
+      <h3>{{why1_h3}}</h3>
+      <p>{{why1_p_html}}</p>
+      <p class="fine">{{why1_fine_html}}</p>
+    </li>
+    <li>
+      <h3>{{why2_h3}}</h3>
+      <p>{{why2_p_html}}</p>
+    </li>
+    <li>
+      <h3>{{why3_h3}}</h3>
+      <p>{{why3_p_html}}</p>
+      <p class="fine">{{why3_fine_html}}</p>
+    </li>
+  </ol>
+</section>
+
+<section id="packages" class="wrap">
+  <h2>{{pkg_h2}}</h2>
+  <p class="lede">{{pkg_lede_html}}</p>
+  <pre class="cmd"><code>toy index add official https://<span data-host>this-site</span>/index.json</code><button class="copy" data-copy-host aria-label="{{pkg_copy_aria}}">{{js_copy}}</button></pre>
+
+  <div class="pkg-toolbar">
+    <label class="sr-only" for="q">{{pkg_filter_label}}</label>
+    <input id="q" type="search" placeholder="{{pkg_filter_ph}}" autocomplete="off" spellcheck="false">
+    <span id="count" class="fine" aria-live="polite"></span>
+  </div>
+
+  <div id="packages-out">
+    <noscript>
+      <p class="fallback">{{pkg_noscript_html}}</p>
+    </noscript>
+  </div>
+
+  <p class="fine">{{pkg_inline_fine_html}}</p>
+</section>
+
+<section id="trust" class="wrap">
+  <h2>{{trust_h2}}</h2>
+  <p class="lede">{{trust_lede_html}}</p>
+
+  <div class="tablewrap" tabindex="0" role="region" aria-label="{{trust_table_aria}}">
+  <table class="trust">
+    <thead>
+      <tr><th scope="col">{{th1}}</th><th scope="col">{{th2}}</th><th scope="col">{{th3}}</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code class="t-ok">✓ 已签名 · key a3f9… · 索引 X 登记（不代表 github.com/Y 本人）</code></td>
+        <td>{{t1_who_html}}</td>
+        <td>{{t1_not_html}}</td>
+      </tr>
+      <tr>
+        <td><code>· 来源 github.com/Y · 未签名</code></td>
+        <td>{{t2_who_html}}</td>
+        <td>{{t2_not_html}}</td>
+      </tr>
+      <tr>
+        <td><code class="t-warn">⚠ 打包说明来自索引</code></td>
+        <td>{{t3_who_html}}</td>
+        <td>{{t3_not_html}}</td>
+      </tr>
+      <tr>
+        <td><code class="t-warn">⚠ 未签名 · 首次安装，已钉住 sha256</code></td>
+        <td>{{t4_who_html}}</td>
+        <td>{{t4_not_html}}</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="fine">{{trust_fine_html}}</p>
+</section>
+
+<section id="install" class="wrap">
+  <h2>{{inst_h2}}</h2>
+  <p class="lede">{{inst_lede_html}}</p>
+
+  <h3>{{inst_m1_h3_html}}</h3>
+  <pre class="cmd"><code>go install github.com/Cirraya-LLC/toy/cmd/toy@latest</code><button class="copy" aria-label="{{inst_go_aria}}">{{js_copy}}</button></pre>
+  <p class="fine">{{inst_m1_fine_html}}</p>
+
+  <h3>{{inst_m2_h3}}</h3>
+  <pre class="cmd"><code>{{inst_dl_code}}</code><button class="copy" aria-label="{{inst_dl_aria}}">{{js_copy}}</button></pre>
+  <p class="fine">{{inst_m2_fine_html}}</p>
+
+  <p class="nocurl">{{nocurl_html}}</p>
+
+  <h3>{{inst_after_h3}}</h3>
+  <pre class="cmd"><code>export PATH="$HOME/.toy/bin:$PATH"   # {{inst_after_comment}}
+toy index add official https://<span data-host>this-site</span>/index.json
+toy doctor</code><button class="copy" data-copy-host aria-label="{{inst_after_aria}}">{{js_copy}}</button></pre>
+  <p class="fine">{{inst_after_fine_html}}</p>
+</section>
+
+<section id="arch" class="wrap">
+  <h2>{{arch_h2}}</h2>
+  <p>{{arch_p1_html}}</p>
+  <p>{{arch_p2_html}}</p>
+  <p>{{arch_p3_html}}</p>
+  <p class="fine">{{arch_fine_html}}</p>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <p>
+    MIT ·
+    <a href="https://github.com/Cirraya-LLC/toy">GitHub</a> ·
+    <a href="https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md">{{foot_security}}</a> ·
+    <a href="/index.json">index.json</a>
+  </p>
+  <p class="fine">{{foot_fine}}</p>
+</footer>
+
+<script src="{{a}}app.js" defer></script>
+</body>
+</html>

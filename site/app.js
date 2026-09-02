@@ -2,6 +2,17 @@
 // 而漂移意味着网页上写着有的包装不上。所以运行时 fetch 那同一份字节。
 'use strict';
 
+// 文案不在这里硬编码 —— 三语页面是构建时生成的，它把这一份挂在 <body data-i18n> 上。
+// 拿不到就用空对象，`t()` 会回落成 key 本身：一个显示 key 的按钮，好过一个空白按钮。
+const T = (() => {
+  try { return JSON.parse(document.body.dataset.i18n || '{}'); } catch { return {}; }
+})();
+const t = (k, vars) => {
+  let s = T[k] || k;
+  if (vars) for (const [n, v] of Object.entries(vars)) s = s.split('{' + n + '}').join(v);
+  return s;
+};
+
 // 站点自己的地址，填进那几条 `toy index add` 的示例里。
 for (const el of document.querySelectorAll('[data-host]')) el.textContent = location.host;
 
@@ -11,12 +22,12 @@ function wireCopy(btn, text) {
   btn.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(text());
-      btn.textContent = '已复制';
+      btn.textContent = t('copied');
       btn.dataset.done = '1';
     } catch {
-      btn.textContent = '复制失败';
+      btn.textContent = t('copy_failed');
     }
-    setTimeout(() => { btn.textContent = '复制'; delete btn.dataset.done; }, 1400);
+    setTimeout(() => { btn.textContent = t('copy'); delete btn.dataset.done; }, 1400);
   });
 }
 
@@ -83,9 +94,8 @@ function card(p) {
   }
 
   if (p.toyfile) {
-    const tag = el('span', 'tag-inline', '⚠ 打包说明来自索引');
-    tag.title = '内联条目：二进制取自作者的 release，但装哪个资产、命令叫什么名字由索引提供，'
-      + '作者本人没写过 toy.toml。装出来是第三档信任等级（index-toyfile）。';
+    const tag = el('span', 'tag-inline', t('inline_tag'));
+    tag.title = t('inline_title');
     head.append(tag);
   }
   if (typeof p.stars === 'number') head.append(el('span', 'pkg-stars', '★ ' + p.stars.toLocaleString('en-US')));
@@ -94,9 +104,9 @@ function card(p) {
   const pre = el('pre');
   const line = 'toy install ' + p.id;
   pre.append(el('code', null, line));
-  const btn = el('button', 'copy', '复制');
+  const btn = el('button', 'copy', t('copy'));
   btn.type = 'button';
-  btn.setAttribute('aria-label', '复制 ' + line);
+  btn.setAttribute('aria-label', t('copy_aria') + line);
   wireCopy(btn, () => line);
   foot.append(pre, btn);
 
@@ -107,13 +117,15 @@ function card(p) {
 function render(pkgs, all) {
   out.replaceChildren();
   if (!pkgs.length) {
-    out.append(el('p', 'fine', '没有匹配的包。'));
+    out.append(el('p', 'fine', t('none')));
   } else {
     const ul = el('ul', 'pkgs');
     for (const p of pkgs) ul.append(card(p));
     out.append(ul);
   }
-  count.textContent = pkgs.length === all ? all + ' 个包' : pkgs.length + ' / ' + all;
+  count.textContent = pkgs.length === all
+    ? t('count_all', { n: all })
+    : t('count_some', { n: pkgs.length, all });
 }
 
 fetch('/index.json', { cache: 'no-cache' })
@@ -133,9 +145,9 @@ fetch('/index.json', { cache: 'no-cache' })
   .catch((err) => {
     // JS 能跑但索引拉不到，也要给一条读得懂的出路，不要留一块空白。
     out.replaceChildren();
-    const p = el('p', 'pkg-error', '索引没拉到（' + err.message + '）。它就是一个静态 JSON，');
-    const a = el('a', null, '直接看 /index.json');
+    const p = el('p', 'pkg-error', t('err', { msg: err.message }));
+    const a = el('a', null, t('err_link'));
     a.href = '/index.json';
-    p.append(a, '。');
+    p.append(a, t('err_tail'));
     out.append(p);
   });

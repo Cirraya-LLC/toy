@@ -1,11 +1,14 @@
 # 网站
 
-一个纯静态站，**没有构建工具链、没有 npm、没有框架**。三个文件加一份索引。
+一个纯静态站，**没有 npm、没有框架、没有字体 CDN、没有第三方请求**。
+构建步骤只有一个 python3 heredoc（在 `scripts/build-site.sh` 里）。
 
 它干两件事，**第一件是功能不是装饰**：
 
 1. **挂索引** —— `/index.json` 是客户端真正会去 `fetch` 的地址
 2. **落地页 + 包浏览** —— discovery 是这个产品的差异化，那一块运行时读同一份 `/index.json`
+
+三种语言：`zh-Hans`（站根）/ `zh-Hant`（`/zh-Hant/`）/ `en`（`/en/`）。
 
 ---
 
@@ -19,14 +22,59 @@
 | 构建输出目录 | `site` |
 | 根目录 | 留空（仓库根） |
 
-构建脚本只做一件事：把 `index/toy-index.json` **复制**成 `site/index.json`，
-并校验它是合法 JSON、`version` 是 1、条数大于 0。
+构建脚本做两件事：
 
-**必须是复制，不能手抄一份** —— 两份必然漂移，而漂移意味着**网页上写着有的包装不上**。
-脚本复制完会 `cmp` 逐字节比对，对不上就整个构建失败：宁可不发布，也不要发布一份
-客户端拉下来会炸的索引。
+1. 把 `index/toy-index.json` **复制**成 `site/index.json`，
+   并校验它是合法 JSON、`version` 是 1、条数大于 0。
+   **必须是复制，不能手抄一份** —— 两份必然漂移，而漂移意味着**网页上写着有的包装不上**。
+   脚本复制完会 `cmp` 逐字节比对，对不上就整个构建失败：宁可不发布，也不要发布一份
+   客户端拉下来会炸的索引。
+2. 用 `index.template.html` + `i18n.json` 生成三份页面（下一节）。
 
-`site/index.json` 在 `.gitignore` 里（它是生成物）。
+**生成物全在 `.gitignore` 里**：`site/index.json`、`site/index.html`、
+`site/zh-Hant/`、`site/en/`。仓库里手维护的只有 `index.template.html`、
+`i18n.json`、`style.css`、`app.js`、`404.html`、`_headers`。
+
+---
+
+## 三语怎么做的
+
+```
+site/index.template.html   一份模板，文案位置是 {{key}}
+site/i18n.json             一份内容，一个 key 三种语言
+        ↓  scripts/build-site.sh 里的 python3
+site/index.html            zh-Hans（默认，站根）
+site/zh-Hant/index.html
+site/en/index.html
+```
+
+**不手维护三份 HTML** —— 必然漂移，而这个站上有三条不许破坏的话（见最后一节），
+漂移最先漂掉的就是它们。**也不做纯客户端切换** —— 禁 JS 就只剩一种语言，
+搜索引擎也只收得到一份，而这个站的无 JS 降级是验过的、要留着。
+
+几条规矩：
+
+- **key 以 `_html` 结尾的值原样插入，其余一律 `html.escape`。** 那些值里的
+  `<code>` / `<strong>` / `<a>` 是我们自己写的可信内容；但"所有值都当 HTML 塞进去"
+  是另一回事 —— 后缀让每一个 raw 插入点在模板里就看得见。
+- **三语缺一条就整个构建失败**，不生成一份漏字的页面。
+- **语言切换器是三个普通链接**（`.langnav`），不是 JS 下拉 —— 禁 JS 也能切。
+- **三份都有完整的 `hreflang`**（含 `x-default` 指向简体那份）和自指那一条。
+- 子目录页面引用 `../style.css` / `../app.js`；**索引一律用绝对路径 `/index.json`**
+  （客户端 fetch 的也是它）。
+- **`app.js` 里不硬编码任何一种语言的文案。** 它需要的那几条（复制按钮、
+  「⚠ 打包说明来自索引」那个标记、计数、错误提示）由生成器写进
+  `<body data-i18n="…">`，`app.js` 开头 `JSON.parse` 一次。
+  拿不到就回落成 key 本身 —— 一个显示 key 的按钮，好过一个空白按钮。
+
+**翻译不是直译。** 英文那份面向 HN / Lobsters 的读者，句子重组过、术语用英文圈的
+习惯说法（supply chain、install hooks、content-addressed、trust on first use）；
+繁体用台港技术圈的词（軟體 / 檔案 / 執行 / 相依 / 雜湊 / 二進位檔 / 指令碼），
+**不许出现「文件」当 file 用**。
+
+**信任表左栏是客户端真实打印的字符串，只有简体一种** —— 所以三份页面里那四行
+`<code>` 是一模一样的原文，繁体和英文那两份在表格下面明说了这件事。
+把它"翻译"成繁体或英文就是在网页上伪造客户端输出。
 
 ## 部署完之后要改的**那一个常量**
 
@@ -57,6 +105,7 @@ git commit && git push    # Pages 自动重新构建
 
 ```bash
 make site && cd site && python3 -m http.server 8099
+# http://127.0.0.1:8099/  /zh-Hant/  /en/
 ```
 
 然后可以拿它当真索引用一遍，这是这个站唯一值得验的东西：

@@ -3,3 +3,6 @@
 *.test
 .DS_Store
 /site/index.json
+/site/index.html
+/site/zh-Hant/
+/site/en/

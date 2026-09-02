@@ -45,7 +45,8 @@ index-check:
 index-gen:
 	go run ./cmd/toy-index gen $(ARGS)
 
-# 静态站（site/）。只做一件事：把 index/toy-index.json 复制成 site/index.json 并校验。
+# 静态站（site/）。两件事：把 index/toy-index.json 复制成 site/index.json 并校验，
+# 再用 index.template.html + i18n.json 生成三份静态页（简体 / 繁体 / 英文）。
 # Cloudflare Pages 的构建命令就是这一行脚本，输出目录是 site。
 site:
 	bash scripts/build-site.sh
