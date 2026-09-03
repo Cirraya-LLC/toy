@@ -40,7 +40,7 @@ func TestLoadSkipsBadEntries(t *testing.T) {
 		{"ID repo is empty", Entry{ID: "Derrity/", Source: "github:Derrity/x"}},
 		{"ID is the empty string", Entry{ID: "", Source: "github:x/y"}},
 		{"ID has an illegal character", Entry{ID: "Derr ity/tiny", Source: "github:x/y"}},
-		{"ID is non-ASCII", Entry{ID: "德睿/小服务", Source: "github:x/y"}},
+		{"ID is non-ASCII", Entry{ID: "Дмитрий/утилита", Source: "github:x/y"}},
 		{"source is empty", Entry{ID: "Derrity/tinyserve", Source: ""}},
 	}
 	for _, tt := range tests {
@@ -118,7 +118,7 @@ func TestValidID(t *testing.T) {
 		{"a b/c", false},
 		{"a/b c", false},
 		{"a@b/c", false},
-		{"德睿/工具", false},
+		{"Дмитрий/утилита", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {

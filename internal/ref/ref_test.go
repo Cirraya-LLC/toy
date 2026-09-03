@@ -81,7 +81,7 @@ func TestParseRejects(t *testing.T) {
 		{"a percent-encoded slash is not an allowlisted character", "a/b%2Fc"},
 		{"space in a name", "a b/c"},
 		{"colon in a name", "a/b:c"},
-		{"non-ASCII", "作者/包"},
+		{"non-ASCII", "автор/пакет"},
 		{"owner too long", strings.Repeat("a", 101) + "/b"},
 		{"repo too long", "a/" + strings.Repeat("b", 101)},
 		{"a Windows drive letter is not a host prefix", "C:foo"},
