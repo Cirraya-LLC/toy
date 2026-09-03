@@ -1,0 +1,37 @@
+name: Remove my project from the index
+description: You maintain a project we listed, and you want it delisted
+title: "delist: "
+labels: ["index", "delist"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We list projects without asking first, and we write the packaging
+        instructions ourselves. If you maintain one of them and would rather not be
+        listed, **say so and we remove it. We will not argue the point.**
+
+        A few things worth knowing, in case they change your mind — but they are
+        not conditions, and you do not have to read them to be removed:
+
+        - We never rehost your binaries. Every download goes to your own release
+          assets, and the URL is built from the forge's template, not from anything
+          we control.
+        - Every install prints that the packaging instructions came from us and not
+          from you, so nobody reads the listing as your endorsement.
+        - Delisting only removes it from search. Anyone who knows the repository can
+          still run `toy install github:owner/repo`, exactly as they could before
+          this project existed.
+  - type: input
+    id: package
+    attributes:
+      label: Which project
+      placeholder: owner/repo
+    validations:
+      required: true
+  - type: checkboxes
+    id: maintainer
+    attributes:
+      label: Confirmation
+      options:
+        - label: I maintain this project (or am authorised to speak for it)
+          required: true

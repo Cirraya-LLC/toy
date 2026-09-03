@@ -100,6 +100,13 @@ author has no idea we listed them. Therefore:
    entry only means it stops being findable — `toy install github:owner/repo` still
    installs it, and anyone who forks this file has a complete parallel index. When
    delisting costs that little, there is never a reason to argue with anyone.
+   A policy nobody can act on is not a policy, so there is a form for it:
+   [Remove my project from the index](https://github.com/Cirraya-LLC/toy/issues/new?template=delist.yml).
+   An entry going stale has its own form, because a stale inline entry is our
+   mistake and not the author's — see
+   [Stale index entry](https://github.com/Cirraya-LLC/toy/issues/new?template=stale-entry.yml).
+   `toy` prints that second link itself when a download 404s on an inline entry:
+   at that moment the user is about to blame an author who did nothing wrong.
 3. **When listing, a human reads the command name on the left of `[bin]`.** This is
    the one step in the whole pipeline that cannot be automated: `reservedLinkNames`
    blocks `git`, and the PATH shadow check blocks commands that already exist on

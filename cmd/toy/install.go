@@ -386,6 +386,9 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 				// the expected and actual values into the error.
 				return fmt.Errorf("checksum mismatch on %s: it does not match the sha256 declared in toy.toml, so nothing was installed: %w", it.asset, err)
 			}
+			if note := insStaleEntryNote(res, err); note != "" {
+				ui.Warn("%s", note)
+			}
 			return err
 		}
 		it.path, it.sum, it.source = dl.Path, dl.SHA256, dl.Source
@@ -1190,4 +1193,39 @@ func insParseFlags(fs *flag.FlagSet, args []string) error {
 		return errUsage
 	}
 	return nil
+}
+
+// insStaleEntryNote explains a download failure that is very likely OUR fault
+// rather than the package's.
+//
+// An inline entry (spec §5.1) is packaging instructions the index wrote on behalf
+// of a repository that has no toy.toml of its own. It carries no version, so it
+// follows whatever tag upstream published last — which means it keeps working
+// across releases right up until the author changes how they name their assets.
+// At that moment the asset name in the entry stops existing and every user gets
+// a bare 404.
+//
+// Without this line the user reads that as "the package is broken" and goes to
+// bother the author, who did nothing wrong and cannot fix it either. We wrote
+// that entry; the report belongs to us. This is the operational cost of §5.1,
+// and it is only fair to make it cheap to report.
+//
+// Only for entries that actually came from an index. An author's own toy.toml
+// returning 404 is genuinely their release being broken, and blaming our index
+// there would be its own kind of lie (iron law 8).
+func insStaleEntryNote(res *resolved, err error) string {
+	if res == nil || res.Toyfile == nil || res.Toyfile.Origin != toyfile.OriginIndex {
+		return ""
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	where := "the index"
+	if res.IndexName != "" {
+		where = "index " + res.IndexName
+	}
+	return "that asset no longer exists upstream. The packaging instructions for this package " +
+		"come from " + where + ", not from the author, and they are probably out of date — " +
+		"the author most likely renamed their release assets. This is ours to fix, not theirs: " +
+		"please report it at " + issueURL + " and we will regenerate the entry."
 }

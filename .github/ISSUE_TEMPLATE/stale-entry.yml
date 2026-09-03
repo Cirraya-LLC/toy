@@ -1,0 +1,41 @@
+name: Stale index entry
+description: An entry in the index no longer installs (usually a 404 on the download)
+title: "stale entry: "
+labels: ["index", "stale-entry"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most entries in this index are **inline entries**: we wrote the packaging
+        instructions on behalf of a repository that has no `toy.toml` of its own.
+
+        Those entries carry no version, so they survive across releases — right up
+        until the author renames their release assets. At that point our entry
+        points at a file that no longer exists and you get a 404.
+
+        **That is ours to fix, not the author's.** Please do not open an issue on
+        their repository; there is nothing for them to do.
+  - type: input
+    id: package
+    attributes:
+      label: Package
+      description: The id as it appears in `toy search`
+      placeholder: BurntSushi/ripgrep
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What toy printed
+      description: The whole output of the failing command, including the URL in the error
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: The `platform` line from `toy doctor`
+      placeholder: linux/amd64/gnu
+    validations:
+      required: true

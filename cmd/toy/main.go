@@ -16,6 +16,11 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
+// issueURL is where a user reports an index entry that has gone stale. It lives
+// here rather than in a doc because the one moment it is useful is the moment an
+// install fails, and by then nobody is reading docs.
+const issueURL = "https://github.com/Cirraya-LLC/toy/issues"
+
 // Version is injected with -ldflags.
 var Version = "dev"
 
