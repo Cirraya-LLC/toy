@@ -8,23 +8,26 @@ import (
 	"testing"
 )
 
-// 原本的指控（现已修复，这里翻成回归测试）：
-// host.Tags 用 exec.CommandContext(ctx,"git",…) 按**名字**执行 git，名字是从调用
-// 进程的 PATH 上解析的。而 ~/.toy/bin 既是包能往里写软链的目录，又是 doctor 教
-// 用户放在 PATH 最前面的那个目录 —— 一个 toy.toml 写 [bin] git = "payload" 就能
-// 占下这个名字，装的那一刻一行没跑（铁律 1 的字面意思成立），下一条 toy 命令却把
-// 它当 git 执行了。
+// The original accusation (since fixed; this is now the regression test):
+// host.Tags ran git via exec.CommandContext(ctx,"git",…), i.e. **by name**,
+// resolved off the calling process's PATH. But ~/.toy/bin is both the directory
+// packages can write symlinks into and the one doctor tells users to put first on
+// PATH — so a toy.toml with [bin] git = "payload" claims that name, nothing runs
+// at install time (iron law 1 holds to the letter), and the very next toy command
+// executes it as git.
 //
-// 修法有两半：internal/store 那一半拒绝把包链成 `git`（连 --force 都不放行）；
-// 这一半是 lookupGit —— 自己走一遍 PATH、解析出绝对路径、**跳过 ~/.toy/bin**。
-// 两半都要有：store 那道只挡新装的包，这道连一个已经躺在 bin/ 里的 git 也不跑。
+// The fix has two halves: the internal/store half refuses to link a package as
+// `git` (not even --force gets through); this half is lookupGit — walk PATH
+// ourselves, resolve an absolute path, and **skip ~/.toy/bin**.
+// Both halves are required: store's only stops newly installed packages, this one
+// also refuses to run a git that is already sitting in bin/.
 //
-// 下面守的是这一半。注意「PATH 上随便哪个目录里的假 git 会被执行」不在射程内 ——
-// 那只是 PATH 本来的语义，用户自己的 PATH 是用户自己的事；危险的是**包能写进去**
-// 的那个目录。
+// Note that "a fake git anywhere else on PATH gets executed" is out of scope —
+// that is just what PATH means, and the user's own PATH is the user's business.
+// The dangerous one is the directory **packages can write to**.
 func TestTagsRefusesGitFromToyBinDir(t *testing.T) {
-	// bin/ 是 PATH 上唯一的 git，就像 doctor 教用户排的那样在最前面。
-	t.Run("只有 bin/ 里那个", func(t *testing.T) {
+	// bin/ is the only git on PATH, arranged first the way doctor tells users to.
+	t.Run("only the one in bin", func(t *testing.T) {
 		binDir, marker := toyBinWithFakeGit(t)
 		t.Setenv("PATH", binDir)
 
@@ -32,17 +35,19 @@ func TestTagsRefusesGitFromToyBinDir(t *testing.T) {
 
 		mustNotHaveRun(t, marker, filepath.Join(binDir, "git"))
 		if err == nil {
-			t.Fatal("想要报错")
+			t.Fatal("want an error")
 		}
-		// 铁律 8：不许含糊成一句「没找到 git」。用户得知道这不是环境没装好。
+		// Iron law 8: no vague "git not found". The user has to know this is not a
+		// broken environment.
 		if !strings.Contains(err.Error(), "attack") || !strings.Contains(err.Error(), binDir) {
-			t.Errorf("报错没说清这是一次可能的攻击、也没指出是哪个文件：%v", err)
+			t.Errorf("error does not say this is a likely attack, nor which file it is: %v", err)
 		}
 	})
 
-	// 后面还有一个真的 git：必须跑那个。这一条钉的是「解析出绝对路径再 exec」——
-	// 只要还按名字 exec，PATH 上排第一的仍然是 bin/ 里那个假货。
-	t.Run("bin/ 排在真 git 前面", func(t *testing.T) {
+	// A real git sits behind it: that is the one that must run. This pins down
+	// "resolve to an absolute path, then exec" — exec by name still puts the fake
+	// from bin/ first on PATH.
+	t.Run("bin/ ahead of the real git", func(t *testing.T) {
 		binDir, marker := toyBinWithFakeGit(t)
 		real := t.TempDir()
 		script := "#!/bin/sh\necho \"deadbee\trefs/tags/v1.0.0\"\n"
@@ -55,16 +60,17 @@ func TestTagsRefusesGitFromToyBinDir(t *testing.T) {
 
 		mustNotHaveRun(t, marker, filepath.Join(binDir, "git"))
 		if err != nil {
-			t.Fatalf("Tags 报错: %v", err)
+			t.Fatalf("Tags failed: %v", err)
 		}
 		if len(tags) != 1 || tags[0] != "v1.0.0" {
-			t.Fatalf("tags = %#v —— 跑的不是 %s 里那个真 git", tags, real)
+			t.Fatalf("tags = %#v — that is not the real git in %s", tags, real)
 		}
 	})
 }
 
-// toyBinWithFakeGit 造一个 TOY_HOME，往它的 bin/ 里放一个「跑起来就留痕迹」的假
-// git —— 就是一个包通过 [bin] git = "payload" 装出来的样子。
+// toyBinWithFakeGit builds a TOY_HOME whose bin/ holds a fake git that leaves a
+// trace when it runs — exactly what a package installed via [bin] git = "payload"
+// would look like.
 func toyBinWithFakeGit(t *testing.T) (binDir, marker string) {
 	t.Helper()
 	home := t.TempDir()
@@ -84,11 +90,12 @@ func toyBinWithFakeGit(t *testing.T) (binDir, marker string) {
 func mustNotHaveRun(t *testing.T, marker, fake string) {
 	t.Helper()
 	if _, err := os.Stat(marker); err == nil {
-		t.Fatalf("toy 执行了 %s —— 那是某个包装进 bin/ 的文件（铁律 1）", fake)
+		t.Fatalf("toy executed %s — a file some package installed into bin/ (iron law 1)", fake)
 	}
 }
 
-// bin/ 里躺着一个假 git 不该让整个 toy 罢工 —— 跳过它，继续找真的那个。
+// A fake git lying in bin/ must not take toy out entirely — skip it and keep
+// looking for the real one.
 func TestLookupGitSkipsToyBinAndKeepsLooking(t *testing.T) {
 	home := t.TempDir()
 	binDir := filepath.Join(home, "bin")
@@ -106,15 +113,16 @@ func TestLookupGitSkipsToyBinAndKeepsLooking(t *testing.T) {
 
 	got, err := lookupGit()
 	if err != nil {
-		t.Fatalf("lookupGit 报错: %v", err)
+		t.Fatalf("lookupGit failed: %v", err)
 	}
 	if want := filepath.Join(real, "git"); got != want {
-		t.Fatalf("lookupGit = %q，想要 %q（bin/ 里那个必须被跳过）", got, want)
+		t.Fatalf("lookupGit = %q, want %q (the one in bin/ must be skipped)", got, want)
 	}
 }
 
-// PATH 里的相对项（"." 和那个到处都是的空项）指的是 toy 进程当前所在的目录。
-// 在一个别人写得进去的目录里跑 toy，不该等于把铁律 1 交出去。
+// Relative PATH entries ("." and that ubiquitous empty one) mean the directory the
+// toy process happens to be in. Running toy from a directory someone else can write
+// to must not hand away iron law 1.
 func TestLookupGitSkipsRelativePATHEntries(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -122,9 +130,9 @@ func TestLookupGitSkipsRelativePATHEntries(t *testing.T) {
 	}
 	t.Chdir(dir)
 	t.Setenv("TOY_HOME", t.TempDir())
-	t.Setenv("PATH", "."+string(os.PathListSeparator)) // "." 和空项，两种写法都在
+	t.Setenv("PATH", "."+string(os.PathListSeparator)) // "." and the empty entry, both spellings
 
 	if got, err := lookupGit(); err == nil {
-		t.Fatalf("lookupGit = %q —— 那是从当前目录捡来的 git", got)
+		t.Fatalf("lookupGit = %q — that git was picked up from the current directory", got)
 	}
 }

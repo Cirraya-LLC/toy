@@ -27,25 +27,31 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
-// insNoVersion 是「这个包没有版本这回事」时占的位（裸地址那条路）。
-// 它会变成 pkg 目录里的一段，所以必须是个能当目录名的词，不能是空串。
+// insNoVersion stands in for "this package has no such thing as a version" (the
+// plain-URL route). It becomes a segment of the pkg directory, so it has to be a
+// word that works as a directory name — never the empty string.
 const insNoVersion = "unversioned"
 
-// runInstall 是核心流程，规格 §2：
+// runInstall is the main flow, spec §2.
 //
-// 两个开关，两件事，不许再合并：
+// Two flags, two different things. Do NOT merge them back together:
 //
-//	--reinstall  已经装了这一版，再装一次。日常操作，不放行任何检查。
-//	--force      接受安全检查报出的变化（哈希 / 公钥 / 遮蔽 / 信任降级 / 来源）。
-//	             真的放行时逐条打印放行了什么。
+//	--reinstall  this version is already installed, install it again. Everyday
+//	             operation, waives no check at all.
+//	--force      accept what a safety check reports (checksum / author key /
+//	             shadowing / trust downgrade / source). When it really waives
+//	             something, print each waiver.
 //
-// 解析 ref → (索引查 source) → git ls-remote 拿 tag → 挑最高 semver →
-// raw URL 取 toy.toml → 按 os/arch 挑资产 → 下载(带镜像回退) → 验 sha256 →
-// TOFU 检查 → 解压或 chmod+x → 软链(拒绝遮蔽) → 写清单 → 打印信任等级
+// parse ref -> (look the source up in an index) -> git ls-remote for tags -> pick
+// the highest semver -> fetch toy.toml over the raw URL -> pick the asset for this
+// os/arch -> download (with mirror fallback) -> check sha256 -> TOFU check ->
+// unpack or chmod +x -> symlink (refusing to shadow) -> write the manifest ->
+// print the trust level.
 func runInstall(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
-	// 两个开关说的是两件事，别再合并回一个（见 insPerform 上面那段注释）：
-	// --reinstall 是日常操作，--force 是「我核对过，放行安全检查报出的变化」。
+	// These two flags say two different things; do not merge them back into one
+	// (see the comment above insPerform). --reinstall is an everyday operation,
+	// --force means "I checked it myself, let the safety check through".
 	reinstall := fs.Bool("reinstall", false, "install this same version again (waives no safety check)")
 	force := fs.Bool("force", false, "accept what a safety check reports: checksum changed / author key changed / command name shadowing / trust downgrade / source changed")
 	version := fs.String("version", "", "install this version instead of the highest tag")
@@ -61,8 +67,9 @@ func runInstall(ctx context.Context, args []string) error {
 		return err
 	}
 	if v := strings.TrimSpace(*version); v != "" {
-		// ref 里的 @version 和 --version 说的是同一件事，两个都写了还不一样
-		// 的话，装哪个都是猜 —— 宁可让他自己决定。
+		// The @version in the ref and --version mean the same thing. If both are
+		// given and they disagree, installing either one is a guess — make the
+		// user decide instead.
 		if r.Version != "" && r.Version != v {
 			return fmt.Errorf("%s says @%s but --version says %s. Those disagree, "+
 				"and guessing which one you meant is not something toy will do — drop one and try again", r.Raw, r.Version, v)
@@ -71,8 +78,9 @@ func runInstall(ctx context.Context, args []string) error {
 			return fmt.Errorf("--version means nothing for a plain URL: %s points straight at one toy.toml, "+
 				"so there are no tags to choose from. Use `toy install github:owner/repo@%s` instead", r.URL, v)
 		}
-		// 版本号会被拼进下载地址和 pkg 目录名，所以照 ref 自己那套规则验一遍，
-		// 别绕过去（这里借 ref.Parse，不另抄一份白名单）。
+		// The version gets pasted into the download URL and into the pkg directory
+		// name, so run it through the same rules a ref goes through — no shortcut.
+		// Borrowing ref.Parse here rather than copying its allowlist a second time.
 		probe, perr := ref.Parse("owner/repo@" + v)
 		if perr != nil {
 			return fmt.Errorf("--version %q will not do: %w", v, perr)
@@ -93,23 +101,27 @@ func runInstall(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// 已经是这一版就别再下一遍。--reinstall 是「我知道，再装一次」。
-	// old.ID 和这次解析出来的不一样时不能走这条捷径 —— 那说明来源变了，
-	// tag 撞上了也不代表装的是同一个东西。
+	// Already at this version: do not download it again. --reinstall means "I know,
+	// do it anyway". This shortcut is off the table when old.ID differs from what we
+	// just resolved — that means the source changed, and a matching tag is no proof
+	// it is the same thing.
 	if old != nil && old.ID == insPackageID(res) && !*reinstall && res.Tag != "" && old.Tag == res.Tag {
 		hint := "add --reinstall to install it again"
 		if *force {
-			// --force 不再顺带触发一次重装。光给 --force 就在这里静默返回的话，
-			// 用户会以为他放行的那件事已经生效了。
+			// --force no longer triggers a reinstall as a side effect. Returning
+			// silently on a bare --force would leave the user believing whatever
+			// they meant to waive had already taken effect.
 			hint = "--force only waives what a safety check reports; it does not itself trigger a reinstall — add --reinstall for that"
 		}
 		ui.Info("%s is already at %s, nothing to do (%s)", old.Name, old.Tag, hint)
 		return nil
 	}
-	// 降级是合法的 —— `toy install foo@v1.0.0` 装 v1.0.0 是用户明说的，不拦。
-	// 但不能一声不吭：上游把最新那个 tag 删掉（账号被接管、release 被撤、
-	// 自建 host 被换掉）时走的是同一条路，而那时输出里只有一句「已安装 t 1.0.0」。
-	// 铁律 8 —— 如实说，让用户自己判断这次降级是不是他要的。
+	// Going backwards is legal: `toy install foo@v1.0.0` asking for v1.0.0 is the
+	// user saying so, and toy does not block it. But it must not happen quietly —
+	// upstream deleting the newest tag (account taken over, release pulled, a
+	// self-hosted host swapped out) takes exactly this path, and the only output
+	// would be "installed t 1.0.0". Iron law 8: say it plainly and let the user
+	// decide whether this downgrade is the one they wanted.
 	if old != nil && insIsOlder(*old, res) {
 		ui.Warn("this is a downgrade: %s currently has %s, and %s is older. "+
 			"If you did not mean to go back a version, check whether upstream pulled the newer tag", old.Name, old.Tag, res.Tag)
@@ -117,8 +129,9 @@ func runInstall(ctx context.Context, args []string) error {
 	return insPerform(ctx, st, cfg, res, old, *force)
 }
 
-// runUninstall 读清单，删软链和 pkg 目录。不删 cache —— 那是内容寻址的，
-// 而且它同时是镜像目录。
+// runUninstall reads the manifest and removes the symlinks and the pkg directory.
+// It does NOT touch the cache: that is content-addressed, and it doubles as the
+// directory `toy serve` mirrors.
 func runUninstall(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	if err := insParseFlags(fs, args); err != nil {
@@ -131,14 +144,16 @@ func runUninstall(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// 命中多个时 FindByName 已经把候选列出来了，原样透出去别再包一层。
+	// When several packages match, FindByName has already listed the candidates.
+	// Pass that through as-is rather than wrapping it in another layer.
 	m, err := st.FindByName(fs.Arg(0))
 	if err != nil {
 		return err
 	}
 
-	// 先删软链：清单还在的时候失败，用户重跑一次就行；反过来先删清单的话
-	// 那些软链就再也没人知道该删谁了。
+	// Symlinks first: if this fails while the manifest is still there, the user just
+	// runs it again. Delete the manifest first and nothing knows which symlinks
+	// were ever supposed to go.
 	for _, l := range m.Links {
 		if err := st.Unlink(l); err != nil {
 			return err
@@ -155,8 +170,9 @@ func runUninstall(ctx context.Context, args []string) error {
 	return nil
 }
 
-// runUpdate 对每个已装的包重新解析最新 tag，比 semver，有更新才走安装流程。
-// 不带参数时更新全部，逐个报告，一个失败不影响其它。
+// runUpdate re-resolves the newest tag for each installed package, compares semver,
+// and only runs the install flow when there is something newer. With no argument it
+// does all of them, reporting each one; a failure on one does not stop the rest.
 func runUpdate(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	if err := insParseFlags(fs, args); err != nil {
@@ -193,9 +209,10 @@ func runUpdate(ctx context.Context, args []string) error {
 		case errors.Is(err, insErrUpToDate):
 			current++
 		case errors.Is(err, context.Canceled):
-			return err // Ctrl-C 就是 Ctrl-C，别接着去拉下一个包
+			return err // Ctrl-C means Ctrl-C; do not go fetch the next package
 		default:
-			// 一个包失败不该拖住别的包（它们各自独立，铁律 3）。
+			// One package failing must not hold up the others — they are
+			// independent of each other by design (iron law 3).
 			ui.Error("%s: %v", m.ID, err)
 			failed++
 		}
@@ -207,12 +224,14 @@ func runUpdate(ctx context.Context, args []string) error {
 	return nil
 }
 
-// insErrUpToDate 不是错误，是 insUpdateOne 的第三种结果。
+// insErrUpToDate is not a failure; it is insUpdateOne's third outcome.
 var insErrUpToDate = errors.New("already up to date")
 
 func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m store.Manifest) error {
-	// 当初怎么装的就怎么升：经索引装的要再走一次索引，否则作者的签名（只写在
-	// 索引条目里）第一次升级就丢了，而清单会如实记下降了一档的信任等级。
+	// Upgrade the way it was installed: something installed through an index has to
+	// go through the index again. Otherwise the author's signature — which lives
+	// only in the index entry — is lost on the very first upgrade, and the manifest
+	// faithfully records the trust level one notch lower.
 	id := m.ID
 	if m.IndexID != "" {
 		id = m.IndexID
@@ -222,8 +241,9 @@ func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m stor
 		return fmt.Errorf("the id %q in the manifest does not parse, so its version cannot be looked up again: %w", id, err)
 	}
 	if r.Kind == ref.KindURL {
-		// 裸地址指着一个固定的 toy.toml，没有 tag 可比 —— 想换版本只能
-		// 重新 install 一次那个地址。说清楚，不要假装检查过了。
+		// A plain URL points at one fixed toy.toml; there are no tags to compare.
+		// The only way to move is to install that URL again. Say so plainly rather
+		// than pretending a check happened.
 		ui.Info("skipping %s: it came from a fixed URL, so there is no version to compare. "+
 			"To pick up new content, run `toy install %s` again", m.Name, m.ID)
 		return insErrUpToDate
@@ -231,8 +251,9 @@ func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m stor
 
 	res, err := resolve(ctx, st, cfg, r)
 	if err != nil && m.IndexID != "" && m.IndexID != m.ID {
-		// 索引里查不到了不代表装不了 —— source 才是真相，下架无害（规格 §5）。
-		// 但要说出来：这时候作者的公钥和签名也跟着没了，信任等级会掉一档。
+		// Gone from the index does not mean uninstallable — the source is the truth
+		// and delisting is harmless (spec §5). But say it out loud: the author's
+		// public key and signature go with the entry, so the trust level drops.
 		ui.Warn("%s is no longer in any index (%v), upgrading straight from %s instead; "+
 			"with the index entry gone there is no author signature left to verify", m.Name, err, m.ID)
 		if r, err = ref.Parse(m.ID); err != nil {
@@ -252,23 +273,27 @@ func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m stor
 	return insPerform(ctx, st, cfg, res, &old, false)
 }
 
-// insIsNewer 判断远端那个 tag 是不是比已装的新。
+// insIsNewer reports whether the remote tag is newer than the installed one.
 func insIsNewer(m store.Manifest, res *resolved) bool {
 	newV, nerr := semver.Parse(res.Tag)
 	oldV, oerr := semver.Parse(m.Tag)
 	if nerr != nil || oerr != nil {
-		// 有一边不是 semver 就没有大小可言。这时候只能按「tag 变了就是有新版」
-		// 判断 —— 把解析不了的当成 0.0.0 会让一个正常的包被一路"降级"。
+		// If either side is not semver there is no ordering to speak of. All we can
+		// go on is "the tag changed, so there is something new" — treating an
+		// unparseable tag as 0.0.0 would walk a perfectly healthy package backwards
+		// on every update.
 		return res.Tag != "" && res.Tag != m.Tag
 	}
 	return semver.Compare(newV, oldV) > 0
 }
 
-// insIsOlder 判断这次要装的 tag 是不是比已装的那一版旧。
+// insIsOlder reports whether the tag about to be installed is older than the one
+// already installed.
 //
-// 和 insIsNewer 不是互为反面：两边只要有一个不是合法 semver 就没有大小可言，
-// 那时候一句「这是一次降级」是猜的，而猜错了比不说更糟 —— 所以这里返回 false，
-// 而 insIsNewer 在同样的情况下按「tag 变了就是有新版」放行。
+// This is NOT the mirror image of insIsNewer. If either side is not valid semver
+// there is no ordering, and saying "this is a downgrade" would be a guess — a wrong
+// guess here is worse than staying quiet, so this returns false. insIsNewer, in the
+// same situation, goes with "the tag changed, so there is something new".
 func insIsOlder(m store.Manifest, res *resolved) bool {
 	newV, nerr := semver.Parse(res.Tag)
 	oldV, oerr := semver.Parse(m.Tag)
@@ -278,27 +303,30 @@ func insIsOlder(m store.Manifest, res *resolved) bool {
 	return semver.Compare(newV, oldV) < 0
 }
 
-// insItem 是这次安装要下的一个文件。[artifact] 形态只有一项（可能是压缩包），
-// [script] 形态是每个条目一项。
+// insItem is one file this install has to download. The [artifact] shape has a
+// single item (possibly an archive); the [script] shape has one per entry.
 type insItem struct {
-	name   string // 命令名（script）或资产名（artifact），显示用
-	asset  string // 展开完占位符的资产名 / 仓库内路径
+	name   string // command name (script) or asset name (artifact), for display
+	asset  string // asset name / in-repo path with placeholders expanded
 	url    string
-	want   string // toy.toml 声明的 sha256，空表示走 TOFU
-	path   string // 下载落地的位置
-	sum    string // 实际算出来的 sha256
-	source string // 实际成功的那个地址（可能是镜像）
+	want   string // sha256 declared in toy.toml; empty means TOFU
+	path   string // where the download landed
+	sum    string // the sha256 actually computed
+	source string // the URL that actually answered (may be a mirror)
 }
 
-// insPerform 是 install 和 update 共用的那一段：下载 → TOFU → 落盘 → 软链 →
-// 写清单 → 钉住 → 打印信任等级。old 非 nil 表示这是在替换一个已经装上的版本。
+// insPerform is the stretch install and update share: download -> TOFU -> write to
+// disk -> symlink -> write the manifest -> pin -> print the trust level. A non-nil
+// old means this is replacing a version that is already installed.
 //
-// force 只有一个含义：「安全检查报出的变化，我核对过了，放行」。
-// 「重装同一个版本」是 --reinstall，它到不了这里 —— 那是日常操作，不该逼用户
-// 举起一把同时能放行「这个版本换了内容」和「作者换了钥匙」的锤子，
-// 而那两件正是 TOFU 存在的全部意义（规格 §4、铁律 4/6）。
+// force means exactly one thing: "a safety check reported a change, I checked it
+// myself, let it through". "Install the same version again" is --reinstall and never
+// reaches here — that is an everyday operation, and nobody should have to pick up a
+// hammer that also waives "this version's contents changed" and "the author swapped
+// keys", which are the entire reason TOFU exists (spec §4, iron laws 4 and 6).
 //
-// force 真的放行了什么，必须逐条打印（铁律 8）：一次静默的放行等于没有检查。
+// Whatever force actually waives MUST be printed, one line each (iron law 8): a
+// silent waiver is the same as having no check.
 func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *resolved, old *store.Manifest, force bool) error {
 	if insTrustDowngraded(old, res) {
 		if !force {
@@ -310,9 +338,11 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		ui.Warn("--force waived: %s dropped a trust level (%s -> %s)",
 			old.Name, insTrustWord(old.Trust), insTrustWord(res.Trust))
 	}
-	// 反方向是好事：作者后来自己加了 toy.toml，打包说明不再由索引提供（规则 6）。
-	// 不拦，但要说一句 —— 上一次装的时候「装哪个资产、命令叫什么名字」是索引说的，
-	// 这一次换成了作者说的，那是这个包身上真的变了的一件事。
+	// The other direction is good news: the author has since added their own
+	// toy.toml, so the packaging instructions no longer come from the index
+	// (rule 6). Do not block it, but do mention it — last time "which asset,
+	// what the command is called" came from the index and this time it comes from
+	// the author, and that is a real change to this package.
 	if old != nil && old.Trust == store.TrustIndexed && res.Trust != store.TrustIndexed {
 		ui.Info("upstream now ships its own toy.toml for %s: the packaging instructions no longer come from the index, this version installs the way the author wrote it", old.Name)
 	}
@@ -335,8 +365,9 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		return err
 	}
 
-	// 下载 + TOFU 全部做完再动磁盘上的包目录：中途拒绝的话，已经装着的那一版
-	// 必须原封不动。
+	// Finish every download and every TOFU check before touching the package
+	// directory on disk: if this run refuses partway through, the version already
+	// installed has to be left exactly as it was.
 	type pin struct{ id, kind, value string }
 	var pins []pin
 	trustID := insTrustID(res)
@@ -351,36 +382,45 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		})
 		if err != nil {
 			if errors.Is(err, fetch.ErrChecksum) {
-				// 铁律 4：对不上一律拒绝。期望/实际由 fetch 写在里面了。
+				// Iron law 4: a mismatch is always refused. fetch has already put
+				// the expected and actual values into the error.
 				return fmt.Errorf("checksum mismatch on %s: it does not match the sha256 declared in toy.toml, so nothing was installed: %w", it.asset, err)
 			}
 			return err
 		}
 		it.path, it.sum, it.source = dl.Path, dl.SHA256, dl.Source
-		// 原始地址挂了、字节是从镜像拿到的时候必须说一声（铁律 8）。内容是 hash
-		// 寻址的，所以镜像不需要被信任（规格 §8）—— 但「不需要信任」不等于
-		// 「不需要知道」，用户有权知道这些字节到底是从哪来的。
-		// fetch 只在有 sha256 可比的时候才会去试镜像，所以走到这里必然已经比过了。
+		// When the original URL is down and the bytes came from a mirror, say so
+		// (iron law 8). The content is address-by-hash, so a mirror does not need to
+		// be trusted (spec §8) — but "does not need to be trusted" is not "does not
+		// need to be known", and the user is entitled to know where these bytes
+		// came from. fetch only tries mirrors when there is a sha256 to compare
+		// against, so by the time we get here the comparison has happened.
 		if dl.Source != it.url && !dl.FromCache {
-			// 镜像地址的最后一段就是 sha256，不必再把它重复一遍。
+			// The last segment of a mirror URL is the sha256 itself; no point
+			// repeating it.
 			ui.Info("%s: the original URL did not answer, so these bytes came from the mirror %s (sha256 checked, it matches what toy.toml declares)",
 				it.name, dl.Source)
 		}
 
-		// 资产名无条件拼进 TOFU id。它天然就是平台判别符 —— 不同平台的资产名
-		// 本来就不一样（linux_amd64.tar.gz vs linux_amd64_musl.tar.gz），而同一个
-		// ref@version 在 musl 机器和 glibc 机器上拿到的是两份不同的字节。不拼的话，
-		// 换一台机器（或者共享 $HOME）会被报成「内容被人换掉了」——
-		// 一个吓人的假警报，正好出现在最不该狼来了的地方。
-		// 两个平台指向同一个资产名时它们本来就该共用一条钉住记录，这里也是对的。
+		// The asset name goes into the TOFU id unconditionally. It IS the platform
+		// discriminator — asset names already differ per platform
+		// (linux_amd64.tar.gz vs linux_amd64_musl.tar.gz), and the same ref@version
+		// hands a musl machine and a glibc machine two completely different sets of
+		// bytes. Leave it out and moving to another machine (or sharing $HOME) gets
+		// reported as "somebody swapped the contents" — a frightening false alarm,
+		// in exactly the place where crying wolf costs the most. When two platforms
+		// do point at the same asset name they should share one pin, and this gets
+		// that right too.
 		id := trustID + "/" + it.name
 		if err := insTOFU(ring, id, "sha256", it.sum, "the sha256 of "+it.name, force); err != nil {
 			return err
 		}
 		pins = append(pins, pin{id, "sha256", it.sum})
 	}
-	// 索引说这个包有作者公钥的话，公钥也钉住（规格 §4：公钥和 artifact hash
-	// 首次安装都要钉）。换了一把钥匙就是换了一个"作者"，那正是要拦的事。
+	// If the index says this package has an author public key, pin the key as well
+	// (spec §4: both the public key and the artifact hash are pinned on first
+	// install). A different key is a different "author", and that is precisely what
+	// this is here to stop.
 	if res.Entry != nil && res.Signer != "" {
 		key := strings.TrimSpace(res.Entry.Key)
 		if err := insTOFU(ring, insKeyID(res), "key", key, "the author public key", force); err != nil {
@@ -389,10 +429,13 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 		pins = append(pins, pin{insKeyID(res), "key", key})
 	}
 
-	// 解压和软链全部成功才动正在服役的那一版：先解压进兄弟目录，成了再把旧的
-	// 挪开、新的顶上去，软链失败就把旧的挪回来。就地 RemoveAll 再解压的话，
-	// 一个投毒或者损坏的上游配上一次很正常的 --force 重装，就是一条「拆掉用户
-	// 手上那个命令」的原语：包目录空了、软链悬空，而清单还在、toy list 照样列它。
+	// Only touch the version currently in service once unpacking AND symlinking have
+	// both succeeded: unpack into a sibling directory, then move the old one aside
+	// and swing the new one in; if symlinking fails, move the old one back. Doing a
+	// RemoveAll in place and unpacking over it turns a poisoned or corrupt upstream
+	// plus one perfectly ordinary --force reinstall into a primitive for "take away
+	// the command the user has" — empty package directory, dangling symlink, while
+	// the manifest is still there and `toy list` still lists it.
 	pkgDir := st.PkgDir(insHostSeg(res), insOwnerSeg(res), insNameSeg(res, tf), insDirVersion(res))
 	staged := pkgDir + ".new"
 	if err := insRemovePkgDir(st, staged); err != nil {
@@ -403,7 +446,7 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	}
 	for _, it := range items {
 		if err := insUnpack(tf, it, staged); err != nil {
-			os.RemoveAll(staged) // 半个包比没有包更难查
+			os.RemoveAll(staged) // half a package is harder to diagnose than none
 			return err
 		}
 	}
@@ -431,15 +474,18 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	if err := st.SaveManifest(m); err != nil {
 		return err
 	}
-	// 来源变了的话新清单是另一个 id，旧的那份不删就会变成一条指着已删目录的
-	// 幽灵记录：`toy list` 里同一个包出现两次，`toy uninstall <名字>` 报
-	// 「对上了 2 个已装的包」，而 doctor 给的修复建议会把搬走的那个仓库再装一遍。
+	// When the source changed, the new manifest has a different id, and leaving the
+	// old one behind creates a ghost record pointing at a deleted directory: the same
+	// package shows up twice in `toy list`, `toy uninstall <name>` reports "matched 2
+	// installed packages", and doctor's suggested fix reinstalls the repository that
+	// was moved away from.
 	if old != nil && old.ID != m.ID {
 		if err := st.RemoveManifest(old.ID); err != nil && !errors.Is(err, store.ErrNotInstalled) {
 			ui.Warn("cannot delete the old manifest %s: %v (`toy list` will show this package twice)", old.ID, err)
 		}
 	}
-	// 装成了才钉。失败还钉住的话，下一次安装会拿一个坏值当"首次安装钉住的"。
+	// Pin only after the install succeeded. Pinning on failure would let the next
+	// install treat a bad value as "what was pinned on first install".
 	for _, p := range pins {
 		if err := ring.Pin(p.id, p.kind, p.value); err != nil {
 			ui.Warn("cannot pin %s for %s: %v (the next install will treat it as a first install)", p.kind, p.id, err)
@@ -455,22 +501,26 @@ func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *res
 	return nil
 }
 
-// insTrustDowngraded 判断这次安装是不是让信任等级掉了一档。
+// insTrustDowngraded reports whether this install trusts one notch less than the
+// last one did.
 //
-// 光验签名还不够：把 sig 从索引条目里删掉就能让「✓ 已签名」悄悄变成
-// 「· 来源 …」，而没人会注意到少了一个勾。TOFU 记的是「上次是什么样」，
-// 所以这里也一样 —— 降级要停下来让用户亲手 --force（规格 §4、铁律 8）。
+// Verifying the signature is not enough on its own: dropping the sig from an index
+// entry quietly turns "✓ signed" into "· from …", and nobody notices a check mark
+// that stopped being there. TOFU records "what it was last time", and so does this —
+// a downgrade stops and makes the user type --force (spec §4, iron law 8).
 //
-// 比的是 store.TrustRank 而不是「等不等于 TrustSigned」：加一档的时候后者
-// 一个地方都不会报错，只会静默地把新档位算到错的一边。托管方那一档掉到
-// 「打包说明来自索引」（上游的 toy.toml 没了、改由索引内联那份顶上）就是
-// 这么一次降级 —— 它和签名消失一样，是别人替作者做了主。
+// It compares store.TrustRank rather than testing "is it TrustSigned": the latter
+// breaks nowhere at all when a fourth level is added, it just silently files the new
+// level on the wrong side. Host level dropping to "packaging instructions from the
+// index" — upstream's toy.toml is gone and the index's inlined one took over — is
+// exactly such a downgrade, and like a vanished signature it means somebody else
+// made a decision on the author's behalf.
 func insTrustDowngraded(old *store.Manifest, res *resolved) bool {
 	return old != nil && store.TrustRank(res.Trust) < store.TrustRank(old.Trust)
 }
 
-// insTrustWord 是信任等级在句子里的说法。ui.Trust 打的是完整那一行，
-// 这里只要一个短词，好嵌进「上次是 X，这次是 Y」。
+// insTrustWord is how a trust level reads inside a sentence. ui.Trust prints the
+// full line; this only needs a short phrase that fits into "it was X, now it is Y".
 func insTrustWord(level string) string {
 	switch level {
 	case store.TrustSigned:
@@ -488,18 +538,20 @@ func insTrustWord(level string) string {
 	}
 }
 
-// insItems 按形态挑出这次要下载的东西。
+// insItems works out what this install has to download, per shape.
 func insItems(res *resolved) ([]insItem, error) {
 	tf := res.Toyfile
 	version := insVersion(res)
 
 	if tf.IsScript() {
-		// [script] 的值是仓库里的一个路径（例子里就是 "gitwip.sh"），走 raw 模板，
-		// 不是 release 资产 —— 单文件脚本的意义就是不用发 release。
+		// A [script] value is a path inside the repository ("gitwip.sh" in the
+		// example), fetched through the raw template rather than as a release asset
+		// — the whole point of a single-file script is not having to cut a release.
 		out := make([]insItem, 0, len(tf.Script))
 		for _, name := range slices.Sorted(maps.Keys(tf.Script)) {
 			asset := toyfile.Expand(tf.Script[name], version, res.Tag)
-			// 展开之后才是真正拼进地址的那一串，而 {tag} 是上游给的。再验一次。
+			// The expanded string is what actually goes into the URL, and {tag}
+			// comes from upstream. Check it again.
 			if err := insSafeAsset(name, asset); err != nil {
 				return nil, err
 			}
@@ -517,8 +569,10 @@ func insItems(res *resolved) ([]insItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 命中的不是第一个候选 = 可能装的不是「为这台机器构建的那个」。铁律 8：如实说。
-	// 要作者声明了哪些平台才判得准，见 insFallbackNote。
+	// Matching something other than the first candidate means what gets installed
+	// may not be "the build made for this machine". Iron law 8: say so. Judging that
+	// correctly needs to know which platforms the author declared — see
+	// insFallbackNote.
 	if note := insFallbackNote(cands, matched, tf.Platforms()); note != "" {
 		ui.Warn("%s", note)
 	}
@@ -529,19 +583,24 @@ func insItems(res *resolved) ([]insItem, error) {
 	return []insItem{{name: asset, asset: asset, url: u, want: want}}, nil
 }
 
-// insFallbackNote 在命中的不是第一个候选时给出一句人话。命中第一个就返回空串。
+// insFallbackNote returns a plain-English line when the match was not the first
+// candidate. Matching the first one returns the empty string.
 //
-// 铁律 8：装的不是「为这台机器构建的那个」，用户必须知道 —— 这两种回退失败起来
-// 都不像回退的错：Rosetta 装了一个默默慢一截的 Intel 版；把 glibc 构建丢进 Alpine
-// 报的是 `not found`，而文件明明就在那儿。
+// Iron law 8: if what gets installed is not "the build made for this machine", the
+// user has to know — neither of these failures looks like a fallback problem when it
+// hits. Rosetta quietly runs an Intel build a good deal slower; a glibc build dropped
+// into Alpine reports `not found` while the file is sitting right there.
 //
-// 但「没命中首选候选」并不等于「没拿到为这台机器构建的东西」：在 linux 上我们
-// **总会**自己合成一段 libc 后缀当首选（gnu / musl），而绝大多数项目只发两段 key。
-// 于是每一次普通安装都会多出一句假警告，把真正要紧的 musl / Rosetta 警告一起淹掉 ——
-// 一条每次都响的警告等于没有警告。所以 declared（作者声明了哪些平台）是判据的一部分：
-// 裸 linux/amd64 差不多总是 glibc 构建，对 glibc 机器来说它就是对的那个，除非作者
-// 自己按 libc 分了档（那时通用档是什么就说不准了）。musl 机器反过来永远要说 ——
-// 裸 linux/amd64 几乎不可能是 musl 构建。
+// But "did not match the first candidate" is NOT the same as "did not get a build
+// made for this machine": on linux toy ALWAYS synthesizes a libc suffix as the first
+// candidate (gnu / musl), while the vast majority of projects publish only two-segment
+// keys. That would add a bogus warning to every ordinary install and drown out the
+// musl and Rosetta warnings that actually matter — a warning that fires every time is
+// no warning at all. So `declared` (which platforms the author listed) is part of the
+// test: a bare linux/amd64 is almost always the glibc build, and for a glibc machine
+// it IS the right one — unless the author split by libc themselves, in which case
+// what the generic entry holds is anybody's guess. A musl machine always gets told,
+// the other way round: a bare linux/amd64 is almost never a musl build.
 func insFallbackNote(cands []string, matched string, declared []string) string {
 	if len(cands) == 0 || matched == "" || matched == cands[0] {
 		return ""
@@ -552,11 +611,13 @@ func insFallbackNote(cands []string, matched string, declared []string) string {
 	}
 	switch {
 	case strings.HasSuffix(want, "/gnu") && matched == strings.TrimSuffix(want, "/gnu")+"/musl":
-		// glibc 机器兜底到 musl 那一档（platform.candidatesFor 的末位候选）。
-		// 这条几乎总是好消息 —— musl 版基本都是静态链接的，所以它在 glibc 机器上
-		// 照跑不误，ripgrep / zoxide 这类只发 musl 一份的项目正是靠它才装得上。
-		// 但仍然要说：装的不是「为这台机器构建的那个」（铁律 8），而且万一那份
-		// musl 构建是动态链接的，它在这里就起不来。
+		// A glibc machine falling back to the musl entry (the last candidate in
+		// platform.candidatesFor). This is almost always good news — musl builds
+		// are nearly always statically linked, so they run fine on a glibc machine,
+		// and it is the only reason projects that ship musl only, like ripgrep and
+		// zoxide, are installable at all. Say it anyway: this is not "the build made
+		// for this machine" (iron law 8), and on the off chance that musl build is
+		// dynamically linked, it will not start here.
 		return "this package only ships a musl build for " + strings.TrimSuffix(want, "/gnu") + ", so that is the one toy uses. " +
 			"musl builds are almost always statically linked, so it runs fine on this glibc machine. " +
 			"If this one happens to be dynamically linked it will say \"file not found\" when you run it — " +
@@ -566,7 +627,8 @@ func insFallbackNote(cands []string, matched string, declared []string) string {
 			"It runs under Rosetta 2 translation — it works, just slower. Without Rosetta 2 installed macOS " +
 			"will refuse to open it; `softwareupdate --install-rosetta` fixes that"
 	case want == matched+"/gnu":
-		// 走到这里说明作者确实按 libc 分了档，只是没有 glibc 那一档。
+		// Reaching here means the author really did split by libc, they just have
+		// no glibc entry.
 		return "this package splits its builds by libc but has no " + want + " entry, so the generic " + matched +
 			" build is the one toy uses — a generic build is usually the glibc one, the author just did not say so"
 	case strings.HasSuffix(want, "/musl"):
@@ -578,8 +640,9 @@ func insFallbackNote(cands []string, matched string, declared []string) string {
 	}
 }
 
-// insSplitsBy 判断作者有没有在 base 这个底座上按更细的一维分构建
-// （linux/amd64 之下的 linux/amd64/musl 这种）。分了才说明通用档不再是「默认那个」。
+// insSplitsBy reports whether the author split their builds along a finer axis under
+// base (linux/amd64/musl beneath linux/amd64, say). Only a split means the generic
+// entry is no longer "the default one".
 func insSplitsBy(base string, declared []string) bool {
 	for _, p := range declared {
 		if strings.HasPrefix(p, base+"/") {
@@ -589,11 +652,12 @@ func insSplitsBy(base string, declared []string) bool {
 	return false
 }
 
-// insAssetURL 拼一个资产的下载地址。
+// insAssetURL builds the download URL for one asset.
 func insAssetURL(res *resolved, asset string, script bool) (string, error) {
 	if res.Ref.Kind == ref.KindURL {
-		// 裸地址那条路没有托管方，资产只能相对 toy.toml 自己的地址解析 ——
-		// 除此之外没有任何信息能说出它在哪。
+		// The plain-URL route has no host, so an asset can only be resolved
+		// relative to the URL of the toy.toml itself — there is nothing else that
+		// says where it lives.
 		base, err := url.Parse(res.Ref.URL)
 		if err != nil {
 			return "", fmt.Errorf("%s does not parse, so the asset URL cannot be built: %w", res.Ref.URL, err)
@@ -618,30 +682,35 @@ func insAssetURL(res *resolved, asset string, script bool) (string, error) {
 	return u, nil
 }
 
-// insUnpack 把一个下载好的文件放进包目录。
-// 铁律 1、2：只有解压和 chmod，没有任何一步会执行包里的东西。
+// insUnpack puts one downloaded file into the package directory.
+// Iron laws 1 and 2: unpacking and chmod, nothing else. No step here ever executes
+// anything from the package.
 func insUnpack(tf *toyfile.Toyfile, it insItem, pkgDir string) error {
 	switch {
 	case tf.IsScript():
-		// 单文件脚本：下载 + chmod 0755 + 软链，零解压零构建（规格 §3）。
+		// Single-file script: download + chmod 0755 + symlink. Nothing unpacked,
+		// nothing built (spec §3).
 		return insCopy(it.path, filepath.Join(pkgDir, it.name), 0o755)
 	case archive.IsArchive(it.asset):
 		return insExtract(it.path, it.asset, pkgDir)
 	default:
-		// 裸二进制：落成 [bin] 指定的那个路径，而不是资产名。
+		// Bare binary: land it at the path [bin] names, not under the asset name.
 		//
-		// 资产名是【按平台变】的（yq_linux_amd64 / yq_darwin_arm64 / yq_linux_arm64…），
-		// 而 [bin] 只有一行、不按平台变、也不展开占位符。照资产名落盘的话，
-		// 除了 [bin] 恰好写对的那一个平台，其余每一个平台都会软链到一个不存在的
-		// 文件 —— 而且是在下载和校验都成功之后才炸。索引里 mikefarah/yq 那条
-		// 就是这么在 6 个平台里坏了 5 个（收进去的时候只在 linux/amd64 上验过）。
+		// Asset names VARY BY PLATFORM (yq_linux_amd64 / yq_darwin_arm64 /
+		// yq_linux_arm64 …), while [bin] is a single line that does not vary by
+		// platform and expands no placeholders. Write it out under the asset name
+		// and every platform except the one [bin] happens to spell correctly gets a
+		// symlink to a file that does not exist — and it blows up only after the
+		// download and the checksum both succeeded. That is how the mikefarah/yq
+		// entry in the index was broken on 5 of its 6 platforms: when it was added
+		// it had only been verified on linux/amd64.
 		//
-		// 只在 [bin] 恰好一条时这么做：多条时挑哪一个都是猜，
-		// 保持原来的行为让 store.Link 响亮地报错。
+		// Do this only when [bin] has exactly one entry: with several, picking one
+		// is a guess, so keep the old behaviour and let store.Link fail loudly.
 		dst := filepath.Base(it.asset)
 		if len(tf.Bin) == 1 {
 			for _, target := range tf.Bin {
-				dst = target // toyfile 已经保证它不是绝对路径、不含 ..
+				dst = target // toyfile already guarantees no absolute path and no ..
 			}
 		}
 		full := filepath.Join(pkgDir, dst)
@@ -652,11 +721,13 @@ func insUnpack(tf *toyfile.Toyfile, it insItem, pkgDir string) error {
 	}
 }
 
-// insExtract 解压进 pkgDir。
+// insExtract unpacks into pkgDir.
 //
-// archive 是按【文件名后缀】认格式的，而缓存里的文件名就是内容 hash、没有后缀
-// （规格 §6：文件名即 sha256，所以缓存天然是个镜像目录）—— 直接把缓存路径交给它
-// 一律是「不认识这个压缩格式」。所以先在临时目录里建一条带原资产名的软链。
+// archive detects the format FROM THE FILE NAME SUFFIX, and a cached file is named
+// after its own content hash with no suffix at all (spec §6: the file name IS the
+// sha256, which is what makes the cache a mirror directory for free) — hand it a
+// cache path directly and the answer is always "unrecognized archive format". So
+// stage a symlink under the original asset name in a temp directory first.
 func insExtract(src, asset, pkgDir string) error {
 	tmp, err := os.MkdirTemp("", "toy-extract-")
 	if err != nil {
@@ -674,9 +745,9 @@ func insExtract(src, asset, pkgDir string) error {
 	return nil
 }
 
-// insCopy 把下载下来的文件复制进包目录。
-// 不用硬链接：缓存文件是 0644 而且被 `toy serve` 当镜像对外提供，
-// 共用一个 inode 意味着这里的 chmod +x 会改到缓存那份上去。
+// insCopy copies a downloaded file into the package directory.
+// Not a hard link: cache files are 0644 and `toy serve` hands them out as a mirror,
+// and sharing one inode would mean the chmod +x here also modifies the cached copy.
 func insCopy(src, dst string, perm os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -695,25 +766,27 @@ func insCopy(src, dst string, perm os.FileMode) error {
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("writing %s failed: %w", dst, err)
 	}
-	// O_CREATE 那个 perm 会被 umask 削掉，umask 022 下就是 0755，
-	// 但 umask 077 下就成了 0700 —— 而这个文件是要给用户跑的。
+	// The perm passed to O_CREATE gets trimmed by umask: 0755 under umask 022, but
+	// 0700 under umask 077 — and this file is the one the user has to be able to run.
 	return os.Chmod(dst, perm)
 }
 
-// insLink 给每个命令建软链，一条失败就把这次建的全撤掉。
-// 半套命令留在 PATH 上比一条都没有更糟：跑起来才发现少一个。
+// insLink symlinks every command, rolling back everything it created if one fails.
+// Half a set of commands left on PATH is worse than none: you find out one is
+// missing only when you go to run it.
 func insLink(st *store.Store, tf *toyfile.Toyfile, pkgDir string, old *store.Manifest, force bool) ([]string, error) {
 	targets := map[string]string{}
 	if tf.IsScript() {
 		for name := range tf.Script {
-			targets[name] = name // 脚本就落在包目录里，名字就是命令名
+			targets[name] = name // scripts land in the package dir under the command name
 		}
 	} else {
 		maps.Copy(targets, tf.Bin)
 	}
 
-	// 升级/重装时，同名软链本来就是我们自己上一次建的 —— 替换它不需要用户
-	// 再确认一次。别的名字照旧走遮蔽检查（铁律 5）。
+	// On an upgrade or a reinstall, a symlink of the same name is one toy created
+	// last time — replacing it needs no further confirmation from the user. Every
+	// other name still goes through the shadowing check (iron law 5).
 	owned := map[string]bool{}
 	if old != nil {
 		for _, l := range old.Links {
@@ -724,14 +797,16 @@ func insLink(st *store.Store, tf *toyfile.Toyfile, pkgDir string, old *store.Man
 	var links []string
 	for _, name := range slices.Sorted(maps.Keys(targets)) {
 		target := filepath.Join(pkgDir, filepath.FromSlash(targets[name]))
-		// zip 常常不带执行位，tar 里也见过 0644 的二进制。链上去之前补一下，
-		// 否则装完是一条「存在但跑不了」的命令。
+		// zip usually carries no execute bit, and 0644 binaries turn up in tars
+		// too. Fix it before linking, or the install produces a command that
+		// exists but cannot run.
 		if fi, err := os.Stat(target); err == nil && !fi.IsDir() && fi.Mode().Perm()&0o111 == 0 {
 			os.Chmod(target, fi.Mode().Perm()|0o755)
 		}
-		// 先按「不放行」试一次：这样 --force 到底顶掉了什么，能照着 store 自己
-		// 的措辞原样说出来，而不用在这里把遮蔽检查重抄一遍（铁律 8）。
-		// owned[name] 是我们上一次自己建的那条链，换掉它不是安全放行。
+		// Try once with nothing waived: that way whatever --force overrode can be
+		// reported in store's own wording, instead of reimplementing the shadowing
+		// check here (iron law 8). owned[name] is a link toy created last time —
+		// replacing that one is not a safety waiver.
 		lp, err := st.Link(name, target, owned[name])
 		if err != nil && force && (errors.Is(err, store.ErrShadow) || errors.Is(err, store.ErrLinkExists)) {
 			ui.Warn("--force waived: %v", err)
@@ -743,8 +818,9 @@ func insLink(st *store.Store, tf *toyfile.Toyfile, pkgDir string, old *store.Man
 					ui.Warn("cannot remove %s while rolling back: %v", done, uerr)
 				}
 			}
-			// 只有真的建过链接才可能把上一版的顶掉；一条都没建就闭嘴，
-			// 不然一次干净利落的拒绝看起来像是把已装的包弄坏了。
+			// Only an actually-created link can have displaced the previous
+			// version's. If none were created, say nothing — otherwise a clean
+			// refusal reads like it broke the installed package.
 			if old != nil && len(links) > 0 {
 				ui.Warn("the symlinks from the previous version of %s may already have been replaced; running `toy install` or `toy update` again restores them", old.Name)
 			}
@@ -755,8 +831,10 @@ func insLink(st *store.Store, tf *toyfile.Toyfile, pkgDir string, old *store.Man
 	return links, nil
 }
 
-// insCleanOld 收拾被替换掉的那一版：新版不再提供的命令、以及旧的包目录。
-// 全是 best-effort —— 新版已经装好并写进清单了，清不干净不该让安装失败。
+// insCleanOld tidies up the version that was replaced: commands the new version no
+// longer provides, and the old package directory. All best-effort — the new version
+// is already installed and written to the manifest, and failing to tidy up must not
+// fail the install.
 func insCleanOld(st *store.Store, old *store.Manifest, pkgDir string, links []string) {
 	if old == nil {
 		return
@@ -777,8 +855,9 @@ func insCleanOld(st *store.Store, old *store.Manifest, pkgDir string, links []st
 	}
 }
 
-// insTOFU 做一次 TOFU 检查（规格 §4，模型抄 SSH 的 known_hosts）。
-// 变了就停下来，除非 --force —— 而且必须把旧值新值都打出来，用户才有得判断。
+// insTOFU runs one trust-on-first-use check (spec §4; the model is copied from SSH's
+// known_hosts). A change stops the install unless --force — and both the pinned
+// value and the new one have to be printed, or the user has nothing to judge by.
 func insTOFU(ring *sign.Ring, id, kind, value, what string, force bool) error {
 	trust, old, err := ring.Check(id, kind, value)
 	if err != nil {
@@ -788,8 +867,9 @@ func insTOFU(ring *sign.Ring, id, kind, value, what string, force bool) error {
 		return nil
 	}
 	if !force {
-		// 一行写完：ui 会把换行转义成 \x0a（它必须这么做 —— 能插换行就能把
-		// 信任等级那一行盖掉重写，铁律 8），所以这里的 \n 只会变成噪音。
+		// One line, no breaks: ui escapes a newline to \x0a — it has to, because
+		// anyone who can inject a newline can overwrite the trust line (iron law
+		// 8) — so a \n here would only turn into noise.
 		return fmt.Errorf("%w: %s for %s does not match what was pinned on first install — pinned %s, "+
 			"got %s this time. The author may have re-cut the same version, or somebody may have swapped the "+
 			"contents. Check it yourself, then add --force to overwrite the pin", sign.ErrChanged, what, id, old, value)
@@ -798,11 +878,13 @@ func insTOFU(ring *sign.Ring, id, kind, value, what string, force bool) error {
 	return nil
 }
 
-// insExisting 读这个包已经装着的那一份清单。没装过返回 nil，不是错误。
+// insExisting reads the manifest for the version of this package already installed.
+// Not installed returns nil, which is not an error.
 //
-// 先按包 id 找；找不到再按索引条目的 id 找一遍 —— 索引里的 source 一变，
-// insPackageID 跟着就变了，只按它查的话「上一次装的是什么」直接从视野里消失，
-// 于是来源变更拦不住、旧清单也没人清。
+// It looks up the package id first, then falls back to the index entry's id: the
+// moment an index entry's source changes, insPackageID changes with it, and looking
+// up only by that makes "what was installed last time" disappear from view — so the
+// source change is not caught and the old manifest is never cleaned up.
 func insExisting(st *store.Store, res *resolved) (*store.Manifest, error) {
 	m, err := st.LoadManifest(insPackageID(res))
 	if err == nil {
@@ -827,18 +909,22 @@ func insExisting(st *store.Store, res *resolved) (*store.Manifest, error) {
 	return nil, nil
 }
 
-// insSourceChanged 判断这次装的东西是不是换了一个来源。
+// insSourceChanged reports whether what is being installed now comes from a
+// different source.
 //
-// 索引条目是一个谁都能提 PR 的 JSON 里的一行指针。把 source 从
-// github:alice/tool 改成 github:evil/tool，`toy update` 就会照着新指针重新解析，
-// 而三道闸一道都不响：两边都没签名时 insTrustDowngraded 恒为 false，
-// TOFU 的 id 带着 source 一起变成了一条全新记录，信任那一行也照旧。
-// 所以来源变更和信任降级要一样对待 —— 一次升级不该悄悄换掉用户信的是谁。
+// An index entry is one pointer line inside a JSON file anyone can open a PR
+// against. Change the source from github:alice/tool to github:evil/tool and
+// `toy update` happily re-resolves against the new pointer while not one of the
+// three gates fires: with neither side signed, insTrustDowngraded is always false;
+// the TOFU id carries the source, so it becomes a brand-new record; and the trust
+// line reads the same as ever. So a changed source is treated like a trust
+// downgrade — an upgrade must not quietly change who the user is trusting.
 func insSourceChanged(old *store.Manifest, res *resolved) bool {
 	return old != nil && old.ID != "" && old.ID != insPackageID(res)
 }
 
-// insSwapIn 把解压好的 staged 顶成 pkgDir，返回被挪开的旧目录（没有就是空串）。
+// insSwapIn swings the unpacked staged directory into place as pkgDir and returns
+// the old directory it moved aside (empty string when there was none).
 func insSwapIn(st *store.Store, staged, pkgDir string) (string, error) {
 	backup := ""
 	if _, err := os.Stat(pkgDir); err == nil {
@@ -860,8 +946,8 @@ func insSwapIn(st *store.Store, staged, pkgDir string) (string, error) {
 	return backup, nil
 }
 
-// insRestore 把 insSwapIn 挪开的那一版放回去。best-effort：这条路上已经有一个
-// 错误要报了，再报一个只会盖住真正的原因。
+// insRestore puts back the version insSwapIn moved aside. Best-effort: this path
+// already has an error to report, and a second one would only bury the real cause.
 func insRestore(st *store.Store, backup, pkgDir string) {
 	if backup == "" {
 		return
@@ -872,9 +958,10 @@ func insRestore(st *store.Store, backup, pkgDir string) {
 	}
 }
 
-// insRemovePkgDir 删一个包目录，删之前确认它真的在 ~/.toy 里面。
-// 清单是磁盘上的文件，一个被改坏的 pkg_dir 不能变成「删 /」的授权
-// （store.Unlink 对软链就是这么防的，这里补齐同一条）。
+// insRemovePkgDir deletes a package directory, after confirming it really is inside
+// ~/.toy. A manifest is a file on disk, and a tampered pkg_dir must never become
+// authorization to "delete /" (store.Unlink guards symlinks the same way; this is
+// the matching guard).
 func insRemovePkgDir(st *store.Store, dir string) error {
 	if strings.TrimSpace(dir) == "" {
 		return nil
@@ -896,7 +983,8 @@ func insRemovePkgDir(st *store.Store, dir string) error {
 	return nil
 }
 
-// insPackageID 是这个包在 installed/ 和钥匙环里的身份，跨版本不变。
+// insPackageID is this package's identity in installed/ and in the keyring. It does
+// not change across versions.
 func insPackageID(res *resolved) string {
 	if res.Ref.Kind == ref.KindURL {
 		return res.Ref.URL
@@ -904,7 +992,8 @@ func insPackageID(res *resolved) string {
 	return res.HostName + ":" + res.Owner + "/" + res.Repo
 }
 
-// insIndexID 是这个包在索引里的 id，没经过索引就是空串。
+// insIndexID is this package's id in the index, or the empty string when no index
+// was involved.
 func insIndexID(res *resolved) string {
 	if res.Entry == nil {
 		return ""
@@ -912,11 +1001,12 @@ func insIndexID(res *resolved) string {
 	return res.Entry.ID
 }
 
-// insKeyID 是 TOFU 钥匙环里 "key" 那一维的 id。
+// insKeyID is the id under the "key" dimension of the TOFU keyring.
 //
-// 必须用索引条目的 id：作者公钥只在索引条目里出现，而 insPackageID 是从那条
-// 记录的 source 推出来的 —— 改一行 source 就等于换了一个身份，于是「作者公钥
-// 换了一把」这件事根本不会被 Check 看到，而规格 §4 要求公钥变了必须停下来。
+// It has to be the index entry's id: an author public key only ever appears in an
+// index entry, and insPackageID is derived from that record's source — so editing
+// one source line amounts to a new identity, and "the author's key changed" never
+// reaches Check at all, while spec §4 requires a changed key to stop the install.
 func insKeyID(res *resolved) string {
 	if id := insIndexID(res); id != "" {
 		return id
@@ -924,13 +1014,16 @@ func insKeyID(res *resolved) string {
 	return insPackageID(res)
 }
 
-// insNameSeg 是 pkg/<host>/<owner>/<这一段>/<version> 里的那一段。
+// insNameSeg is <this segment> in pkg/<host>/<owner>/<this segment>/<version>.
 //
-// 不能直接用 toy.toml 里的 name：那是作者随便写的，同一个 owner 下的
-// tool-rs 和 tool-go 都写 name = "tool" 完全合法，于是两个包共用一个安装目录
-// —— 装后一个会静默删掉前一个的文件（而前一个的清单和软链都还在），
-// 卸后一个也会把前一个的目录一起删走。仓库名在一个 owner 下天然唯一；
-// 裸地址没有仓库名，只能靠地址本身的 hash 区分。
+// It cannot just be the name from toy.toml: that is whatever the author felt like
+// writing, and it is perfectly legal for tool-rs and tool-go under the same owner to
+// both say name = "tool" — at which point two packages share one install directory.
+// Installing the second silently deletes the first one's files (while the first one's
+// manifest and symlinks are still there), and uninstalling the second takes the
+// first one's directory with it. A repository name is unique within an owner by
+// construction; a plain URL has no repository name, so only a hash of the URL itself
+// can tell two of them apart.
 func insNameSeg(res *resolved, tf *toyfile.Toyfile) string {
 	if res.Ref.Kind != ref.KindURL && res.Repo != "" {
 		return res.Repo
@@ -939,11 +1032,12 @@ func insNameSeg(res *resolved, tf *toyfile.Toyfile) string {
 	return tf.Name + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// insTrustID 是 TOFU 钥匙环里 sha256 那一维的 id。
+// insTrustID is the id under the sha256 dimension of the TOFU keyring.
 //
-// 铁律 6：某个 ref@version 的 hash 一旦记下就永不改指向 —— 所以它必须带上解析
-// 出来的那个 tag。只写 owner/repo 的话，正常升级到下一版会被报成「哈希变了」，
-// 而那句警告一旦天天出现就没人再当回事。
+// Iron law 6: once the hash of a given ref@version is recorded it never points
+// anywhere else — so it has to carry the tag that was resolved. Write only
+// owner/repo and an ordinary upgrade to the next version gets reported as "the
+// checksum changed", and a warning that shows up daily is one nobody takes seriously.
 func insTrustID(res *resolved) string {
 	id := insPackageID(res)
 	if res.Tag == "" {
@@ -952,8 +1046,10 @@ func insTrustID(res *resolved) string {
 	return id + "@" + res.Tag
 }
 
-// insVersion 是给 {version} 占位符用的版本号。裸地址那条路没有版本，返回空串
-// —— 编一个出来就是撒谎（铁律 8），而 resolve 已经保证那条路上没有占位符。
+// insVersion is the version that fills the {version} placeholder. The plain-URL
+// route has no version, so it returns the empty string — inventing one would be a
+// lie (iron law 8), and resolve already guarantees that route carries no
+// placeholders.
 func insVersion(res *resolved) string {
 	if res.Tag == "" {
 		return ""
@@ -961,7 +1057,7 @@ func insVersion(res *resolved) string {
 	return res.Version.Number()
 }
 
-// insVersionLabel 是清单里和界面上显示的版本。
+// insVersionLabel is the version shown in the manifest and on screen.
 func insVersionLabel(res *resolved) string {
 	if v := insVersion(res); v != "" {
 		return v
@@ -971,8 +1067,9 @@ func insVersionLabel(res *resolved) string {
 
 func insDirVersion(res *resolved) string { return insVersionLabel(res) }
 
-// insHostSeg / insOwnerSeg 是 pkg/<host>/<owner>/… 那两段。裸地址没有托管方也
-// 没有 owner，用 url/<域名> 顶上，免得所有裸地址装的包挤在同一个目录里。
+// insHostSeg / insOwnerSeg are the <host>/<owner> segments of pkg/<host>/<owner>/….
+// A plain URL has neither a host nor an owner, so url/<domain> stands in — otherwise
+// every package installed from a plain URL piles into the same directory.
 func insHostSeg(res *resolved) string {
 	if res.Ref.Kind == ref.KindURL {
 		return "url"
@@ -990,15 +1087,17 @@ func insOwnerSeg(res *resolved) string {
 	return "unknown"
 }
 
-// insTrustDetail 是安装完那一行信任等级后面跟的那段（规格 §4）。
+// insTrustDetail is the detail that follows the trust level on the line printed
+// after an install (spec §4).
 func insTrustDetail(res *resolved) string {
 	switch res.Trust {
 	case store.TrustSigned:
-		// 绝不把仓库 owner 印在勾后面。签名消息是 id + source + toy.toml 原文，
-		// 三样都是公开可读的，里面没有一个字节把这把公钥和那个 owner 绑起来
-		// —— 任何人都能拿自己的钥匙签别人那条还没认领的记录，而
-		// "Derrity (key …)" 读起来就是「Derrity 签的」（铁律 8）。
-		// 这个勾能说的只有：索引里登记的这把钥匙，签过这一版的 toy.toml。
+		// NEVER print the repository owner after the check mark. The signed message
+		// is id + source + the verbatim toy.toml, all three publicly readable, and
+		// not one byte of it binds this public key to that owner — anyone can sign
+		// somebody else's unclaimed record with their own key, and "Derrity (key …)"
+		// reads as "Derrity signed this" (iron law 8). All this check mark can say
+		// is: the key registered in the index signed this version of toy.toml.
 		detail := "key " + res.Signer
 		if res.IndexName != "" {
 			detail += " · registered in index " + res.IndexName
@@ -1008,11 +1107,13 @@ func insTrustDetail(res *resolved) string {
 		}
 		return detail
 	case store.TrustHost:
-		// 想要的是 "github.com/Derrity" —— 用户信的是那个托管方上的那个账号。
+		// What we want is "github.com/Derrity": what the user trusts is that
+		// account on that host.
 		return qryHostLabel(res)
 	case store.TrustIndexed:
-		// ui.Trust 那一行已经讲清楚「哪一半不是作者的」，这里补两件它不知道的事：
-		// 是哪一份索引提供的这份打包说明，以及字节到底来自谁的 release。
+		// The ui.Trust line already spells out which half is not the author's.
+		// Add the two things it does not know: which index supplied these
+		// packaging instructions, and whose release the bytes come from.
 		var parts []string
 		if res.IndexName != "" {
 			parts = append(parts, "supplied by index "+res.IndexName)
@@ -1021,7 +1122,8 @@ func insTrustDetail(res *resolved) string {
 			parts = append(parts, "release from "+who)
 		}
 		if res.Signer != "" {
-			// 内联那一档有签名也不是「作者签的」（规则 2），措辞必须把这句写死。
+			// A signature on the inline level is still not "the author signed
+			// it" (rule 2), and the wording has to nail that down.
 			parts = append(parts, "key "+res.Signer+" (proves only that this index record was not altered)")
 		}
 		return strings.Join(parts, " · ")
@@ -1030,9 +1132,11 @@ func insTrustDetail(res *resolved) string {
 	}
 }
 
-// insSafeAsset 挡住展开占位符之后才出现的危险路径。{tag} 是上游给的，一个叫
-// "../../x" 的 tag 能把下载地址指到别处去，而安装完那一行仍然如实写着作者的
-// 名字（铁律 7、8）。[artifact] 那条路 toyfile.Asset 已经验过了，这里管 [script]。
+// insSafeAsset blocks the dangerous paths that only appear after placeholders are
+// expanded. {tag} comes from upstream, and a tag named "../../x" can aim the
+// download URL somewhere else entirely while the post-install line still faithfully
+// carries the author's name (iron laws 7 and 8). The [artifact] route is already
+// checked by toyfile.Asset; this one covers [script].
 func insSafeAsset(name, asset string) error {
 	switch {
 	case strings.TrimSpace(asset) == "":
@@ -1058,17 +1162,21 @@ func insBaseNames(links []string) []string {
 	return out
 }
 
-// insParseFlags 解析子命令的 flag。flag 包自己那套用法排版跟 main 的重复，
-// 所以把它的输出扔掉，只留一句具体错误，用法交给 main 打（errUsage）。
+// insParseFlags parses a subcommand's flags. The flag package's own usage layout
+// duplicates main's, so its output is discarded and only the specific error survives;
+// main prints the usage line (errUsage).
 func insParseFlags(fs *flag.FlagSet, args []string) error {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			// -h 原来只落到 main 那一行语法串上，每个选项到底是什么意思一个字都没有。
-			// 而 install 的 --reinstall 和 --force 恰恰是必须在这儿讲清楚的一对：
-			// 一个是日常操作，一个是「我核对过，放行安全检查报出的变化」。
-			// main 紧接着会打那行用法串，所以这里只补选项。
-			// 没有任何选项的子命令（update）不该印一个空的「options」标题。
+			// -h used to land on main's one-line syntax string and say nothing at
+			// all about what each option means. And install's --reinstall and
+			// --force are exactly the pair that has to be spelled out here: one is
+			// an everyday operation, the other means "I checked it myself, let the
+			// safety check through". main prints the syntax line right after this,
+			// so all that is added here is the options. A subcommand with no
+			// options at all (update) must not print an empty "options" heading.
+
 			n := 0
 			fs.VisitAll(func(*flag.Flag) { n++ })
 			if n > 0 {

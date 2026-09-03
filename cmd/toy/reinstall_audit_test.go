@@ -27,20 +27,22 @@ func audReinstallTGZ(t *testing.T, names []string) []byte {
 	return buf.Bytes()
 }
 
-// 审计：insPerform 里那条「下载 + TOFU 全部做完再动磁盘上的包目录：中途拒绝的话，
-// 已经装着的那一版必须原封不动」只覆盖了下载和 TOFU 两步。
+// Audit: the rule in insPerform that "the download and TOFU are finished before
+// anything on disk is touched, so a refusal partway through leaves the installed
+// version untouched" only covers those two steps.
 //
-// 真正动手的顺序是：insRemovePkgDir(pkgDir) → MkdirAll → insUnpack。
-// pkgDir 在 --force 重装（以及裸地址那条永远是 unversioned 的路）上和已装的那一版
-// 是同一个目录，所以解压一失败，已经在 PATH 上跑着的那一版就没了 ——
-// 而清单还在、`toy list` 照样列它、bin/ 里那条软链变成悬空。
+// The order in which it actually acts is: insRemovePkgDir(pkgDir) -> MkdirAll ->
+// insUnpack. On a --force reinstall (and on the bare-URL path, which is always
+// unversioned) pkgDir is the same directory as the installed version's, so one
+// failed unpack destroys the copy already running on PATH — while the manifest
+// is still there, `toy list` still lists it, and the symlink in bin/ now dangles.
 func TestFailedReinstallWipesTheWorkingCopy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TOY_HOME", home)
 	t.Setenv("PATH", filepath.Join(home, "bin"))
 
 	good := audReinstallTGZ(t, []string{"tool"})
-	bad := audReinstallTGZ(t, []string{"tool", "../../../../pwned"}) // 解压会 ErrTraversal
+	bad := audReinstallTGZ(t, []string{"tool", "../../../../pwned"}) // unpacking hits ErrTraversal
 	payload := good
 	plat := runtime.GOOS + "/" + runtime.GOARCH
 	toml := fmt.Sprintf("name = \"tool\"\n[bin]\ntool = \"tool\"\n[artifact]\n%q = \"tool.tar.gz\"\n", plat)
@@ -54,20 +56,20 @@ func TestFailedReinstallWipesTheWorkingCopy(t *testing.T) {
 	defer srv.Close()
 
 	if err := runInstall(context.Background(), []string{srv.URL + "/toy.toml"}); err != nil {
-		t.Fatalf("第一次安装就失败了：%v", err)
+		t.Fatalf("the first install already failed: %v", err)
 	}
 	link := filepath.Join(home, "bin", "tool")
 	if b, err := os.ReadFile(link); err != nil || string(b) != "BODY" {
-		t.Fatalf("第一次装完就不对：%v %q", err, b)
+		t.Fatalf("wrong right after the first install: %v %q", err, b)
 	}
 
 	payload = bad
 	err := runInstall(context.Background(), []string{"--force", srv.URL + "/toy.toml"})
-	t.Logf("重装的结果：%v", err)
+	t.Logf("result of the reinstall: %v", err)
 	if b, rerr := os.ReadFile(link); rerr != nil {
-		t.Fatalf("一次失败的重装把已经装好的那一版毁了：%s 现在读不出来（%v）"+
-			"，而清单还在、toy list 照样列它", link, rerr)
+		t.Fatalf("a failed reinstall destroyed the working install: %s can no longer be read (%v), "+
+			"while the manifest is still there and toy list still lists it", link, rerr)
 	} else {
-		t.Logf("还在：%q", b)
+		t.Logf("still there: %q", b)
 	}
 }

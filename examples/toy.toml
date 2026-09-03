@@ -1,25 +1,25 @@
-# 一个完整的 toy.toml 范例。放在你仓库的根目录，跟 README 并排。
+# A complete toy.toml example. Put it at the root of your repo, next to the README.
 #
-# 注意这里面没有 URL、没有版本号、没有托管方名字 ——
-# 打个 tag 发个 release 就是发新版，这个文件一个字都不用改。
+# Note what isn't in here: no URL, no version, no host name --
+# pushing a tag and cutting a release IS the new version, and this file never changes.
 
 name     = "tinyserve"
-desc     = "一个很小的静态文件服务器"
+desc     = "a very small static file server"
 license  = "MIT"
 homepage = "https://github.com/Derrity/tinyserve"
 
-# PATH 上出现的名字 = 解压后包内的相对路径
+# the name that shows up on PATH = the relative path inside the extracted package
 [bin]
 tinyserve = "tinyserve"
 
-# key 是 GOOS/GOARCH，value 是 release 里那个资产的文件名。
-# 占位符只有两个：{version} 不带 v 前缀，{tag} 是原样的 tag。
+# The key is GOOS/GOARCH, the value is the filename of that asset in the release.
+# There are exactly two placeholders: {version} has no v prefix, {tag} is the tag verbatim.
 #
-# 两段 key 就够用了 —— 下面那两行 /musl 是可选的，只有当你**真的同时发**了
-# glibc 和 musl 两份构建时才写。toy 装的时候按从具体到通用的顺序试：
-# Alpine 上先找 linux/amd64/musl，没有再退回 linux/amd64（并会明说退了）；
-# 普通 glibc 机器直接用 linux/amd64，不会有任何多余的话。
-# 不写 /musl 完全正常，绝大多数项目都是这样。
+# Two-segment keys are enough -- the /musl lines below are optional, and you only write
+# them if you ACTUALLY SHIP both a glibc and a musl build. toy tries candidates from most
+# specific to most generic: on Alpine it looks for linux/amd64/musl first and falls back
+# to linux/amd64 (saying so out loud); an ordinary glibc box takes linux/amd64 with no
+# extra noise. Leaving /musl out is completely normal, most projects do.
 [artifact]
 "linux/amd64"       = "tinyserve_{version}_linux_amd64.tar.gz"
 "linux/amd64/musl"  = "tinyserve_{version}_linux_amd64_musl.tar.gz"
@@ -28,9 +28,11 @@ tinyserve = "tinyserve"
 "darwin/amd64"      = "tinyserve_{version}_darwin_amd64.tar.gz"
 "darwin/arm64"      = "tinyserve_{version}_darwin_arm64.tar.gz"
 
-# 可选。写了就强制校验，对不上一律拒绝安装。
-# 不写的话 toy 会在首次安装时钉住实际哈希（TOFU），之后变了照样会拦。
-# 不用手写：在 dist/ 旁边跑一次 `toy init` 就会照着实际文件算好这一段。
+# Optional. Present means verification is enforced: a mismatch refuses the install.
+# Leave it out and toy pins the actual hash on first install (TOFU), and still stops
+# you if it changes later.
+# Don't hand-write this: run `toy init` next to your dist/ and it computes the section
+# from the real files.
 [sha256]
 "linux/amd64"      = "0000000000000000000000000000000000000000000000000000000000000000"
 "linux/amd64/musl" = "0000000000000000000000000000000000000000000000000000000000000000"

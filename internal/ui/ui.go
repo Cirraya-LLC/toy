@@ -1,4 +1,5 @@
-// Package ui 是终端输出。规格 §9：进度条走 stderr，非 TTY 必须自动降级。
+// Package ui is terminal output. Spec §9: progress goes to stderr, and non-TTY
+// must degrade automatically.
 package ui
 
 import (
@@ -14,11 +15,12 @@ import (
 	"golang.org/x/term"
 )
 
-// out 是本包一切输出的去处。规格 §9：进度条和状态走 stderr，
-// 机器可读的输出（--json）留给 stdout。做成变量只为了测试能断言。
+// out is where everything in this package goes. Spec §9: progress and status go
+// to stderr, machine-readable output (--json) belongs to stdout. It is a var
+// only so tests can assert on it.
 var out io.Writer = os.Stderr
 
-// 最朴素的 ANSI，不引 color 库。
+// Plainest possible ANSI. No color library.
 const (
 	ansiReset  = "\x1b[0m"
 	ansiBold   = "\x1b[1m"
@@ -28,15 +30,17 @@ const (
 	ansiYellow = "\x1b[33m"
 )
 
-// IsTTY 报告 stderr 是不是终端。非 TTY 时进度条降级成一行行的日志，
-// 否则 CI 日志里全是 \r 垃圾。
+// IsTTY reports whether stderr is a terminal. When it isn't, the progress bar
+// degrades to plain log lines — otherwise CI logs fill up with \r garbage.
 func IsTTY() bool { return term.IsTerminal(int(os.Stderr.Fd())) }
 
-// NoColor 在 NO_COLOR 环境变量存在或非 TTY 时为 true。
+// NoColor is true when the NO_COLOR environment variable is present, or when
+// we're not on a TTY.
 func NoColor() bool { return noColor(IsTTY()) }
 
-// noColor 是 NoColor 的纯函数版本，好测。NO_COLOR 只看存不存在，
-// 不看值 —— 约定就是这样，NO_COLOR=0 一样表示别上色。
+// noColor is the pure version of NoColor, so it's testable. NO_COLOR is checked
+// for presence only, never for its value — that's the convention, so NO_COLOR=0
+// still means don't colorize.
 func noColor(tty bool) bool {
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return true
@@ -44,11 +48,12 @@ func noColor(tty bool) bool {
 	return !tty
 }
 
-// paint 给 s 套上 ANSI，NoColor 时原样返回。
+// paint wraps s in ANSI, or returns it untouched under NoColor.
 func paint(code, s string) string { return paintIf(NoColor(), code, s) }
 
-// paintIf 是 paint 的纯函数版本，好测。必须有：go test 下 stderr 是管道，
-// NoColor() 恒为 true，上色那条分支光靠 paint 一次都走不到。
+// paintIf is the pure version of paint, so it's testable. It has to exist:
+// under go test, stderr is a pipe, so NoColor() is always true and the
+// colorizing branch is unreachable through paint alone.
 func paintIf(noColor bool, code, s string) string {
 	if noColor {
 		return s
@@ -56,30 +61,38 @@ func paintIf(noColor bool, code, s string) string {
 	return code + s + ansiReset
 }
 
-// isCtrl 覆盖 C0、DEL 和 C1（0x80-0x9f）。C1 在 UTF-8 终端里一般不当控制符，
-// 但它也不会出现在任何正经的包名、URL 或错误信息里。
+// isCtrl covers C0, DEL, and C1 (0x80-0x9f). C1 isn't usually treated as
+// control in a UTF-8 terminal, but it also never shows up in a legitimate
+// package name, URL, or error message.
 func isCtrl(r rune) bool { return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) }
 
-// safe 把外来文本里的控制字符换成看得见的 \xNN。
+// safe replaces control characters in foreign text with visible \xNN escapes.
 //
-// 进到这个包的字符串几乎全是外来的：toy.toml 里的 name/desc、ref、URL、
-// tar 条目名、以及 ui.Error("%v", err) 里那个 err —— fetch 的 "HTTP %s" 直接
-// 抄的是服务器发来的状态行。一句 "\r\x1b[2K\x1b[32m✓ 已签名 · Trusted" 就能
-// 把刚打出来的信任那一行盖掉重写，而铁律 8 说信任等级必须如实打印、客户端
-// 是唯一的安全边界 —— 能被覆写的那一行就不叫边界。
+// Almost every string that reaches this package is foreign: name/desc from
+// toy.toml, refs, URLs, tar entry names, and the err in ui.Error("%v", err) —
+// fetch's "HTTP %s" copies the server's status line verbatim. A single
+// "\r\x1b[2K\x1b[32m✓ signed · Trusted" overwrites the trust line we just
+// printed, and iron law 8 says the trust level must be reported honestly
+// because the client is the ONLY security boundary. A line that can be
+// overwritten is not a boundary.
 //
-// 换成可见的转义而不是删掉：删掉等于替攻击者把痕迹擦干净了。
-// 顺带把规格 §9 那条「非 TTY 一个 \r 都不许有」真正守住 —— 原来只有我们
-// 自己不写 \r，别人塞进来的照样能出去。
+// Escaping instead of stripping: stripping would wipe the evidence for the
+// attacker.
 //
-// 同一个道理，文本里带密码的 URL 也在这里抹掉（redactURLs）：这个包是
-// 一切终端输出的唯一出口，堵在这儿就不用指望每个调用方都记得。
+// It also enforces spec §9's "not a single \r on non-TTY" for real — before,
+// that only held because we didn't write \r ourselves; anything smuggled in
+// through a string went straight out.
+//
+// Same reasoning for URLs carrying a password (redactURLs): this package is the
+// single exit for all terminal output, so plugging it here beats hoping every
+// caller remembers.
 func safe(s string) string {
 	s = redactURLs(s)
-	// 快路径必须先确认整串是合法 UTF-8：IndexFunc 把非法字节解成 U+FFFD，
-	// 而 U+FFFD 不是控制符 —— 裸的 0x9b（8 位 CSI）会被当成干净的放过去。
+	// The fast path must first confirm the whole string is valid UTF-8:
+	// IndexFunc decodes invalid bytes to U+FFFD, and U+FFFD is not a control
+	// character — so a bare 0x9b (8-bit CSI) would sail through as clean.
 	if utf8.ValidString(s) && strings.IndexFunc(s, isCtrl) < 0 {
-		return s // 绝大多数时候一次扫描就走人，不分配
+		return s // the common case: one scan, no allocation
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 8)
@@ -95,8 +108,8 @@ func safe(s string) string {
 		}
 		r, n := utf8.DecodeRuneInString(s[i:])
 		if r == utf8.RuneError && n == 1 {
-			// 非法字节按字节写出来，不写成 U+FFFD ——
-			// 换成占位符等于替对方把痕迹擦干净了。
+			// Write the invalid byte out as itself, not as U+FFFD —
+			// a placeholder would wipe the evidence for the attacker.
 			fmt.Fprintf(&b, `\x%02x`, s[i])
 			i++
 			continue
@@ -111,15 +124,19 @@ func safe(s string) string {
 	return b.String()
 }
 
-// SafeURL 把一个 URL 里的密码换成 xxxxx（标准库的 URL.Redacted），
-// 顺带把控制字符转义掉。不是 URL、或者本来就没有凭据就原样返回。
+// SafeURL replaces the password in a URL with xxxxx (stdlib's URL.Redacted) and
+// escapes control characters on the way out. Text that isn't a URL, or a URL
+// with no credentials, comes back untouched.
 //
-// 用户完全可以写 `toy install https://u:hunter2@example.com/toy.toml`：
-// fetch 要拿原样的 URL 去认证，但那个密码不能进终端 —— 终端会被录屏、
-// 会被贴进工单、CI 日志更是全世界都看得到。
+// A user is perfectly entitled to run
+// `toy install https://u:hunter2@example.com/toy.toml`: fetch needs the URL
+// verbatim to authenticate, but that password must never reach the terminal —
+// terminals get screen-recorded, pasted into tickets, and CI logs are world
+// readable.
 func SafeURL(s string) string { return safe(redactURL(s)) }
 
-// redactURL 是 SafeURL 里只管凭据的那一半，不做控制字符转义。
+// redactURL is the credentials half of SafeURL, without the control-character
+// escaping.
 func redactURL(s string) string {
 	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
 		return s
@@ -129,38 +146,47 @@ func redactURL(s string) string {
 		return s
 	}
 	if _, ok := u.User.Password(); !ok {
-		return s // 只有用户名不是秘密，抹掉反而让人对不上自己写的地址
+		// A username alone is not a secret; redacting it would only stop the
+		// user from recognizing the address they typed.
+		return s
 	}
 	return u.Redacted()
 }
 
-// urlish 认出一段文本里的 URL。字符集就是 RFC 3986 允许出现在 URL 里的那些，
-// 所以它会停在中文冒号、空格、引号上 —— 报错信息长这样：
-// "fetch: 拿不到：https://u:p@x/y：HTTP 404"。
+// urlish spots URLs inside a run of text. The character class is exactly what
+// RFC 3986 allows in a URL, so the match stops at whitespace, quotes, and
+// anything else outside that set. A trailing ASCII ':' does get swallowed into
+// the match (it's a legal URL character), but redaction reproduces it verbatim,
+// so text like "fetch: https://u:p@x/y: HTTP 404" survives with only the
+// password replaced.
 var urlish = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*`)
 
-// redactURLs 把一段任意文本里所有带密码的 URL 抹掉密码。
+// redactURLs strips the password out of every credential-carrying URL in an
+// arbitrary run of text.
 //
-// 必须在这一层做，不能只在打印 URL 的那几处做：真正会把凭据印出来的是
-// 错误信息 —— fetch 的 "%s：%w" 里那个 %s 就是原样的下载地址，
-// 而它最后是走 ui.Error("%v", err) 出去的。堵源头只要堵一次。
+// This has to happen at this layer, not only where we print a URL directly: the
+// thing that actually leaks credentials is error text — fetch's "%s: %w" puts
+// the download address in verbatim, and it leaves through ui.Error("%v", err).
+// Plug the source once.
 func redactURLs(s string) string {
 	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
-		return s // 绝大多数输出里没有凭据，不走正则
+		return s // almost no output carries credentials; skip the regexp
 	}
 	return urlish.ReplaceAllStringFunc(s, redactURL)
 }
 
-// sprintf 是本包唯一的格式化入口。格式串是我们自己写的字面量，参数却常常
-// 一路来自网络，所以结果一律过 safe。新加输出函数时用它，别直接 fmt.Sprintf。
+// sprintf is the one formatting entry point in this package. The format string
+// is our own literal, but the arguments routinely come off the network, so the
+// result always goes through safe. Use it when adding an output function —
+// never fmt.Sprintf directly.
 func sprintf(format string, a ...any) string { return safe(fmt.Sprintf(format, a...)) }
 
-// line 往 stderr 写一行，永远只有一个结尾换行。
+// line writes one line to stderr, with exactly one trailing newline.
 func line(s string) {
 	fmt.Fprintln(out, strings.TrimRight(s, "\n"))
 }
 
-// 下面这些都往 stderr 写。机器可读的输出留给 stdout。
+// Everything below writes to stderr. Machine-readable output belongs to stdout.
 func Info(format string, a ...any) { line(sprintf(format, a...)) }
 
 func Warn(format string, a ...any) {
@@ -175,23 +201,26 @@ func Step(format string, a ...any) {
 	line(paint(ansiDim, "→ ") + sprintf(format, a...))
 }
 
-// Trust 打印安装完成那一行的信任等级（铁律 8、规格 §4）：
+// Trust prints the trust level on the install-completed line (iron law 8,
+// spec §4):
 //
 //	signed         ✓ signed · key a3f9… · registered in index default
 //	host           · from github.com/Derrity · unsigned
 //	index-toyfile  ⚠ packaging instructions come from the index, not the author
 //	unverified     ⚠ unsigned · first install, sha256 pinned
 //
-// level 取 store.TrustSigned / TrustHost / TrustIndexed / TrustUnverified
-// （写成字面量是为了不让 ui 依赖 store）。
+// level is one of store.TrustSigned / TrustHost / TrustIndexed /
+// TrustUnverified (spelled as literals here so ui doesn't depend on store).
 func Trust(level, detail string) {
-	// detail 是签名者名字 / 托管方域名，都来自索引或 ref —— 外来的。
+	// detail is a signer name or a host domain — from the index or the ref,
+	// so: foreign.
 	detail = safe(detail)
 	switch level {
 	case "signed":
 		if detail == "" {
-			// 说"已签名"却说不出是谁签的，等于替一把不知道是谁的钥匙背书。
-			// 铁律 8：不许静默成功，说不清就别说得比知道的多。
+			// Saying "signed" without naming the signer vouches for a key
+			// nobody can identify. Iron law 8: no silent success — when you
+			// can't say who, don't claim more than you know.
 			line(paint(ansiBold+ansiRed, "⚠ claims to be signed but names no signer · treating as unverified"))
 			return
 		}
@@ -202,9 +231,12 @@ func Trust(level, detail string) {
 		}
 		line(paint(ansiDim, "· from "+detail+" · unsigned"))
 	case "index-toyfile":
-		// 说清楚哪一半是作者的、哪一半不是。"部分可信"这种含糊说法等于没说 ——
-		// 用户要能据此判断风险：装进来的字节是作者 release 里的那个资产，
-		// 但「装哪个资产、软链成什么命令名」是索引条目里内联的 toyfile 说的。
+		// Spell out which half is the author's and which half isn't. A vague
+		// "partially trusted" says nothing — the user has to be able to judge
+		// the risk from this line: the bytes installed are an asset from the
+		// author's own release, but WHICH asset gets installed and what the
+		// command is symlinked to come from the toyfile inlined in the index
+		// entry.
 		s := "⚠ packaging instructions come from the index · the bytes are from the author's own release, but which asset gets installed and what the command is called come from the index — the author never wrote a toy.toml"
 		if detail != "" {
 			s += " · " + detail
@@ -217,35 +249,40 @@ func Trust(level, detail string) {
 		}
 		line(paint(ansiBold+ansiYellow, s))
 	default:
-		// 铁律 8：不许静默成功。认不出的等级要说出来，不能当成安全的那一档糊过去。
+		// Iron law 8: no silent success. An unrecognized level has to say so,
+		// never get glossed over as if it were the safe tier.
 		line(paint(ansiBold+ansiRed, fmt.Sprintf("⚠ unknown trust level %q, treating as unverified · %s", level, detail)))
 	}
 }
 
-// Progress 实现 fetch.Sink。TTY 下是进度条，非 TTY 下是若干行普通日志
-// （开始一行、结束一行，中间按百分比节流，绝不输出 \r）。
+// Progress implements fetch.Sink. On a TTY it's a progress bar; off a TTY it's
+// a handful of plain lines (one at the start, one at the end, throttled by
+// percentage in between) and never a single \r.
 type Progress struct {
 	tty    bool
 	bar    *progressbar.ProgressBar
 	name   string
 	total  int64
 	cur    int64
-	bucket int64 // 非 TTY 下已经打印过的最高 25% 档位
+	bucket int64 // highest 25% mark already printed on non-TTY
 }
 
 func NewProgress() *Progress { return newProgress(IsTTY()) }
 
-// newProgress 让测试能直接要一个 TTY 形态的实例，不用真的有终端。
+// newProgress lets tests ask for a TTY-shaped instance without a real terminal.
 func newProgress(tty bool) *Progress { return &Progress{tty: tty} }
 
 func (p *Progress) Start(name string, total int64) {
-	// name 来自 toy.toml / ref，外来的；这里消一次毒，Add 和 Done 就都干净了。
+	// name comes from toy.toml / the ref, so it's foreign; sanitize once here
+	// and both Add and Done are clean.
 	p.name, p.total, p.cur, p.bucket = safe(name), total, 0, 0
 	if p.tty {
-		// total<=0 表示服务器没给 Content-Length（chunked 响应就是这样，
-		// fetch.open 直接把 resp.ContentLength 传过来）。progressbar 用 -1 表示
-		// "总量未知，画成转圈的"，传 0 进去它一个字都不画 —— 整次下载在终端上
-		// 完全静默，而非 TTY 那条路是会老老实实说"大小未知"的。
+		// total<=0 means the server gave us no Content-Length (that's what a
+		// chunked response looks like; fetch.open passes resp.ContentLength
+		// straight through). progressbar uses -1 for "total unknown, draw a
+		// spinner"; pass it 0 and it draws NOTHING — the whole download is
+		// silent in the terminal, while the non-TTY path dutifully says
+		// "size unknown".
 		if total <= 0 {
 			total = -1
 		}
@@ -270,14 +307,16 @@ func (p *Progress) Add(n int64) {
 		}
 		return
 	}
-	// 非 TTY：只在跨过 25/50/75/100 这几个档位时打一行，绝不输出 \r。
-	// 总大小未知就没有百分比可言，那时什么都不打，结果留给 Done。
+	// Non-TTY: print a line only when we cross 25/50/75/100, and never a \r.
+	// With the total unknown there is no percentage to speak of, so print
+	// nothing and leave the result to Done.
 	if p.total <= 0 {
 		return
 	}
-	// 一次 Add 跨过好几个档位时只打最高的那一档：小文件常常一口气就读完，
-	// 把中间几档补齐会打出 "25% (148 B / 148 B)" 这种自相矛盾的行 ——
-	// 百分比和字节数说的是同一个时刻，补出来的那几行两边对不上。
+	// When one Add crosses several marks at once, print only the highest: small
+	// files often arrive in a single read, and filling in the marks below would
+	// emit lines like "25% (148 B / 148 B)" — the percentage and the byte count
+	// describe the same instant, so the two halves contradict each other.
 	b := p.bucket
 	for b < 100 && p.cur*100 >= p.total*(b+25) {
 		b += 25
@@ -295,20 +334,21 @@ func (p *Progress) Done(err error) {
 		p.bar = nil
 	}
 	if err != nil {
-		// err 一路来自网络：fetch 的 "HTTP %s" 抄的就是服务器发来的状态行。
+		// err comes off the network: fetch's "HTTP %s" copies the server's
+		// status line verbatim.
 		line(paint(ansiRed, sprintf("✗ %s failed: %v", p.name, err)))
 		return
 	}
 	if p.cur <= 0 {
-		// 一个字节都没数过，就别编一个大小出来。
+		// Not a single byte counted — don't invent a size.
 		line(paint(ansiGreen, "✓ "+p.name+" done"))
 		return
 	}
 	line(paint(ansiGreen, sprintf("✓ %s done (%s)", p.name, humanBytes(p.cur))))
 }
 
-// humanBytes 把字节数写成人看的样子，例如 12.3 MB。
-// 十进制单位（1000），跟 release 页面上标的大小对得上。
+// humanBytes renders a byte count for humans, e.g. 12.3 MB. Decimal units
+// (1000), so it matches the sizes shown on release pages.
 func humanBytes(n int64) string {
 	if n <= 0 {
 		return "size unknown"
@@ -323,5 +363,5 @@ func humanBytes(n int64) string {
 			return fmt.Sprintf("%.1f %s", v, u)
 		}
 	}
-	return fmt.Sprintf("%d B", n) // 到不了
+	return fmt.Sprintf("%d B", n) // unreachable
 }

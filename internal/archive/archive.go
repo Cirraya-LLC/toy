@@ -1,4 +1,5 @@
-// Package archive 安全解压。铁律 7：路径穿越、绝对路径、逃出目标目录的符号链接一律拒绝。
+// Package archive unpacks archives safely. Iron rule 7: path traversal, absolute
+// paths, and symlinks that escape the destination directory are all refused.
 package archive
 
 import (
@@ -19,14 +20,16 @@ var (
 	ErrTooLarge    = errors.New("archive: extracted size exceeds the limit")
 )
 
-// MaxTotalBytes 是解压后总字节数上限，防 zip bomb。
+// MaxTotalBytes caps the total extracted size. This is the zip bomb defence.
 const MaxTotalBytes = 2 << 30 // 2 GiB
 
-// maxLinkTargetBytes 是符号链接目标的长度上限。zip 里的链接目标是文件内容，
-// 不限长的话一个"符号链接"就能当成任意大小的文件塞进来。
+// maxLinkTargetBytes caps how long a symlink target may be. In zip, a link target IS
+// the entry's file content, so with no cap a "symlink" is just an arbitrarily large
+// file smuggled in under another name.
 const maxLinkTargetBytes = 4096
 
-// maxEntries 是成员数上限。字节上限拦不住"几百万个空文件"这种耗 inode 的包。
+// maxEntries caps the member count. A byte limit does nothing against a package of a
+// few million empty files: that bomb burns inodes, not bytes.
 const maxEntries = 100000
 
 type kind int
@@ -39,8 +42,9 @@ const (
 	kindTarXz
 )
 
-// formatOf 按文件名（不看内容）判断格式。和 IsArchive 共用一套判断，
-// 免得"说认识"和"真能解"两处规则分叉。
+// formatOf decides the format from the file name alone, never from the content.
+// IsArchive shares this one function so "we recognise it" and "we can actually unpack
+// it" can never drift apart.
 func formatOf(name string) kind {
 	n := strings.ToLower(filepath.Base(name))
 	switch {
@@ -56,27 +60,32 @@ func formatOf(name string) kind {
 	return kindNone
 }
 
-// IsArchive 按文件名判断是不是我们认识的压缩包。
-// 认：.tar.gz .tgz .tar.xz(不解，报 ErrUnsupported) .tar .zip
-// 不认的（比如裸二进制）返回 false —— 调用方应当直接当成单文件处理。
+// IsArchive reports whether a name looks like an archive we know.
+// Known: .tar.gz .tgz .tar.xz (recognised, not unpacked - Extract returns
+// ErrUnsupported) .tar .zip
+// Anything else, a bare binary for instance, is false: the caller should install it
+// as a single file.
 func IsArchive(name string) bool { return formatOf(name) != kindNone }
 
-// Extract 把 src 解压进 destDir。destDir 必须已存在。
-// 必须做到：
-//   - 每个成员的最终路径 filepath.Clean 之后仍在 destDir 内，否则 ErrTraversal
-//   - 拒绝绝对路径成员
-//   - 符号链接：目标解析后逃出 destDir 就拒绝整个包
-//   - 跳过设备文件、FIFO、socket 这些没有内容的非常规成员；不认识又声明了内容的一律拒绝
-//   - 累计字节数超过 MaxTotalBytes 就中止并清理
+// Extract unpacks src into destDir, which must already exist.
+// It guarantees:
+//   - every member's final path, after filepath.Clean, still sits inside destDir,
+//     otherwise ErrTraversal
+//   - absolute member paths are refused
+//   - symlinks: if the target resolves outside destDir, the whole archive is refused
+//   - contentless irregular members (device nodes, FIFOs, sockets) are skipped; an
+//     unknown type that declares content is refused
+//   - passing MaxTotalBytes aborts the extraction and cleans up
 //
-// 解完之后如果整棵树【只有一个顶层条目而且它是目录】，就把那一层剥掉
-// （见 stripTopDir）。返回的相对路径列表是剥完之后的。
+// If the extracted tree turns out to be EXACTLY ONE top-level entry AND that entry is
+// a directory, that layer is stripped (see stripTopDir). The relative paths returned
+// are the stripped ones.
 func Extract(src, destDir string) ([]string, error) {
 	return extractTo(src, destDir, MaxTotalBytes)
 }
 
-// extractTo 是 Extract 的本体，多一个字节上限参数好让测试用一个小额度验 ErrTooLarge
-// —— 不然验一次上限要真的写 2 GiB。
+// extractTo is the body of Extract with the byte limit as a parameter, so tests can
+// exercise ErrTooLarge on a tiny budget instead of actually writing 2 GiB.
 func extractTo(src, destDir string, limit int64) ([]string, error) {
 	switch formatOf(src) {
 	case kindNone:
@@ -102,8 +111,9 @@ func extractTo(src, destDir string, limit int64) ([]string, error) {
 
 	e := &extractor{dest: dest, limit: limit, regular: map[string]bool{}}
 	if err := e.run(src); err != nil {
-		// 任何一步失败都把这次写出来的东西清干净：半个包比没有包更难排查，
-		// 而且 ErrTooLarge 那条路上盘里已经躺了一堆字节。
+		// Any failure wipes whatever this run wrote: half a package is harder to
+		// diagnose than no package, and on the ErrTooLarge path a pile of bytes is
+		// already sitting on disk.
 		e.cleanup()
 		return nil, err
 	}
@@ -114,24 +124,30 @@ func extractTo(src, destDir string, limit int64) ([]string, error) {
 	return e.files, nil
 }
 
-// stripTopDir 剥掉唯一的那个顶层目录，等价于 `tar --strip-components=1`。
+// stripTopDir removes the single top-level directory, the equivalent of
+// `tar --strip-components=1`.
 //
-// cargo-dist 和一半的 goreleaser 配置都把内容套在一层
-// `ripgrep-15.2.0-x86_64-unknown-linux-musl/` 里，而那个目录名【同时】钉死了版本
-// 和 target triple —— toy.toml 的 [bin] 右边是单个字符串、不按平台变、也不展开
-// {version}，根本表达不了它。不剥的话现代 Rust CLI 那一整块（ripgrep / fd / bat /
-// delta / eza）一个都收不了。eget / ubi / cargo-binstall 全都剥，用户预期就是这样。
+// cargo-dist and half the goreleaser configs out there wrap everything in one
+// `ripgrep-15.2.0-x86_64-unknown-linux-musl/` directory, and that name pins BOTH the
+// version AND the target triple. The right-hand side of [bin] in toy.toml is a single
+// string: it does not vary by platform and does not expand {version}, so it simply
+// cannot express that name. Without stripping, the entire modern Rust CLI shelf
+// (ripgrep / fd / bat / delta / eza) is unpackageable. eget, ubi and cargo-binstall
+// all strip; this is what users expect.
 //
-// 判据是【恰好一个顶层条目而且它是真目录】：
-//   - 两个及以上不剥 —— 剥哪个都得丢掉另一个。
-//   - 唯一那个是文件不剥（裸二进制那种包）。
-//   - 唯一那个是符号链接也不剥：DirEntry.IsDir() 是 lstat 语义，符号链接为 false，
-//     所以不存在"跟着一条链接把内容搬到 destDir 外面去"这回事。
-//   - 空目录不剥：剥完 destDir 就空了，那不是"少一层"而是"什么都没有"。
+// The test is EXACTLY ONE top-level entry AND it is a real directory:
+//   - Two or more: no strip. Whichever one you picked, you would drop the other.
+//   - The single entry is a file: no strip (that is the bare-binary shape).
+//   - The single entry is a symlink: no strip either. DirEntry.IsDir() has lstat
+//     semantics, so a symlink reads false, which means "follow a link and move the
+//     contents outside destDir" is not a thing that can happen here.
+//   - An empty directory: no strip. Stripping would leave destDir empty, and that is
+//     not "one layer less", it is "nothing at all".
 //
-// 名字只从 os.ReadDir 拿，它返回的永远是单个路径段（不会是 "." / ".."、也不含
-// 分隔符），所以这里的 Join 必定落在 destDir 内 —— 铁律 7 是在 resolve() 里守的，
-// 这一步没有引入第二个需要清洗的名字来源。
+// The name only ever comes from os.ReadDir, which always hands back a single path
+// element - never "." or "..", never containing a separator - so the Join below
+// necessarily lands inside destDir. Iron rule 7 is enforced in resolve(); this step
+// does not introduce a second source of names that would need sanitising.
 func (e *extractor) stripTopDir() error {
 	ents, err := os.ReadDir(e.dest)
 	if err != nil {
@@ -153,10 +169,13 @@ func (e *extractor) stripTopDir() error {
 	if !e.stripKeepsLinksInside(prefix) {
 		return nil
 	}
-	// 先把那层目录挪开再往上搬，不然 `pkg/pkg` 这种（里面有个东西和外面那层同名）
-	// 会撞在一起：rename 到一个非空目录上是 ENOTEMPTY，到一个空目录上是 EISDIR，
-	// 两个都会让一个本来正常的包整个装不上。挪开之后目标名字必定是空的。
-	// 这个临时名字和 top 同一个父目录（也就是同一个文件系统），rename 不会跨设备。
+	// Move that directory aside before hoisting its contents, or `pkg/pkg` - an inner
+	// entry named like the top level, which happens whenever the package name matches
+	// the directory name - collides: renaming onto a non-empty directory is ENOTEMPTY,
+	// onto an empty one is EISDIR, and either one makes a perfectly good package
+	// impossible to install. Once it is moved aside, every target name is free.
+	// The staging name shares top's parent, hence the same filesystem, so the rename
+	// never crosses devices.
 	staged := topDir + ".toy-strip"
 	if err := os.Rename(topDir, staged); err != nil {
 		return fmt.Errorf("archive: cannot move top-level directory %s aside while stripping it: %w", top, err)
@@ -169,27 +188,32 @@ func (e *extractor) stripTopDir() error {
 	if err := os.Remove(staged); err != nil {
 		return fmt.Errorf("archive: cannot remove top-level directory %s after stripping it: %w", top, err)
 	}
-	// 返回给调用方的相对路径要跟着剥，否则它和盘上的布局对不上 —— 而 [bin] 右边
-	// 和 toy-index 的 probe 认的都是这份列表。
+	// The relative paths we hand back have to be stripped too, or they stop matching
+	// the layout on disk - and that list is exactly what the right-hand side of [bin]
+	// and toy-index's probe resolve against.
 	for i, f := range e.files {
 		e.files[i] = strings.TrimPrefix(f, prefix)
 	}
 	return nil
 }
 
-// stripKeepsLinksInside 报告剥掉那一层之后，包里每一条【相对】符号链接是不是仍然
-// 落在 destDir 内。
+// stripKeepsLinksInside reports whether every RELATIVE symlink in the package still
+// resolves inside destDir once that top layer is gone.
 //
-// 这是剥目录唯一自己引入的逃逸面，必须自己堵上：剥掉一层等于把每条链接的解析起点
-// 上移一层。包内自己指自己的链接（macOS 那种 `Versions/Current -> A`）不受影响，
-// 但一条先爬到包根、再顺着顶层目录名走回来的链接会：
+// This is the one escape surface stripping introduces on its own, so stripping has to
+// close it itself: removing a layer moves every link's resolution origin up by one.
+// Self-contained links, macOS's `Versions/Current -> A` kind, are unaffected. A link
+// that first climbs to the package root and then walks back down through the
+// top-level directory name is not:
 //
-//	sub/deep/back -> ../../sub/real.txt    剥之前落在 dest/sub/real.txt ✓
-//	   deep/back  -> ../../sub/real.txt    剥之后落在 dest 的【父目录】 ✗
+//	sub/deep/back -> ../../sub/real.txt    before the strip: dest/sub/real.txt   ok
+//	   deep/back  -> ../../sub/real.txt    after the strip:  destDir's PARENT    escape
 //
-// 这种包就不剥，原样交给调用方：[bin] 会因为路径对不上而响亮地失败，
-// 那比在包里留一条能读到 destDir 外面的链接好太多了（铁律 7）。
-// 读不出来的（Lstat / Readlink 出错）一律当成不安全 —— 剥目录是便利，不是必需。
+// Such a package is left unstripped and handed to the caller as-is: [bin] then fails
+// loudly on a path that does not line up, and that is far better than leaving a link
+// inside the package that can read outside destDir (iron rule 7).
+// Anything we cannot read - Lstat or Readlink errors - counts as unsafe. Stripping is
+// a convenience, never a requirement.
 func (e *extractor) stripKeepsLinksInside(prefix string) bool {
 	for _, rel := range e.files {
 		full := filepath.Join(e.dest, rel)
@@ -198,7 +222,7 @@ func (e *extractor) stripKeepsLinksInside(prefix string) bool {
 			return false
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
-			continue // 普通文件和硬链接认的是 inode，挪一层不改变任何东西
+			continue // regular files and hard links resolve by inode; moving a level changes nothing
 		}
 		target, err := os.Readlink(full)
 		if err != nil {
@@ -213,17 +237,17 @@ func (e *extractor) stripKeepsLinksInside(prefix string) bool {
 }
 
 type extractor struct {
-	dest    string          // 目标目录，绝对且已 Clean
-	limit   int64           // 解压后总字节数上限
-	written int64           // 已写出的字节
-	entries int             // 已经处理过的成员数，防"条目数炸弹"
-	files   []string        // 返回给调用方的相对路径（只有文件和链接，不含目录）
-	created []string        // 清理用：我们真正创建过的每一个条目，按创建顺序
-	regular map[string]bool // 本次写出来的普通文件（绝对路径），硬链接只认这些
+	dest    string          // destination directory, absolute and already Cleaned
+	limit   int64           // cap on total extracted bytes
+	written int64           // bytes written so far
+	entries int             // members seen so far; guards against entry-count bombs
+	files   []string        // relative paths returned to the caller (files and links, no dirs)
+	created []string        // for cleanup: every entry we really created, in creation order
+	regular map[string]bool // regular files this run wrote (absolute); hard links accept only these
 }
 
-// note 记一个成员。MaxTotalBytes 只管字节，管不住 inode：一个几十 MB 的 zip 可以
-// 塞几百万个空条目，解出来就是几百万个文件。
+// note records one member. MaxTotalBytes counts bytes, not inodes: a few dozen MB of
+// zip can hold millions of empty entries, and that unpacks into millions of files.
 func (e *extractor) note() error {
 	e.entries++
 	if e.entries > maxEntries {
@@ -263,19 +287,22 @@ func (e *extractor) run(src string) error {
 	}
 }
 
-// within 判断 p 是不是 destDir 本身或它里面的东西。
-// 前缀比较必须带上分隔符：不带的话 dest=/x/dest 会把 /x/destevil 当成自己人。
+// within reports whether p is destDir itself or something inside it.
+// The prefix comparison MUST carry the separator: without it, dest=/x/dest treats
+// /x/destevil as one of its own.
 func within(dest, p string) bool {
 	return p == dest || strings.HasPrefix(p, dest+string(filepath.Separator))
 }
 
-// resolve 把成员名解析成 destDir 下的绝对路径，同时返回相对路径。
-// 判定是纯词法的（Clean + 带分隔符的前缀比较），不看盘上有什么：
-//   - 只查 strings.Contains("..") 拦不住 "a/../../b"，也会误杀 "..foo"
-//   - 前缀比较必须带分隔符，否则 dest=/tmp/x 会把 /tmp/xevil 当成自己人
+// resolve turns a member name into an absolute path under destDir, and returns the
+// relative path alongside it. The check is purely lexical (Clean plus a
+// separator-aware prefix comparison) and never looks at what is on disk:
+//   - a bare strings.Contains("..") misses "a/../../b" and falsely rejects "..foo"
+//   - the prefix comparison needs the separator, or dest=/tmp/x treats /tmp/xevil as
+//     one of its own
 //
-// 反斜杠一律当成分隔符：zip 里的 "..\evil" 在 Unix 上是个合法文件名，
-// 但作者绝不会真想要这么个名字，而攻击者会。
+// Backslashes always count as separators: "..\evil" is a legal file name on Unix, but
+// no author ever meant to ship that name, while an attacker does.
 func (e *extractor) resolve(name string) (full, rel string, err error) {
 	n := strings.ReplaceAll(name, `\`, "/")
 	if strings.TrimSpace(n) == "" {
@@ -295,12 +322,15 @@ func (e *extractor) resolve(name string) (full, rel string, err error) {
 	return full, rel, nil
 }
 
-// checkLinkTarget 校验链接目标解析之后仍落在 destDir 内。
-// 相对目标按链接自己所在的目录解析（符号链接就是这么被内核解析的）。
+// checkLinkTarget verifies that a link target still resolves inside destDir.
+// A relative target resolves against the link's own directory, which is exactly how
+// the kernel resolves symlinks.
 //
-// ⚠ 这一层【不足以】保证安全，别把它当成全部：词法判定按词法父目录算，内核按真实
-// 父目录算，两边深度错开一层就能爬出去。真正兜底的是 mkdirAll 里"路径中间不许有
-// 符号链接"那一条（详见那里的反例），以及下面这条"目标里不许有回头的 .."。
+// WARNING: this layer alone is NOT enough, do not treat it as the whole defence. The
+// lexical check resolves against the lexical parent, the kernel against the real
+// parent, and one level of skew between the two is all it takes to climb out. The
+// real backstops are the "no symlink anywhere along the path" rule in mkdirAll (see
+// the counter-example there) and the "no backtracking .." rule right below.
 func (e *extractor) checkLinkTarget(linkFull, target string) error {
 	t := strings.ReplaceAll(target, `\`, "/")
 	if strings.TrimSpace(t) == "" {
@@ -309,11 +339,14 @@ func (e *extractor) checkLinkTarget(linkFull, target string) error {
 	if strings.HasPrefix(t, "/") || filepath.IsAbs(filepath.FromSlash(t)) {
 		return fmt.Errorf("%w: symlink %s points at absolute path %q", ErrTraversal, filepath.Base(linkFull), target)
 	}
-	// 目标里不许出现"回头的 .."：开头连着的 .. 是从链接自己的父目录往上爬，而那条
-	// 父链已经被 mkdirAll 保证全是真目录，所以词法和内核算出来一样；一旦先迈过一段
-	// 普通名字再 ..，那一段可能是个指得比自己浅的符号链接，Clean 会把这个 .. 消掉，
-	// 于是词法看着还在界内，内核却已经爬到 destDir 外面了（x -> "." 再 "x/.." 就是）。
-	// 正经打包工具不会写 a/../b 这种冗余路径，拦掉零误伤。
+	// No backtracking ".." in the target. Leading ".."s climb from the link's own
+	// parent, and mkdirAll has already guaranteed that entire parent chain is real
+	// directories, so lexical and kernel resolution agree. But once a target steps
+	// through a plain name and only then hits "..", that name may be a symlink
+	// pointing shallower than itself; Clean cancels the ".." against it, so the
+	// lexical result still looks inside while the kernel has already climbed out of
+	// destDir (x -> "." followed by "x/.." is exactly this). Real packaging tools
+	// never emit redundant a/../b paths, so refusing them costs nothing.
 	seenName := false
 	for _, seg := range strings.Split(t, "/") {
 		switch seg {
@@ -335,8 +368,9 @@ func (e *extractor) checkLinkTarget(linkFull, target string) error {
 	return nil
 }
 
-// safeMode 只保留两档权限：原本可执行的给 0755，其余 0644。
-// 绝不照抄包里的 mode —— setuid/setgid/sticky 一个都不能带出来。
+// safeMode keeps exactly two permission tiers: 0755 if the entry was executable, 0644
+// otherwise. NEVER copy the archive's mode through - setuid, setgid and sticky must
+// not survive extraction.
 func safeMode(m os.FileMode) os.FileMode {
 	if m.Perm()&0o111 != 0 {
 		return 0o755
@@ -353,29 +387,34 @@ func (e *extractor) track(full, rel string, isDir bool) {
 
 func (e *extractor) cleanup() {
 	for i := len(e.created) - 1; i >= 0; i-- {
-		os.Remove(e.created[i]) // 倒着删，目录里的东西先没，目录才空得掉
+		os.Remove(e.created[i]) // reverse order: contents go first so directories can empty
 	}
 }
 
-// mkdirAll 从 destDir 往下逐段建目录，把真正新建的每一层记下来，好在失败时精确回滚
-// —— 不能拿 WalkDir 扫一遍就删，destDir 里可能本来就有别人的东西。
+// mkdirAll creates directories one element at a time from destDir down, recording
+// every level it actually created so a failure can roll back precisely. We cannot
+// just WalkDir and delete, because destDir may already hold someone else's files.
 //
-// 每一段都要 Lstat 一次并拒绝符号链接，这是"不跟随出界链接"的真正落点：
-// resolve() 的词法判定按【词法】父目录解析链接目标，内核按【真实】父目录解析，
-// 两者深度一旦对不上就能爬出去。反例（三条成员各自都能过词法校验）：
+// Every element gets its own Lstat and symlinks are refused. THIS is where "never
+// follow a link out of bounds" is really enforced: resolve()'s lexical check resolves
+// a link target against the LEXICAL parent while the kernel uses the REAL parent, and
+// the moment those two depths disagree, the path climbs out. Counter-example - each
+// of these three members passes the lexical check on its own:
 //
-//	x        -> "."   词法落点 dest/x，within ✓
-//	x/up     -> ".."  词法 Join(dest/x, "..") = dest ✓，真实落点却是 dest/up -> dest 的父目录
-//	x/up/pwned        词法 dest/x/up/pwned ✓，真实写到 destDir 外面
+//	x        -> "."   lexically dest/x, within ok
+//	x/up     -> ".."  lexically Join(dest/x, "..") = dest, ok; really dest/up -> destDir's parent
+//	x/up/pwned        lexically dest/x/up/pwned, ok; really written outside destDir
 //
-// 所以"被放行的链接必定指向 destDir 内部"这条归纳是不成立的，必须在穿过路径的
-// 时候再拦一道。顺带也挡住了 destDir 里本来就躺着的符号链接。
+// So "any link we let through must point inside destDir" does not hold by induction,
+// and the path has to be checked again as we walk it. This also blocks symlinks that
+// were already sitting in destDir before we started.
 //
-// 注意不能在"这一段已经存在且是目录"时就 return —— Lstat 一个深层路径会把中间
-// 的符号链接悄悄解析掉，那样最上面几段永远检查不到。
+// Do NOT return early when an element already exists and is a directory: Lstat on a
+// deep path silently resolves the symlinks in the middle, and the upper elements
+// would then never get checked at all.
 func (e *extractor) mkdirAll(dir string) error {
 	if !within(e.dest, dir) {
-		return nil // 往外走的路径 resolve 早就拦下了
+		return nil // paths heading outward were already refused by resolve
 	}
 	rel, err := filepath.Rel(e.dest, dir)
 	if err != nil {
@@ -416,9 +455,9 @@ func (e *extractor) writeFile(full, rel string, r io.Reader, mode os.FileMode) e
 	if err != nil {
 		return fmt.Errorf("archive: cannot write %s: %w", rel, err)
 	}
-	e.track(full, rel, false) // 先记账：写到一半失败也要清得掉
+	e.track(full, rel, false) // book it first: a half-written file still has to be cleanable
 
-	// 多读一个字节就知道超没超，不用信包里自报的大小。
+	// Read one byte past the budget to spot an overrun; never trust the declared size.
 	remain := e.limit - e.written
 	n, copyErr := io.Copy(f, io.LimitReader(r, remain+1))
 	closeErr := f.Close()
@@ -433,7 +472,7 @@ func (e *extractor) writeFile(full, rel string, r io.Reader, mode os.FileMode) e
 	}
 	e.written += n
 
-	// OpenFile 的权限会被 umask 削掉，两档权限得自己钉一次。
+	// OpenFile's mode gets trimmed by umask, so pin the two tiers explicitly.
 	if err := os.Chmod(full, mode); err != nil {
 		return fmt.Errorf("archive: cannot set permissions on %s: %w", rel, err)
 	}
@@ -458,13 +497,16 @@ func (e *extractor) writeSymlink(full, rel, target string) error {
 	return nil
 }
 
-// writeHardlink 的目标是包内路径，一样要落在 destDir 里。
+// writeHardlink's target is a path inside the package and has to land inside destDir
+// like everything else.
 //
-// 而且必须是【本次解压自己写出来的普通文件】：os.Link 会跟随目标路径中间的符号
-// 链接，所以光做词法校验的话，destDir 里一个指向外面的旧链接就能让包把系统上任意
-// 一个文件硬链进来（拿到的是同一个 inode，不是副本）。tar 里的硬链接本来就只会
-// 指向前面出现过的成员，这条限制不会误伤正经包，同时也让"目标在包里出现得更晚"
-// 这种手搓包响亮地失败而不是留下半个包。
+// It must also be A REGULAR FILE THIS EXTRACTION ITSELF WROTE. os.Link follows
+// symlinks in the middle of the target path, so with a lexical check alone, one stale
+// outward-pointing link already sitting in destDir lets a package hard-link any file
+// on the system into itself - the same inode, not a copy. Hard links in tar only ever
+// point at members that appeared earlier, so this restriction never hits a real
+// package; it also makes a hand-rolled archive whose target appears later fail loudly
+// instead of leaving half a package behind.
 func (e *extractor) writeHardlink(full, rel, target string) error {
 	targetFull, _, err := e.resolve(target)
 	if err != nil {
@@ -484,11 +526,12 @@ func (e *extractor) writeHardlink(full, rel, target string) error {
 		return fmt.Errorf("archive: cannot create hard link %s: %w", rel, err)
 	}
 	e.track(full, rel, false)
-	e.regular[full] = true // 硬链接落地之后自己也是一个普通文件，可以再被链
+	e.regular[full] = true // once written, a hard link is itself a regular file and can be linked again
 	return nil
 }
 
-// removeExisting 处理包里同名条目出现两次的情况：直接盖会跟着旧的符号链接走。
+// removeExisting handles the same name appearing twice in one archive: writing over it
+// in place would follow the older symlink.
 func (e *extractor) removeExisting(full string) error {
 	fi, err := os.Lstat(full)
 	if err != nil || fi.IsDir() {
@@ -523,11 +566,13 @@ func (e *extractor) untar(r io.Reader) error {
 				return err
 			}
 		case tar.TypeReg, tar.TypeGNUSparse:
-			// GNU 稀疏文件（`tar --sparse`）是【有内容的普通文件】，只是内容按稀疏段
-			// 编码。Go 的 reader 已经把 tr 包成 sparseFileReader，读出来就是展开后的
-			// 完整内容，但它【保留】Typeflag == 'S' 交给我们（PAX 格式的稀疏文件才会
-			// 归一成 TypeReg）。落进 default 就是静默少一个文件、Extract 还返回成功。
-			// 展开后可以非常大，writeFile 的字节上限正好兜住。
+			// A GNU sparse file (`tar --sparse`) is a REGULAR FILE WITH CONTENT,
+			// just encoded as sparse segments. Go's reader has already wrapped tr in
+			// a sparseFileReader, so reading it yields the fully expanded content -
+			// but it KEEPS Typeflag == 'S' for us (only PAX-format sparse files get
+			// normalised to TypeReg). Falling into default would silently drop a file
+			// while Extract still reported success. Expanded content can be huge, and
+			// writeFile's byte limit covers exactly that.
 			if err := e.writeFile(full, rel, tr, safeMode(hdr.FileInfo().Mode())); err != nil {
 				return err
 			}
@@ -540,14 +585,18 @@ func (e *extractor) untar(r io.Reader) error {
 				return err
 			}
 		case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
-			// 设备文件、FIFO：本来就没有内容，跳过不报错。
-			// 二进制包里出现这些只可能是打包工具带进来的噪音，不值得让整次安装失败。
+			// Device nodes and FIFOs carry no content, so skip them without erroring.
+			// In a binary release these are only ever noise the packaging tool swept
+			// in, and not worth failing the whole install over.
 			continue
 		default:
-			// 其余类型（PAX 全局头、GNU 卷标之类）本身不带内容，同样跳过。
-			// 但只要它声明了内容就不能默默扔掉：Go 的 reader 会把这些字节从流里解出来
-			// 丢掉，MaxTotalBytes 数不到（几 KiB 的包能烧掉几百 MiB 的解压），而
-			// "少一个文件却安装成功"比装不上更难查。
+			// Everything else - PAX global headers, GNU volume labels and friends -
+			// carries no content either, so skip it the same way. But the moment such
+			// an entry DECLARES content it must not be dropped silently: Go's reader
+			// decompresses those bytes out of the stream and throws them away, where
+			// MaxTotalBytes never sees them (a few KiB of archive can burn hundreds
+			// of MiB of decompression), and "a file is missing yet the install
+			// succeeded" is far harder to diagnose than a refusal.
 			if hdr.Size > 0 {
 				return fmt.Errorf("%w: entry %s has unknown type %q yet declares %d bytes of content; refusing to silently drop it",
 					ErrUnsupported, rel, hdr.Typeflag, hdr.Size)
@@ -568,7 +617,7 @@ func (e *extractor) unzip(zr *zip.Reader) error {
 		}
 		mode := f.Mode()
 		switch {
-		case mode&os.ModeSymlink != 0: // 必须排在 ModeType 前面，符号链接也在 ModeType 里
+		case mode&os.ModeSymlink != 0: // must come before the ModeType case - symlink is part of ModeType
 			target, err := readZipLinkTarget(f)
 			if err != nil {
 				return err
@@ -581,7 +630,7 @@ func (e *extractor) unzip(zr *zip.Reader) error {
 				return err
 			}
 		case mode&os.ModeType != 0:
-			continue // 设备文件 / FIFO / socket：跳过
+			continue // device node / FIFO / socket: skip
 		default:
 			rc, err := f.Open()
 			if err != nil {

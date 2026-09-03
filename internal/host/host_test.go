@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-// 内置模板必须拼出真实存在的地址 —— 这四条串写错了没有任何测试以外的地方会说。
+// The built-in templates must build URLs that really exist — nothing outside a
+// test will ever tell you one of these four strings is wrong.
 func TestBuiltinURLs(t *testing.T) {
 	tests := []struct {
 		host        string
@@ -21,7 +22,7 @@ func TestBuiltinURLs(t *testing.T) {
 		clone       string
 		release     string
 		web         string
-		placeholder bool // 内置表里有这个形状，但 Lookup 会拒（见 TestLookupRefusesPlaceholder）
+		placeholder bool // the shape is in the built-in table, but Lookup refuses it (see TestLookupRefusesPlaceholder)
 	}{
 		{
 			host:    "github",
@@ -58,38 +59,39 @@ func TestBuiltinURLs(t *testing.T) {
 		t.Run(tt.host, func(t *testing.T) {
 			h, ok := Builtin()[tt.host]
 			if !ok {
-				t.Fatalf("内置表里没有 %q", tt.host)
+				t.Fatalf("the built-in table has no %q", tt.host)
 			}
-			// 真托管方还必须能从 Lookup 原样拿到；形状那条由 Lookup 拒掉。
+			// A real provider must also come back from Lookup unchanged; the shape is
+			// the one Lookup refuses.
 			if !tt.placeholder {
 				got, err := Lookup(tt.host, nil)
 				if err != nil {
-					t.Fatalf("Lookup(%q) 报错: %v", tt.host, err)
+					t.Fatalf("Lookup(%q) failed: %v", tt.host, err)
 				}
 				if got != h {
-					t.Errorf("Lookup 和 Builtin 对不上:\n%+v\n%+v", got, h)
+					t.Errorf("Lookup and Builtin disagree:\n%+v\n%+v", got, h)
 				}
 			}
 			if h.Name != tt.host {
-				t.Errorf("Name = %q, 想要 %q", h.Name, tt.host)
+				t.Errorf("Name = %q, want %q", h.Name, tt.host)
 			}
 			if got := h.RawURL("Derrity", "tinyserve", "v1.2.3", "toy.toml"); got != tt.raw {
-				t.Errorf("RawURL = %q\n想要      %q", got, tt.raw)
+				t.Errorf("RawURL = %q\nwant     %q", got, tt.raw)
 			}
 			if got := h.CloneURL("Derrity", "tinyserve"); got != tt.clone {
-				t.Errorf("CloneURL = %q\n想要      %q", got, tt.clone)
+				t.Errorf("CloneURL = %q\nwant       %q", got, tt.clone)
 			}
 			if got := h.ReleaseURL("Derrity", "tinyserve", "v1.2.3", asset); got != tt.release {
-				t.Errorf("ReleaseURL = %q\n想要        %q", got, tt.release)
+				t.Errorf("ReleaseURL = %q\nwant         %q", got, tt.release)
 			}
 			if got := h.WebURL("Derrity", "tinyserve"); got != tt.web {
-				t.Errorf("WebURL = %q\n想要    %q", got, tt.web)
+				t.Errorf("WebURL = %q\nwant     %q", got, tt.web)
 			}
 		})
 	}
 }
 
-// 模板里不能留下没换掉的占位符，也不能有第二个包名混进来。
+// No placeholder may survive substitution, and no second package name may sneak in.
 func TestNoLeftoverPlaceholders(t *testing.T) {
 	for name, h := range Builtin() {
 		urls := []string{
@@ -100,22 +102,22 @@ func TestNoLeftoverPlaceholders(t *testing.T) {
 		}
 		for _, u := range urls {
 			if strings.Contains(u, "{") || strings.Contains(u, "}") {
-				t.Errorf("%s: %q 里还有没换掉的占位符", name, u)
+				t.Errorf("%s: %q still has an unsubstituted placeholder", name, u)
 			}
 		}
 	}
 }
 
-// 调用方拿到的是副本，改它不能污染下一次 Builtin()。
+// Callers get a copy; mutating it must not poison the next Builtin().
 func TestBuiltinIsNotShared(t *testing.T) {
 	m := Builtin()
 	m["github"] = Host{Raw: "https://evil.example/{path}"}
 	delete(m, "gitlab")
 	if got := Builtin()["github"].Raw; !strings.HasPrefix(got, "https://raw.githubusercontent.com/") {
-		t.Errorf("内置表被污染了: %q", got)
+		t.Errorf("the built-in table was poisoned: %q", got)
 	}
 	if _, ok := Builtin()["gitlab"]; !ok {
-		t.Error("内置表被污染了: gitlab 没了")
+		t.Error("the built-in table was poisoned: gitlab is gone")
 	}
 }
 
@@ -128,66 +130,68 @@ func TestLookup(t *testing.T) {
 		name      string
 		lookup    string
 		overrides map[string]Host
-		wantRaw   string // 空表示期望报错
+		wantRaw   string // empty means an error is expected
 		wantName  string
 	}{
-		{name: "内置", lookup: "github", wantRaw: "https://raw.githubusercontent.com/o/r/ref/p", wantName: "github"},
-		{name: "大小写不敏感", lookup: "GitHub", wantRaw: "https://raw.githubusercontent.com/o/r/ref/p", wantName: "github"},
-		{name: "覆盖内置", lookup: "github", overrides: overrides, wantRaw: "https://mirror.example.com/o/r/ref/p", wantName: "github"},
-		{name: "自建", lookup: "mygit", overrides: overrides, wantRaw: "https://git.example.com/o/r/raw/tag/ref/p", wantName: "mygit"},
-		{name: "不认识", lookup: "sourcehut"},
-		{name: "空名字", lookup: ""},
-		{name: "只有空格", lookup: "   "},
+		{name: "built-in", lookup: "github", wantRaw: "https://raw.githubusercontent.com/o/r/ref/p", wantName: "github"},
+		{name: "case insensitive", lookup: "GitHub", wantRaw: "https://raw.githubusercontent.com/o/r/ref/p", wantName: "github"},
+		{name: "shadows a built-in", lookup: "github", overrides: overrides, wantRaw: "https://mirror.example.com/o/r/ref/p", wantName: "github"},
+		{name: "self-hosted", lookup: "mygit", overrides: overrides, wantRaw: "https://git.example.com/o/r/raw/tag/ref/p", wantName: "mygit"},
+		{name: "unknown", lookup: "sourcehut"},
+		{name: "empty name", lookup: ""},
+		{name: "whitespace only", lookup: "   "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h, err := Lookup(tt.lookup, tt.overrides)
 			if tt.wantRaw == "" {
 				if !errors.Is(err, ErrUnknownHost) {
-					t.Fatalf("想要 ErrUnknownHost，拿到 %v", err)
+					t.Fatalf("want ErrUnknownHost, got %v", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("Lookup(%q) 报错: %v", tt.lookup, err)
+				t.Fatalf("Lookup(%q) failed: %v", tt.lookup, err)
 			}
 			if got := h.RawURL("o", "r", "ref", "p"); got != tt.wantRaw {
-				t.Errorf("RawURL = %q, 想要 %q", got, tt.wantRaw)
+				t.Errorf("RawURL = %q, want %q", got, tt.wantRaw)
 			}
 			if h.Name != tt.wantName {
-				t.Errorf("Name = %q, 想要 %q", h.Name, tt.wantName)
+				t.Errorf("Name = %q, want %q", h.Name, tt.wantName)
 			}
 		})
 	}
 }
 
-// 报错要能行动：说出现在认识哪些，以及自建怎么加。
+// The error has to be actionable: name what is known now, and how to add a
+// self-hosted one.
 func TestUnknownHostErrorIsActionable(t *testing.T) {
 	_, err := Lookup("sourcehut", map[string]Host{"mygit": {}})
 	if err == nil {
-		t.Fatal("想要报错")
+		t.Fatal("want an error")
 	}
 	for _, want := range []string{"sourcehut", "github", "mygit", "config.toml"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("报错里没有 %q: %v", want, err)
+			t.Errorf("the error does not mention %q: %v", want, err)
 		}
 	}
 }
 
-// 没配的模板返回空串，调用方据此报「这家不支持」而不是拼出个半截 URL。
+// An unset template yields an empty string so the caller can say "this host does
+// not support that" instead of building half a URL.
 func TestEmptyTemplate(t *testing.T) {
 	var h Host
 	if got := h.RawURL("o", "r", "ref", "p"); got != "" {
-		t.Errorf("RawURL = %q, 想要空串", got)
+		t.Errorf("RawURL = %q, want an empty string", got)
 	}
 	if got := h.CloneURL("o", "r"); got != "" {
-		t.Errorf("CloneURL = %q, 想要空串", got)
+		t.Errorf("CloneURL = %q, want an empty string", got)
 	}
 	if got := h.ReleaseURL("o", "r", "v1", "a"); got != "" {
-		t.Errorf("ReleaseURL = %q, 想要空串", got)
+		t.Errorf("ReleaseURL = %q, want an empty string", got)
 	}
 	if got := h.WebURL("o", "r"); got != "" {
-		t.Errorf("WebURL = %q, 想要空串", got)
+		t.Errorf("WebURL = %q, want an empty string", got)
 	}
 }
 
@@ -197,26 +201,27 @@ func TestParseLsRemote(t *testing.T) {
 		out  string
 		want []string
 	}{
-		{name: "空输入", out: ""},
-		{name: "只有空白", out: "\n  \n\t\n"},
+		{name: "empty input", out: ""},
+		{name: "whitespace only", out: "\n  \n\t\n"},
 		{
-			name: "普通",
+			name: "ordinary",
 			out: "8f1c0a2\trefs/tags/v0.9.0\n" +
 				"3b2d4e6\trefs/tags/v1.0.0\n" +
 				"9a7c1f0\trefs/tags/v1.10.0\n",
 			want: []string{"v0.9.0", "v1.0.0", "v1.10.0"},
 		},
 		{
-			// annotated tag 的解引用行：--refs 通常已经滤掉了，滤不掉时也不能变成
-			// "v1.0.0^{}" 这种解析不了的版本号，更不能跟 v1.0.0 重复。
-			name: "annotated 解引用行",
+			// The dereference line of an annotated tag: --refs usually filters it out,
+			// and when it does not, it must not turn into an unparsable version like
+			// "v1.0.0^{}", nor duplicate v1.0.0.
+			name: "annotated dereference line",
 			out: "3b2d4e6\trefs/tags/v1.0.0\n" +
 				"aa11bb2\trefs/tags/v1.0.0^{}\n" +
 				"cc33dd4\trefs/tags/v2.0.0^{}\n",
 			want: []string{"v1.0.0", "v2.0.0"},
 		},
 		{
-			name: "非 tag 的 ref 全部忽略",
+			name: "every non-tag ref is ignored",
 			out: "3b2d4e6\tHEAD\n" +
 				"3b2d4e6\trefs/heads/main\n" +
 				"77ee88f\trefs/pull/12/head\n" +
@@ -224,22 +229,22 @@ func TestParseLsRemote(t *testing.T) {
 			want: []string{"v1.0.0"},
 		},
 		{
-			name: "CRLF 和残缺行",
-			out:  "3b2d4e6\trefs/tags/v1.0.0\r\n没有制表符的一行\n\n5c6d7e8\trefs/tags/v1.1.0\n",
+			name: "CRLF and malformed lines",
+			out:  "3b2d4e6\trefs/tags/v1.0.0\r\na line with no tab\n\n5c6d7e8\trefs/tags/v1.1.0\n",
 			want: []string{"v1.0.0", "v1.1.0"},
 		},
 		{
-			name: "非 semver 的 tag 也原样带回去（挑版本是 semver 包的事）",
+			name: "non-semver tags come back as-is (picking a version is the semver package's job)",
 			out:  "3b2d4e6\trefs/tags/release-2024\n5c6d7e8\trefs/tags/nightly\n",
 			want: []string{"release-2024", "nightly"},
 		},
 		{
-			name: "带斜杠的 tag 名",
+			name: "tag names containing slashes",
 			out:  "3b2d4e6\trefs/tags/cli/v1.0.0\n",
 			want: []string{"cli/v1.0.0"},
 		},
 		{
-			name: "只剩 ^{} 的空 tag 名被丢掉",
+			name: "a tag name that is only ^{} gets dropped",
 			out:  "3b2d4e6\trefs/tags/^{}\n5c6d7e8\trefs/tags/v1.0.0\n",
 			want: []string{"v1.0.0"},
 		},
@@ -251,15 +256,16 @@ func TestParseLsRemote(t *testing.T) {
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseLsRemote = %#v, 想要 %#v", got, tt.want)
+				t.Errorf("parseLsRemote = %#v, want %#v", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestTagsEmptyCloneURL(t *testing.T) {
-	// 「而不是去跑 git」这半句得真的断言出来：光看 err != nil 的话，把这道闸拆了
-	// 测试照样绿 —— git 会代替我们对着一个空地址报一句它自己的错。
+	// The "and does not run git" half has to be asserted for real: checking only
+	// err != nil would still pass with the guard ripped out — git would report its
+	// own error about the empty URL on our behalf.
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
 	writeFakeGit(t, dir, "#!/bin/sh\n: > %s\necho \"deadbee\trefs/tags/v1.0.0\"\n", marker)
@@ -267,43 +273,46 @@ func TestTagsEmptyCloneURL(t *testing.T) {
 
 	for _, empty := range []string{"", "  ", "\t\n"} {
 		if _, err := Tags(context.Background(), empty); err == nil {
-			t.Fatalf("clone 地址是 %q 时应该报错", empty)
+			t.Fatalf("a clone URL of %q should be an error", empty)
 		}
 		if _, statErr := os.Stat(marker); statErr == nil {
-			t.Fatalf("clone 地址是 %q，却还是把 git 跑起来了", empty)
+			t.Fatalf("clone URL %q: git was started anyway", empty)
 		}
 	}
 }
 
-// stderr 是远端服务器能任意往里写字的地方，而我们只用得到第一行。
+// stderr is where the remote server can write whatever it likes, and we only ever
+// use the first line.
 func TestCappedBufferDropsTheTail(t *testing.T) {
 	var c cappedBuffer
 	chunk := []byte(strings.Repeat("x", 4096))
 	for range 256 { // 1 MiB
 		n, err := c.Write(chunk)
 		if n != len(chunk) || err != nil {
-			t.Fatalf("Write = (%d, %v)，必须谎报全写完，否则 git 会提前拿到 EPIPE", n, err)
+			t.Fatalf("Write = (%d, %v); it must claim a full write or git gets an early EPIPE", n, err)
 		}
 	}
 	if got := len(c.String()); got != maxStderrBytes {
-		t.Errorf("缓冲区留了 %d 字节，上限是 %d", got, maxStderrBytes)
+		t.Errorf("the buffer kept %d bytes, the cap is %d", got, maxStderrBytes)
 	}
 }
 
-// git 不在 PATH 上时，错误要告诉用户装 git，而不是甩一句 exec: not found。
+// With no git on PATH, the error must tell the user to install git, not throw
+// "exec: not found" at them.
 func TestTagsWithoutGit(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := Tags(context.Background(), "https://example.com/o/r")
 	if err == nil {
-		t.Fatal("想要报错")
+		t.Fatal("want an error")
 	}
 	if !strings.Contains(err.Error(), "git") || !strings.Contains(err.Error(), "install") {
-		t.Errorf("报错不可行动: %v", err)
+		t.Errorf("the error is not actionable: %v", err)
 	}
 }
 
-// 铁律级的一条：私有仓库会让 git 停在交互式密码提示上永不返回。
-// 用一个假的 git 把它收到的环境变量回显成 tag 名，确认真的设上了。
+// An iron-law-grade one: a private repo makes git sit on an interactive password
+// prompt forever. Use a fake git that echoes the environment it received back as
+// tag names, to confirm the variables really are set.
 func TestTagsDisablesTerminalPrompt(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "git")
@@ -317,15 +326,16 @@ func TestTagsDisablesTerminalPrompt(t *testing.T) {
 
 	tags, err := Tags(context.Background(), "https://example.com/o/r")
 	if err != nil {
-		t.Fatalf("Tags 报错: %v", err)
+		t.Fatalf("Tags failed: %v", err)
 	}
 	want := []string{"prompt-0", "askpass-[]"}
 	if !reflect.DeepEqual(tags, want) {
-		t.Fatalf("环境变量没设上: %#v, 想要 %#v", tags, want)
+		t.Fatalf("the environment was not set: %#v, want %#v", tags, want)
 	}
 }
 
-// git 自己失败时，把它的第一行 stderr 带给用户 —— 那句话通常就是原因。
+// When git itself fails, relay its first stderr line to the user — that sentence
+// is usually the actual reason.
 func TestTagsReportsGitStderr(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "git")
@@ -337,38 +347,40 @@ func TestTagsReportsGitStderr(t *testing.T) {
 
 	_, err := Tags(context.Background(), "https://example.com/o/nope")
 	if err == nil {
-		t.Fatal("想要报错")
+		t.Fatal("want an error")
 	}
 	if !strings.Contains(err.Error(), "repository not found") {
-		t.Errorf("报错里没带 git 的原话: %v", err)
+		t.Errorf("the error does not carry git's own words: %v", err)
 	}
 }
 
-// context 到期要说是超时，而不是把 "signal: killed" 甩给用户。
+// An expired context must say "timed out", not dump "signal: killed" on the user.
 func TestTagsTimeout(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "git")
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// dir 排在最前面，所以假的 git 仍然赢；后面那截是给脚本里的 sleep 用的。
+	// dir goes first so the fake git still wins; the rest is there for the sleep
+	// inside the script.
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	_, err := Tags(ctx, "https://example.com/o/r")
 	if err == nil {
-		t.Fatal("想要报错")
+		t.Fatal("want an error")
 	}
 	if !strings.Contains(err.Error(), "timed out") {
-		t.Errorf("没说是超时: %v", err)
+		t.Errorf("it does not say it timed out: %v", err)
 	}
 }
 
-// 真跑一次 git（本地仓库，不联网）：证明命令行拼对了、annotated tag 也能剥干净。
+// Really run git once (against a local repo, no network): proof that the command
+// line is right and that annotated tags come back clean.
 func TestTagsAgainstLocalRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("这台机器上没有 git")
+		t.Skip("no git on this machine")
 	}
 	repo := t.TempDir()
 	run := func(args ...string) {
@@ -385,119 +397,126 @@ func TestTagsAgainstLocalRepo(t *testing.T) {
 	}
 	run("init", "-q")
 	run("commit", "-q", "--allow-empty", "-m", "one")
-	run("tag", "v1.0.0")                          // 轻量 tag
-	run("tag", "-a", "v1.2.0", "-m", "annotated") // annotated：会多一行 ^{}
-	run("tag", "release-2024")                    // 非 semver，照样带回去
+	run("tag", "v1.0.0")                          // lightweight tag
+	run("tag", "-a", "v1.2.0", "-m", "annotated") // annotated: adds a ^{} line
+	run("tag", "release-2024")                    // not semver, comes back anyway
 
 	tags, err := Tags(context.Background(), repo)
 	if err != nil {
-		t.Fatalf("Tags 报错: %v", err)
+		t.Fatalf("Tags failed: %v", err)
 	}
 	got := map[string]bool{}
 	for _, tag := range tags {
 		if strings.Contains(tag, "^") || strings.HasPrefix(tag, "refs/") {
-			t.Errorf("tag 没剥干净: %q", tag)
+			t.Errorf("tag not stripped clean: %q", tag)
 		}
 		got[tag] = true
 	}
 	for _, want := range []string{"v1.0.0", "v1.2.0", "release-2024"} {
 		if !got[want] {
-			t.Errorf("少了 tag %q，拿到的是 %v", want, tags)
+			t.Errorf("missing tag %q, got %v", want, tags)
 		}
 	}
 	if len(tags) != 3 {
-		t.Errorf("有重复或多余的 tag: %v", tags)
+		t.Errorf("duplicate or extra tags: %v", tags)
 	}
 }
 
-// gitea 那条是「形状」不是托管方：直接用会打到一个 RFC 2606 的保留域名上，
-// 报出来只是一句 DNS 错误 —— 用户根本看不出自己该去配什么。必须在这里拦住，
-// 并且把可以直接抄的模板给他。
+// The gitea entry is a "shape", not a provider: using it as-is aims at an RFC 2606
+// reserved domain and all the user gets is a DNS error — which tells them nothing
+// about what they were supposed to configure. Stop it here and hand them a template
+// they can paste.
 //
-// 这里只断言「模板里有 host 名字和四个键」。模板长什么样（[hosts.x] 段落还是
-// hosts.x = {…} 行内表）是排版，不是这条测试要钉的东西 —— 真正该钉的是
-// 「抄回去能不能用」，那条在 hint_test.go 里，它把这一行喂回 TOML 解析器。
+// This only asserts that the template names the host and the four keys. What the
+// template looks like ([hosts.x] section vs. hosts.x = {…} inline table) is
+// formatting, not what this test pins down — the thing worth pinning is "does it
+// work when pasted back", and that one lives in hint_test.go, where the line is fed
+// to a TOML parser.
 func TestLookupRefusesPlaceholder(t *testing.T) {
 	_, err := Lookup("gitea", nil)
 	if !errors.Is(err, ErrUnknownHost) {
-		t.Fatalf("想要 ErrUnknownHost，拿到 %v", err)
+		t.Fatalf("want ErrUnknownHost, got %v", err)
 	}
 	for _, want := range []string{"config.toml", "hosts.gitea", "raw", "clone", "release", "web"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("报错里没有 %q: %v", want, err)
+			t.Errorf("the error does not mention %q: %v", want, err)
 		}
 	}
-	// 拒绝掉的东西不能出现在别处报错的「现在认识的是」名单里。
+	// What we refuse must never show up in another error's "known hosts" list.
 	_, err = Lookup("sourcehut", nil)
 	if err == nil {
-		t.Fatal("想要报错")
+		t.Fatal("want an error")
 	}
 	if i := strings.Index(err.Error(), "Known hosts are"); i >= 0 {
 		list, _, _ := strings.Cut(err.Error()[i:], ";")
 		if strings.Contains(list, "gitea") {
-			t.Errorf("已知列表里不该有被拒绝的 gitea: %q", list)
+			t.Errorf("the known list must not contain the refused gitea: %q", list)
 		}
 	}
-	// 但用户自己在 config.toml 里指到真域名之后，同一个名字必须能用。
+	// But once the user points it at a real domain in config.toml, the same name
+	// must work.
 	h, err := Lookup("gitea", map[string]Host{"gitea": giteaPaths("https://git.example.com")})
 	if err != nil {
-		t.Fatalf("配了自己的域名还被拒: %v", err)
+		t.Fatalf("still refused after configuring a real domain: %v", err)
 	}
 	if got, want := h.CloneURL("o", "r"), "https://git.example.com/o/r"; got != want {
-		t.Errorf("CloneURL = %q, 想要 %q", got, want)
+		t.Errorf("CloneURL = %q, want %q", got, want)
 	}
 }
 
-// 一个 [hosts.github] 打错了键名（clone_url 而不是 clone）会变成一段空配置，
-// 而它盖住内置的 github —— 从此 github 整个坏掉，而报错发生在三个包以外。
+// A [hosts.github] with a misspelled key (clone_url instead of clone) becomes an
+// empty section that shadows the built-in github — from then on github is entirely
+// broken, and the error surfaces three packages away.
 func TestLookupRejectsEmptyOverride(t *testing.T) {
 	_, err := Lookup("github", map[string]Host{"github": {}})
 	if !errors.Is(err, ErrUnknownHost) {
-		t.Fatalf("想要 ErrUnknownHost，拿到 %v", err)
+		t.Fatalf("want ErrUnknownHost, got %v", err)
 	}
 	for _, want := range []string{"[hosts.github]", "raw", "clone", "release", "web"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("报错里没有 %q: %v", want, err)
+			t.Errorf("the error does not mention %q: %v", want, err)
 		}
 	}
 }
 
-// 内置和 overrides 撞名时，「现在认识的是」不能把同一个名字念两遍。
+// When a built-in and an override share a name, the "known hosts" list must not
+// say that name twice.
 func TestKnownHostsListedOnce(t *testing.T) {
 	_, err := Lookup("sourcehut", map[string]Host{
 		"github": {Raw: "https://mirror.example.com/{owner}/{repo}/{ref}/{path}"},
 		"GitHub": {Raw: "https://mirror.example.com/{owner}/{repo}/{ref}/{path}"},
 	})
 	if err == nil {
-		t.Fatal("想要报错")
+		t.Fatal("want an error")
 	}
 	i := strings.Index(err.Error(), "Known hosts are")
 	if i < 0 {
-		t.Fatalf("报错里没有已知列表: %v", err)
+		t.Fatalf("the error has no known-hosts list: %v", err)
 	}
 	list, _, _ := strings.Cut(err.Error()[i:], ";")
 	if n := strings.Count(strings.ToLower(list), "github"); n != 1 {
-		t.Errorf("github 在已知列表里出现了 %d 次: %q", n, list)
+		t.Errorf("github appears %d times in the known list: %q", n, list)
 	}
 }
 
-// Name 会变成 ~/.toy/pkg/<host>/… 的目录名，大小写两种写法必须落到同一个目录，
-// 否则同一个包会被装成两份。
+// Name becomes the directory name in ~/.toy/pkg/<host>/…, so both spellings must
+// land in the same directory or the same package gets installed twice.
 func TestLookupNameIsCanonicalLowercase(t *testing.T) {
 	overrides := map[string]Host{"MyGit": {Raw: "https://git.example.com/{owner}/{repo}/{ref}/{path}"}}
 	h, err := Lookup("MyGit", overrides)
 	if err != nil {
-		t.Fatalf("Lookup 报错: %v", err)
+		t.Fatalf("Lookup failed: %v", err)
 	}
 	if h.Name != "mygit" {
-		t.Errorf("Name = %q, 想要 %q", h.Name, "mygit")
+		t.Errorf("Name = %q, want %q", h.Name, "mygit")
 	}
 }
 
-// asset 是四个入参里唯一来自包作者的（toy.toml 的 [artifact] 值）。
-// 它在四家托管方上都是一个扁平文件名，所以斜杠和 .. 一律转义掉：否则作者能把
-// 下载指到同一域名下别人的 release，而安装那一行仍然如实写着「来源 github.com/他自己」
-// —— 那就是铁律 8 说的静默撒谎。
+// asset is the only one of the four inputs that comes from the package author (the
+// [artifact] value in toy.toml). On all four providers it is a flat file name, so
+// slashes and .. are escaped away: otherwise an author could point the download at
+// someone else's release on the same domain while the install line still truthfully
+// reads "source github.com/<themselves>" — exactly the silent lie iron law 8 forbids.
 func TestReleaseURLEscapesAsset(t *testing.T) {
 	h, err := Lookup("github", nil)
 	if err != nil {
@@ -505,7 +524,7 @@ func TestReleaseURLEscapesAsset(t *testing.T) {
 	}
 	const base = "https://github.com/victim/repo/releases/download/v1.0.0/"
 	tests := []struct{ asset, want string }{
-		// 正常资产名一个字节都不能变
+		// an ordinary asset name must not change by a single byte
 		{"toy_1.0.0_linux_amd64.tar.gz", base + "toy_1.0.0_linux_amd64.tar.gz"},
 		{"../../../attacker/repo/releases/download/v9/evil", base + "..%2F..%2F..%2Fattacker%2Frepo%2Freleases%2Fdownload%2Fv9%2Fevil"},
 		{"my tool.tar.gz", base + "my%20tool.tar.gz"},
@@ -515,38 +534,44 @@ func TestReleaseURLEscapesAsset(t *testing.T) {
 	for _, tt := range tests {
 		got := h.ReleaseURL("victim", "repo", "v1.0.0", tt.asset)
 		if got != tt.want {
-			t.Errorf("ReleaseURL(asset=%q) = %q\n想要 %q", tt.asset, got, tt.want)
+			t.Errorf("ReleaseURL(asset=%q) = %q\nwant %q", tt.asset, got, tt.want)
 		}
 		if !strings.HasPrefix(got, base) {
-			t.Errorf("asset %q 逃出了 release 路径: %q", tt.asset, got)
+			t.Errorf("asset %q escaped the release path: %q", tt.asset, got)
 		}
 	}
 }
 
-// 铁律 1：任何时候都不执行别人的代码。`git ls-remote <url>` 里 url 以 '-' 开头时
-// git 把它当成选项，--upload-pack=<命令> 就是一条现成的任意命令执行。
-// 断言的是「git 压根没被拉起来」—— 所以这个假 git 一跑就会留下一个文件。
+// Iron law 1: never execute anyone else's code. In `git ls-remote <url>`, a url
+// starting with '-' is read by git as an option, and --upload-pack=<command> is
+// arbitrary command execution off the shelf.
+// What is asserted is that git was never started at all — so this fake git leaves
+// a file behind the moment it runs.
 func TestTagsRefusesOptionLikeURL(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
-	// 只用 shell 内建：PATH 被换成了只有假 git 的目录，用 touch 会「因为找不到
-	// touch 而失败」——那样这条测试就会因为错误的理由通过（第一版真踩了）。
-	// 这个假 git 一旦被拉起来就既留下文件、又让 Tags 成功返回，两边都会响。
+	// Shell builtins only: PATH has been replaced with a directory holding nothing
+	// but the fake git, so using touch would fail "because touch was not found" —
+	// and the test would then pass for the wrong reason (the first version really
+	// did). This fake git both leaves the file and makes Tags succeed, so either
+	// check fires.
 	writeFakeGit(t, dir, "#!/bin/sh\n: > %s\necho \"deadbee\trefs/tags/v1.0.0\"\n", marker)
 	t.Setenv("PATH", dir)
 
 	for _, bad := range []string{"--upload-pack=touch /tmp/pwned", "-u", "  --exec=x  "} {
 		if _, err := Tags(context.Background(), bad); err == nil {
-			t.Fatalf("%q 应该被拒绝", bad)
+			t.Fatalf("%q should have been refused", bad)
 		}
 		if _, statErr := os.Stat(marker); statErr == nil {
-			t.Fatalf("%q: git 真的被跑起来了", bad)
+			t.Fatalf("%q: git really was started", bad)
 		}
 	}
 }
 
-// 命令行拼错了没有别的地方会说：假 git 把自己的参数回显成 tag 名。
-// 顺便钉住 `--` 分隔符 —— 少了它，上面那条拒绝就成了唯一一道防线。
+// Nothing else will tell you the command line is wrong: the fake git echoes its own
+// arguments back as tag names.
+// This also pins the `--` separator — without it, the refusal above would be the
+// only line of defence.
 func TestTagsCommandLine(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeGit(t, dir, "#!/bin/sh\nfor a in \"$@\"; do echo \"deadbee\trefs/tags/$a\"; done\n")
@@ -554,17 +579,18 @@ func TestTagsCommandLine(t *testing.T) {
 
 	got, err := Tags(context.Background(), "https://example.com/o/r")
 	if err != nil {
-		t.Fatalf("Tags 报错: %v", err)
+		t.Fatalf("Tags failed: %v", err)
 	}
 	want := []string{"ls-remote", "--tags", "--refs", "--", "https://example.com/o/r"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("git 的参数是 %#v，想要 %#v", got, want)
+		t.Fatalf("git's arguments were %#v, want %#v", got, want)
 	}
 }
 
-// git 会读【当前目录所属仓库】的 .git/config，那里的 url.insteadOf 和
-// credential.helper 都能让 git 转头去执行别的东西。在别人写得进去的目录里跑 toy
-// 不该等于把铁律 1 交出去，所以 git 必须在一个中立目录里跑。
+// git reads the .git/config of whatever repo the CURRENT DIRECTORY belongs to, and
+// url.insteadOf and credential.helper there can both make git go execute something
+// else. Running toy from a directory someone else can write to must not hand away
+// iron law 1, so git has to run in a neutral directory.
 func TestTagsDoesNotRunInCurrentDirectory(t *testing.T) {
 	bin := t.TempDir()
 	writeFakeGit(t, bin, "#!/bin/sh\necho \"deadbee\trefs/tags/cwd\"\necho \"deadbee\trefs/tags/$(pwd)\"\n")
@@ -578,22 +604,24 @@ func TestTagsDoesNotRunInCurrentDirectory(t *testing.T) {
 
 	tags, err := Tags(context.Background(), "https://example.com/o/r")
 	if err != nil {
-		t.Fatalf("Tags 报错: %v", err)
+		t.Fatalf("Tags failed: %v", err)
 	}
 	if len(tags) != 2 {
-		t.Fatalf("拿到 %#v", tags)
+		t.Fatalf("got %#v", tags)
 	}
 	if strings.HasPrefix(tags[1], work) {
-		t.Errorf("git 跑在当前目录 %q 里了（它会读那里的 .git/config）", work)
+		t.Errorf("git ran in the current directory %q (it reads the .git/config there)", work)
 	}
 }
 
-// WaitDelay 那一行很像可以顺手删掉的东西，所以这里钉住它保护的场景：
-// git 拉起的帮手进程活得比 git 久、还攥着 stderr 管道，杀掉 git 本身并不能让
-// Output() 返回。没有 WaitDelay，这个调用会挂到那个孙子进程自己退出为止。
+// That WaitDelay line looks very much like something you could delete in passing,
+// so this pins the scenario it protects: a helper process git spawned outlives git
+// and still holds the stderr pipe, and killing git itself does not make Output()
+// return. Without WaitDelay this call hangs until that grandchild exits on its own.
 func TestTagsSurvivesOrphanHoldingPipes(t *testing.T) {
 	dir := t.TempDir()
-	// `sleep 30 &` 继承了 stdout/stderr 管道；ctx 到期只杀得掉前台这个 sh。
+	// `sleep 30 &` inherits the stdout/stderr pipes; the expiring ctx can only kill
+	// the foreground sh.
 	writeFakeGit(t, dir, "#!/bin/sh\nsleep 30 &\nsleep 20\n")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -607,15 +635,17 @@ func TestTagsSurvivesOrphanHoldingPipes(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
-			t.Errorf("想要超时报错，拿到 %v", err)
+			t.Errorf("want a timeout error, got %v", err)
 		}
 	case <-time.After(15 * time.Second):
-		t.Fatal("Tags 被一个攥着管道的孙子进程挂住了 —— WaitDelay 没起作用")
+		t.Fatal("Tags was wedged by a grandchild holding the pipes — WaitDelay is not working")
 	}
 }
 
-// `remote: …` 那些行是远端服务器写的，会一路进到报错里印在用户终端上。
-// 一个能往别人终端上任意写字（改颜色、用 \r 盖掉前面那句话）的错误信息不叫错误信息。
+// The `remote: …` lines are written by the remote server and travel all the way
+// into the error and onto the user's terminal. An error message that can write
+// anything it likes there (change colours, use \r to paint over the sentence
+// before it) is not an error message.
 func TestTagsSanitizesGitStderr(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeGit(t, dir,
@@ -625,19 +655,19 @@ func TestTagsSanitizesGitStderr(t *testing.T) {
 
 	_, err := Tags(context.Background(), "https://example.com/o/r")
 	if err == nil {
-		t.Fatal("想要报错")
+		t.Fatal("want an error")
 	}
 	msg := err.Error()
 	for _, bad := range []string{"\x1b", "\r", "\a", "\b"} {
 		if strings.Contains(msg, bad) {
-			t.Errorf("报错里还有控制字符 %q: %q", bad, msg)
+			t.Errorf("the error still contains the control char %q: %q", bad, msg)
 		}
 	}
 	if len(msg) > 2*maxStderrLine {
-		t.Errorf("报错没封顶，长度 %d: %q", len(msg), msg)
+		t.Errorf("the error was not capped, length %d: %q", len(msg), msg)
 	}
 	if !strings.Contains(msg, "fatal") {
-		t.Errorf("把有用的字也一起剥掉了: %q", msg)
+		t.Errorf("the useful words were stripped along with the rest: %q", msg)
 	}
 }
 
@@ -651,10 +681,12 @@ func writeFakeGit(t *testing.T, dir, script string, args ...any) {
 	}
 }
 
-// Ctrl-C 打在 ls-remote 上时，错误必须还带得住 context.Canceled ——
-// runUpdate 的 `case errors.Is(err, context.Canceled): return err` 全靠它，
-// 吃掉了就会在用户按下 Ctrl-C 之后接着把剩下每个包都跑一遍。
-// 顺带钉住超时那条：它仍然要说"超时"、并且能被 errors.Is 认成 DeadlineExceeded。
+// When Ctrl-C lands during ls-remote, the error must still carry context.Canceled —
+// runUpdate's `case errors.Is(err, context.Canceled): return err` depends on it
+// entirely, and swallowing it means every remaining package gets tried after the
+// user already hit Ctrl-C.
+// This also pins the timeout branch: it must still say "timed out" AND be
+// recognizable via errors.Is as DeadlineExceeded.
 func TestTagsPropagatesContextError(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "git")
@@ -666,16 +698,16 @@ func TestTagsPropagatesContextError(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := Tags(canceled, "https://example.com/o/r"); !errors.Is(err, context.Canceled) {
-		t.Errorf("取消后的错误认不出 context.Canceled，上层会把 Ctrl-C 当普通失败继续跑：%v", err)
+		t.Errorf("the cancelled error does not match context.Canceled, so callers will treat Ctrl-C as an ordinary failure and keep going: %v", err)
 	}
 
 	timeout, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer stop()
 	_, err := Tags(timeout, "https://example.com/o/r")
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("超时的错误认不出 context.DeadlineExceeded：%v", err)
+		t.Errorf("the timeout error does not match context.DeadlineExceeded: %v", err)
 	}
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Errorf("超时了却没说是超时：%v", err)
+		t.Errorf("it timed out but does not say so: %v", err)
 	}
 }

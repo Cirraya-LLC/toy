@@ -1,124 +1,161 @@
-# 更新日志
+# Changelog
 
-格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
-版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+versioning follows [Semantic Versioning](https://semver.org/).
 
-## [未发布]
+## [Unreleased]
 
-### 新增
+### Added
 
-- **解压时剥掉唯一那层顶层目录**（等价 `tar --strip-components=1`）：整棵树只有
-  一个顶层条目且它是目录时剥掉它。cargo-dist 的包套着
-  `<名字>-<版本>-<triple>/`，那个名字同时钉死版本和平台，而 `[bin]` 右边表达不了
-  —— 于是 ripgrep / fd / bat / delta / eza 一个都收不了。剥完 `[bin] rg = "rg"`
-  就成立。两个及以上顶层条目、顶层是文件、顶层是符号链接、空目录，一律不剥；
-  剥完会让包里某条相对符号链接指到目标目录外面时，也整个不剥（铁律 7）。
-- **glibc 机器的平台候选末位兜底到 musl 构建**（`linux/amd64/gnu` →
-  `linux/amd64` → `linux/amd64/musl`，arm64 同理）。ripgrep、zoxide 的 x86-64
-  只发 musl 一份，而静态 musl 二进制在 glibc 机器上照跑。**反方向不加**：musl
-  机器退到 glibc 构建是真的起不来。命中时照常打一句回退说明（铁律 8）。
-- **资产名认 `i686`**（→ `386`）。ripgrep / fd / zoxide 的 32 位 Linux 构建以前
-  被静默丢掉。
+- **Strip the single top-level directory on extract** (equivalent to
+  `tar --strip-components=1`): if the whole tree has exactly one top-level entry
+  and it's a directory, drop that layer. cargo-dist tarballs wrap everything in
+  `<name>-<version>-<triple>/`, and that name pins both the version and the
+  platform — something the right-hand side of `[bin]` cannot express, which is why
+  ripgrep / fd / bat / delta / eza were all uninstallable. After stripping,
+  `[bin] rg = "rg"` just works. Never stripped: two or more top-level entries, a
+  top-level file, a top-level symlink, an empty directory — and also not when
+  stripping would make a relative symlink inside the package resolve outside the
+  destination directory (iron law 7).
+- **Glibc machines now fall back to a musl build as the last platform candidate**
+  (`linux/amd64/gnu` → `linux/amd64` → `linux/amd64/musl`, same for arm64).
+  ripgrep and zoxide ship only a musl build for x86-64, and a static musl binary
+  runs fine on a glibc machine. **The reverse is never added**: a musl machine
+  falling back to a glibc build genuinely won't start. When this candidate hits,
+  the fallback note is printed as usual (iron law 8).
+- **Asset names now recognize `i686`** (→ `386`). The 32-bit Linux builds from
+  ripgrep / fd / zoxide used to be dropped silently.
 
-### 变更
+### Changed
 
-- FreeBSD / OpenBSD / NetBSD / Solaris / illumos 的资产从"认不出是哪个平台的"
-  改归"认出来了但不是 toy 支持的系统"—— 前者那句话是在请作者补一行 `[artifact]`，
-  而补了也装不上。
+- FreeBSD / OpenBSD / NetBSD / Solaris / illumos assets moved from "can't tell
+  which platform this is" to "recognized, but not an OS toy supports" — the first
+  message asks the author to add an `[artifact]` line, and adding one wouldn't
+  make it installable anyway.
 
 ## [0.1.0] - 2026-09-01
 
-首个版本。
+First release.
 
-### 新增
+### Added
 
-- **十一个子命令**：`install` / `uninstall` / `update` / `list` / `search` /
-  `info` / `index` / `keygen` / `publish` / `serve` / `doctor`。
-- **四条安装路径**：索引名（`Derrity/tinyserve`）、托管方前缀
-  （`github:owner/repo`）、其它托管方（`gitlab:x/y`，加三行配置就多一家）、
-  裸 `toy.toml` 地址。
-- **版本发现走 `git ls-remote`**，不碰任何托管方的 REST API —— 所以不会被任何
-  一家的限流卡住，也不需要为每家写一套适配器。
-- **`toy.toml` 只写 release 资产名**，不写 URL、不写版本号、不写托管方。
-  打个 tag 就是发新版，这个文件一个字都不用改。
-- **两种包形态**：release 二进制（解压后软链）和单文件脚本（下载 + `chmod +x`
-  + 软链）。两者都不构建、都不执行。
-- **平台候选回退**：`[artifact]` 的 key 可以带第三段（`linux/amd64/musl`），
-  客户端按从具体到通用的顺序试。musl 检测看 `/lib/ld-musl-*.so.1`，
-  arm 代次读 `/proc/cpuinfo`，Rosetta 是静态规则，全部在纯函数里。
-  装到的不是为这台机器构建的那个时会明说。
-- **`toy init`**：从 `dist/` 里的资产文件名反推一份 `toy.toml`，把版本号换成
-  `{version}` 占位符，并现算 `[sha256]`（把安装侧从 TOFU 直接升到强制校验）。
-  猜出来的部分会在结尾明说是猜的。
-- **四档信任等级**，安装完成那一行如实打印：作者签名 / 托管方账号 /
-  打包说明来自索引 / 未签名。含义见 `SECURITY.md`。
-- **TOFU 钥匙环**：artifact 哈希和作者公钥首次安装即钉住，之后变了拒绝安装。
-  模型抄的是 SSH 的 `known_hosts`。
-- **索引**：一个 JSON 文件，`https://` 和本地路径一样用，可以配多个。
-  条目只存指向仓库的指针 —— 从索引里删掉一条只是「不再被搜到」。
-- **`toy serve`**：把本机缓存变成一个镜像。内容是哈希寻址的，所以镜像不需要被
-  信任；真的走了镜像时安装会明说是从哪拿的。
-- **`toy publish` / `toy keygen`**：ed25519 签名，两步都是可选的。
-- **安装清单**（`~/.toy/installed/`）：`uninstall` 和 `update` 的依据。
+- **Eleven subcommands**: `install` / `uninstall` / `update` / `list` / `search` /
+  `info` / `index` / `keygen` / `publish` / `serve` / `doctor`.
+- **Four install paths**: index name (`Derrity/tinyserve`), host prefix
+  (`github:owner/repo`), other hosts (`gitlab:x/y` — three lines of config adds
+  one), and a bare `toy.toml` URL.
+- **Version discovery via `git ls-remote`**, never a host's REST API — so no host's
+  rate limit can wall you off, and there's no per-host adapter to write.
+- **`toy.toml` names only release assets** — no URLs, no version numbers, no host.
+  Pushing a tag *is* the release; the file doesn't change by a single character.
+- **Two package shapes**: release binary (unpack, then symlink) and single-file
+  script (download + `chmod +x` + symlink). Neither builds, neither executes.
+- **Platform candidate fallback**: an `[artifact]` key may carry a third segment
+  (`linux/amd64/musl`), and the client tries candidates most-specific first. musl
+  detection looks for `/lib/ld-musl-*.so.1`, arm generation reads `/proc/cpuinfo`,
+  Rosetta is a static rule — all of it in pure functions. When what you get isn't
+  the build made for this machine, it says so.
+- **`toy init`**: derives a `toy.toml` from the asset filenames in `dist/`,
+  replaces the version with the `{version}` placeholder, and computes `[sha256]` on
+  the spot (which promotes the install side straight from TOFU to enforced
+  checksums). Anything it guessed is called out as a guess at the end.
+- **Four trust levels**, printed truthfully on the install-completed line: author
+  signature / host account / packaging instructions from the index / unsigned.
+  Meanings in `SECURITY.md`.
+- **TOFU keyring**: artifact hashes and author public keys are pinned on first
+  install; a later change refuses the install. The model is copied from SSH's
+  `known_hosts`.
+- **Index**: one JSON file, `https://` and local paths work the same, several can
+  be configured. Entries hold only a pointer at the repo — deleting one just means
+  "no longer findable by search".
+- **`toy serve`**: turn the local cache into a mirror. Content is
+  content-addressed, so a mirror doesn't need to be trusted; when bytes really did
+  come from a mirror, the install says where from.
+- **`toy publish` / `toy keygen`**: ed25519 signatures, both steps optional.
+- **Install manifests** (`~/.toy/installed/`): what `uninstall` and `update` stand on.
 
-### 安全
+### Security
 
-首发前跑了一轮对抗审计：八个攻击面并行找出 33 条发现，经三视角对抗证伪后确认
-16 条、推翻 17 条。完整复盘见 [`docs/audit-2026-08.md`](docs/audit-2026-08.md)。
+An adversarial audit ran before the first release: eight attack surfaces searched in
+parallel produced 33 findings; after three-perspective adversarial falsification, 16
+were confirmed and 17 overturned. Full write-up in
+[`docs/audit-2026-08.md`](docs/audit-2026-08.md).
 
-**critical —— 铁律 1 被完整绕过：** 一个包可以声明 `[bin] git = "payload"`，
-装完 `~/.toy/bin/git` 就在 PATH 上，而 toy 自己靠 `git ls-remote` 发现版本 ——
-下一条 toy 命令就执行了这个包里的文件。遮蔽检查挡不住它：在一台还没装 git 的机器上
-（macOS 没装 Xcode CLT、slim 容器、CI 基础镜像，而裸地址那条安装路径压根不需要
-git），`LookPath` 找不到东西就放行了。修在两半，缺一半都不成立 ——
-`store` 的 `reservedLinkNames` 无条件拒绝（**全项目唯一一条 `--force` 也不放行**
-的检查），`host` 的 `lookupGit` 自己走 PATH 解析出绝对路径并跳过 `$TOY_HOME/bin`。
+**critical — iron law 1 bypassed completely:** a package can declare
+`[bin] git = "payload"`. Once installed, `~/.toy/bin/git` is on PATH — and toy
+itself discovers versions with `git ls-remote`, so the very next toy command
+executes a file from that package. The shadow check doesn't stop it: on a machine
+that doesn't have git yet (macOS without Xcode CLT, a slim container, a CI base
+image — and the bare-URL install path needs no git at all), `LookPath` finds
+nothing and waves it through. The fix has two halves and neither works alone:
+`store`'s `reservedLinkNames` refuses unconditionally (**the only check in the whole
+project that `--force` cannot override**), and `host`'s `lookupGit` walks PATH
+itself to an absolute path, skipping `$TOY_HOME/bin`.
 
-其余确认并修掉的：
+The rest of what was confirmed and fixed:
 
-- 索引改一行 `source`，`toy update` 就把已装包换成另一个仓库的内容 —— 没有确认、
-  没有 TOFU 警告、信任等级也不变。作者公钥的 TOFU 钉在从 source 推出来的 id 上，
-  所以改 source 等于换身份。
-- `toy search --json` 把「索引里有一把 key」直接报成 `signed: true`，一次签名都没验。
-- `toy list` 的信任列能被一个包的 `name` 整列顶出屏幕，并伪造成「✓ 已签名」。
-- 输出转义漏掉裸字节 `0x9b`（8 位形式的 CSI），能在按 8 位 C1 解释的终端上把上一行
-  的信任等级擦掉重写。同一个码位写成合法 UTF-8 时却会被正确转义 —— 结果取决于
-  字符串里别的地方有没有控制字符。
-- `✓ 已签名` 后面印仓库 owner，是在替一把不知道是谁的钥匙背书。
-- `uninstall` 会删掉别的包的命令；两个包会互相删对方的 `pkg` 目录。
-- `[artifact]` / `[script]` 的值可以写成 `file:///…`，于是 toy 去读本机任意文件
-  并把它装进 PATH、缓存进 `toy serve` 对外提供的目录。
-- HTTP 重定向静默把 https 降级成 http（判据要扫整条 via 链）；artifact 下载没有
-  体积上限（判据必须是实际写入的字节）；URL 里的凭据漏进 error 对象 —— 含一条
-  `net/http` 自己的：`CheckRedirect` 失败时它把原始 `Location` 塞回
-  `url.Error.URL` 而不走抹除。
-- 解压：符号链接的三段式逃逸（`x -> "."`，`x/up -> ".."`），因为词法校验按词法父
-  目录解析、内核按真实父目录解析；GNU 稀疏文件被当成非常规成员静默丢弃，装完是
-  一条不存在的命令；不认识的 tar 成员类型声明了内容时，`continue` 掉等于让 reader
-  把那些字节从 gzip 流里解出来丢掉，字节上限数不到。
-- 指纹从 8 个 hex 提到至少 128 位：实测约 3.6 万次 keygen/秒/核，32 位外推约
-  33 core-hour —— 要挡的不是碰撞是**原像**。
-- 私钥权限的判据改成「group/other 一位都不能有」而不是「恰好 0600」——
-  原来那句提示是在教用户把只读的私钥改成可写。
-- 上游删掉最新 tag 导致的**静默降级**现在会说一句。
-- 失败的重装会抹掉正在工作的那一版（清单还在、`list` 照样列，只是软链悬空）。
+- Changing one `source` line in the index made `toy update` swap an installed
+  package for the contents of a different repo — no confirmation, no TOFU warning,
+  no change in trust level. The author key's TOFU pin hangs off an id derived from
+  source, so changing source is changing identity.
+- `toy search --json` reported "the index has a key" as `signed: true` without ever
+  verifying a signature.
+- A package's `name` could push the trust column of `toy list` off the screen and
+  forge a `✓ signed` in its place.
+- Output escaping missed the bare byte `0x9b` (the 8-bit form of CSI), which on a
+  terminal interpreting 8-bit C1 could erase and rewrite the trust line above. The
+  same code point written as valid UTF-8 *was* escaped correctly — so the outcome
+  depended on whether the string happened to contain other control characters.
+- Printing the repo owner after `✓ signed` vouches for a key nobody can identify.
+- `uninstall` could delete another package's command; two packages could delete each
+  other's `pkg` directories.
+- `[artifact]` / `[script]` values could be written as `file:///…`, making toy read
+  an arbitrary local file, install it onto PATH, and cache it into the directory
+  `toy serve` hands out.
+- HTTP redirects silently downgraded https to http (the check has to scan the whole
+  via chain); artifact downloads had no size limit (the check has to count bytes
+  actually written); credentials in a URL leaked into the error object — including
+  one from `net/http` itself: when `CheckRedirect` fails it puts the original
+  `Location` back into `url.Error.URL` without going through the stripper.
+- Extraction: the three-step symlink escape (`x -> "."`, `x/up -> ".."`), because
+  lexical validation resolves against the lexical parent while the kernel resolves
+  against the real one; GNU sparse files were silently dropped as irregular members,
+  leaving a command that doesn't exist; and `continue`-ing past an unrecognized tar
+  member type that declared content made the reader decompress those bytes out of
+  the gzip stream and throw them away, uncounted against the size limit.
+- Fingerprints went from 8 hex characters to at least 128 bits: measured at roughly
+  36k keygens/sec/core, 32 bits extrapolates to about 33 core-hours — and what has
+  to be stopped here isn't a collision, it's a **preimage**.
+- The private-key permission check became "not one bit for group or other" instead
+  of "exactly 0600" — the old message was telling users to make a read-only private
+  key writable.
+- **Silent downgrades** caused by upstream deleting the newest tag now say so.
+- A failed reinstall no longer wipes out the version that was working (the manifest
+  survived and `list` still showed it — only the symlink dangled).
 
-### 变更
+### Changed
 
-- **`--force` 拆成两件事**（三个独立视角各自撞到）：`--reinstall` 管日常重装，
-  不碰任何安全检查；`--force` 只管接受安全检查报出的变化，**并逐条打印放行了什么**。
-- **TOFU 改成按资产名钉**，不按 `ref@version` 钉：同一个版本在 musl 和 glibc 机器上
-  是两份不同的字节，只按版本钉的话共享 `$HOME` 会被误报成投毒。
-- **v1 不预置任何索引**（`DefaultIndexURL` 是空的）。公共索引还没上线，塞一个拉不到
-  的地址等于让每个新用户第一次 `doctor` 就吃一条红叉。「没有索引」是合法状态：
-  `doctor` 报中性说明而不是 ✗，`install github:owner/repo` 照常能装。
-- 索引查找改成大小写不敏感；`pkg` 目录的每一段加去歧义后缀（APFS 上 `Foo` 和 `foo`
-  是同一个目录，不加后缀会让两个不同的包共用一个安装目录，卸一个会删掉另一个的
-  可执行文件）。
+- **`--force` split in two** (three independent perspectives hit this
+  independently): `--reinstall` handles everyday reinstalls and touches no safety
+  check; `--force` only accepts changes the safety checks reported, **and prints
+  each thing it waved through**.
+- **TOFU now pins per asset name**, not per `ref@version`: the same version is two
+  different sets of bytes on a musl machine and a glibc machine, so pinning by
+  version alone turns a shared `$HOME` into a false poisoning alarm.
+- **v1 preconfigures no index** (`DefaultIndexURL` is empty). The public index isn't
+  live yet, and shipping an address that won't resolve means every new user eats a
+  red cross the first time they run `doctor`. "No index" is a legitimate state:
+  `doctor` reports it neutrally instead of ✗, and `install github:owner/repo` works
+  as always.
+- Index lookup is now case-insensitive; every segment of a `pkg` path gets a
+  disambiguating suffix (on APFS `Foo` and `foo` are the same directory, and without
+  the suffix two different packages share one install directory — uninstalling one
+  deletes the other's executable).
 
-### 移除
+### Removed
 
-- 删掉 `internal/store` 里 613 行手写 TOML 解析（依赖补回来之后不需要了）。
+- Dropped 613 lines of hand-written TOML parsing from `internal/store` (unnecessary
+  once the dependency came back).
 
-[未发布]: https://github.com/Cirraya-LLC/toy/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Cirraya-LLC/toy/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Cirraya-LLC/toy/releases/tag/v0.1.0

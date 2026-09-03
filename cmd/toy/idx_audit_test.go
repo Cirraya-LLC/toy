@@ -13,14 +13,15 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/store"
 )
 
-// audFakeHost 在磁盘上搭一个「托管方」：一个裸 git 仓库负责 tag 发现
-// （host.Tags 跑的就是 git ls-remote，本地路径一样能跑），raw/release 用 file://。
+// audFakeHost stands a "host" up on disk: a bare git repo handles tag discovery
+// (host.Tags runs git ls-remote, which works fine against a local path), and raw
+// and release go over file://.
 type audFakeHost struct{ root string }
 
 func audNewFakeHost(t *testing.T) *audFakeHost {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("没有 git")
+		t.Skip("no git")
 	}
 	return &audFakeHost{root: t.TempDir()}
 }
@@ -34,7 +35,8 @@ func (h *audFakeHost) tmpl() host.Host {
 	}
 }
 
-// publish 造一个 owner/repo 的 tag、toy.toml 和 release 资产（单文件脚本形态）。
+// publish creates a tag, a toy.toml and a release asset for owner/repo (the
+// single-file script form).
 func (h *audFakeHost) publish(t *testing.T, owner, repo, tag, body string) {
 	t.Helper()
 	bare := filepath.Join(h.root, owner, repo+".git")
@@ -60,12 +62,14 @@ func (h *audFakeHost) publish(t *testing.T, owner, repo, tag, body string) {
 		run(work, "commit", "-q", "-m", "c")
 		run(work, "push", "-q", bare, "HEAD:refs/heads/main")
 	}
-	// 打 tag 这几行原来整个包在「仓库还不存在」里面，所以对同一个仓库 publish
-	// 第二个版本时只写了 raw/rel、一个 tag 都没推 —— ls-remote 永远只看得到第一版，
-	// 而测试里看起来只是「装错了版本」。-f 让它幂等。
+	// These tagging lines used to sit entirely inside the "repo does not exist
+	// yet" branch, so publishing a second version of the same repo only wrote
+	// raw and rel and pushed no tag at all — ls-remote could only ever see the
+	// first version, and in the tests it just looked like "installed the wrong
+	// version". -f makes it idempotent.
 	run(work, "tag", "-f", tag)
 	run(work, "push", "-q", "-f", bare, "refs/tags/"+tag)
-	// raw 上的 toy.toml（按 {ref} 也就是 tag 存）
+	// The toy.toml on raw (stored under {ref}, i.e. the tag)
 	rawDir := filepath.Join(h.root, owner, repo, "raw", tag)
 	os.MkdirAll(rawDir, 0o755)
 	os.WriteFile(filepath.Join(rawDir, "toy.toml"), []byte(`
@@ -76,19 +80,22 @@ audtool = "audtool"
 [artifact]
 "`+i1Plat()+`" = "audtool"
 `), 0o644)
-	// release 资产：不是压缩包，走「裸二进制」那条路
+	// The release asset: not an archive, so it takes the bare-binary path
 	relDir := filepath.Join(h.root, owner, repo, "rel", tag)
 	os.MkdirAll(relDir, 0o755)
 	os.WriteFile(filepath.Join(relDir, "audtool"), []byte(body), 0o644)
 }
 
-// 索引在 `toy update` 时能把一个已装的包换成【另一个仓库】的内容吗？
+// Can the index swap an installed package for the content of ANOTHER repo during
+// `toy update`?
 //
-// insUpdateOne 在 m.IndexID != "" 时按索引条目重新解析。对**没有签名**的条目，
-// 索引改一行 source 就换掉了用户 PATH 上那个命令的内容，而且一道闸都没有：
-//   - insTrustDowngraded 只拦 signed → 非 signed，两边都不签名时它什么都不做
-//   - TOFU 的 id 是 insTrustID(res) = "<host>:<owner>/<repo>@<tag>"，source 一换
-//     就是一条全新记录 → TrustNew → 不警告、直接钉住
+// When m.IndexID != "", insUpdateOne re-resolves from the index entry. For an
+// entry that is NOT signed, editing one line of source swaps the content behind
+// the command on the user's PATH, and there is not a single gate in the way:
+//   - insTrustDowngraded only catches signed -> not signed, so with neither side
+//     signed it does nothing
+//   - the TOFU id is insTrustID(res) = "<host>:<owner>/<repo>@<tag>", so changing
+//     source makes it a brand new record -> TrustNew -> no warning, pinned straight away
 func TestAuditIndexCanRepointAnInstalledPackage(t *testing.T) {
 	fh := audNewFakeHost(t)
 	fh.publish(t, "alice", "tool", "v1.0.0", "#!/bin/sh\necho GOOD\n")
@@ -98,27 +105,28 @@ func TestAuditIndexCanRepointAnInstalledPackage(t *testing.T) {
 
 	writeIdx("fake:alice/tool")
 	if err := runInstall(context.Background(), []string{"alice/tool"}); err != nil {
-		t.Fatalf("装不上：%v", err)
+		t.Fatalf("install failed: %v", err)
 	}
 	link := filepath.Join(home, "bin", "audtool")
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho GOOD\n" {
-		t.Fatalf("装到的不是 alice 的东西：%q", b)
+		t.Fatalf("what got installed is not alice's: %q", b)
 	}
 
-	// 索引里那一行 source 被改了。
+	// That one source line in the index got edited.
 	writeIdx("fake:evil/tool")
 
 	err := runUpdate(context.Background(), nil)
 	got, _ := os.ReadFile(link)
 	if string(got) == "#!/bin/sh\necho EVIL\n" {
-		t.Fatalf("`toy update` 把 PATH 上的 audtool 换成了 evil/tool 的内容 —— "+
-			"没有确认、没有 TOFU 警告、信任等级也没变（update err=%v）", err)
+		t.Fatalf("`toy update` swapped audtool on PATH for the content of evil/tool — "+
+			"no confirmation, no TOFU warning, and the trust level did not change either (update err=%v)", err)
 	}
-	t.Logf("没被换掉（err=%v，内容=%q）", err, got)
+	t.Logf("not swapped (err=%v, content=%q)", err, got)
 }
 
-// audIndexSetup 搭一套「一个本地索引 + 一个本地托管方」的环境：TOY_HOME 指向
-// 一个临时目录，索引里只有 alice/tool 一条，source 由返回的钩子随时改写。
+// audIndexSetup stands up a "one local index plus one local host" environment:
+// TOY_HOME points at a temp dir, the index holds only alice/tool, and the
+// returned hook rewrites its source at will.
 func audIndexSetup(t *testing.T, fh *audFakeHost) (*store.Store, string, func(source string)) {
 	t.Helper()
 	home := t.TempDir()

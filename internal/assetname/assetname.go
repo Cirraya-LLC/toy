@@ -1,12 +1,16 @@
-// Package assetname 从 release 资产的文件名反推平台 key 和版本号。
+// Package assetname infers the platform key and version string from a release
+// asset's filename.
 //
-// 抽出来是因为有两个调用方要用【一模一样】的推断：`toy init` 认本地 dist/ 里的
-// 文件名，批量索引生成器认从仓库读来的资产名列表。两份实现必然漂移，而漂移的
-// 症状特别恶心 —— 索引里生成的条目和作者自己跑 toy init 得到的不一样，于是
-// "作者接入之后自动让位"那一刻用户装到的东西变了，而没有任何地方会说。
+// It lives in its own package because two callers need the EXACT SAME
+// inference: `toy init` reads filenames out of a local dist/, and the bulk
+// index generator reads asset name lists off a repository. Two copies would
+// drift, and the symptom of that drift is nasty — the entry the index
+// generates stops matching what the author gets from `toy init`, so at the
+// moment "the author's own toy.toml takes over" the thing users install
+// silently changes, and nothing anywhere says a word.
 //
-// 这个包是纯函数：不碰磁盘、不碰网络、不 exec 任何东西。两个调用方唯一的区别
-// 就是"文件名从哪来"。
+// This package is pure: no disk, no network, no exec. The only difference
+// between the two callers is where the filenames come from.
 package assetname
 
 import (
@@ -16,8 +20,9 @@ import (
 	"strings"
 )
 
-// osWords / archWords 是文件名里那些词到 GOOS/GOARCH 的映射。大小写不敏感，
-// 切词用 - _ .（所以 x86_64 会裂成两段，靠下面的相邻二元组捞回来）。
+// osWords / archWords map the words that show up in filenames to GOOS/GOARCH.
+// Case-insensitive; tokens split on - _ . (so x86_64 gets torn in two, and the
+// adjacent-pair check below puts it back together).
 var osWords = map[string]string{
 	"linux":   "linux",
 	"darwin":  "darwin",
@@ -33,63 +38,80 @@ var archWords = map[string]string{
 	"arm64": "arm64", "aarch64": "arm64",
 	"armv7": "armv7", "armhf": "armv7",
 	"armv6": "armv6",
-	// 裸 "arm" 必须在这里：GOARCH=arm 且没设 goarm 时，goreleaser 的默认
-	// name_template 产出的就是 `tool_1.2.3_linux_arm.tar.gz`。少了这一行，
-	// 树莓派那份构建会被【静默丢掉】—— 而 linux/arm 正是 platform.go 给
-	// armv6/armv7 兜底的那个候选（规格 §3.1），丢了就等于 Pi 用户装不上。
+	// Bare "arm" has to be here: with GOARCH=arm and no goarm set, goreleaser's
+	// default name_template produces exactly `tool_1.2.3_linux_arm.tar.gz`.
+	// Without this line the Raspberry Pi build gets SILENTLY DROPPED — and
+	// linux/arm is precisely the candidate platform.go falls back to for
+	// armv6/armv7 (spec §3.1), so dropping it means Pi users cannot install.
 	"arm": "arm",
-	// i686 是 32 位 Linux 构建里最常见的写法（ripgrep / fd / zoxide 的
-	// `i686-unknown-linux-gnu` 都是它），少这一行那份构建会被静默丢掉。
+	// i686 is the most common spelling for 32-bit Linux builds (ripgrep / fd /
+	// zoxide all ship `i686-unknown-linux-gnu`); without this line that build
+	// gets silently dropped.
 	"386": "386", "i386": "386", "i686": "386",
 }
 
-// foreignWords 是「这个词一出现，这个资产就不是给我们支持的系统的」。词 → 系统名。
+// foreignWords means "if this word shows up, the asset is not for a system we
+// support". word -> system name.
 //
-// android 必须单独一张表、而且要【压过】已经认出来的 linux：Rust 的 Android triple
-// 长成 `aarch64-linux-android` / `armv7-linux-androideabi`，切完词之后 `linux` 排在
-// `android` 前面，osWords 先到先得就把它认成 linux/arm64、linux/armv7。
-// 那是一个 bionic 构建，它会**抢走真正 Linux 构建的那个 key**（zoxide 真的这么
-// 发布：armv7 那个 key 上本该是 armv7-unknown-linux-musleabihf），而症状是
-// 下载地址 200、字节完好、跑起来 `Exec format error` —— 比 404 难查得多。
+// android needs its own table, and it needs to BEAT an already-recognized
+// linux: Rust's Android triples look like `aarch64-linux-android` /
+// `armv7-linux-androideabi`, so after tokenizing, `linux` comes before
+// `android` and first-match-wins in osWords calls it linux/arm64, linux/armv7.
+// That's a bionic build, and it STEALS THE KEY belonging to the real Linux
+// build (zoxide really ships this way: the armv7 key should hold
+// armv7-unknown-linux-musleabihf). The symptom is a download URL that returns
+// 200, bytes that are intact, and `Exec format error` at run time — far harder
+// to track down than a 404.
 //
-// 几个 BSD 和 illumos/solaris 在这里【不是】为了压过什么（它们的 triple 里没有
-// linux），而是为了归类准确：少了这几行它们只会落进"认不出是哪个平台的"，
-// 而那句话是在请作者去补一行 [artifact] —— 对一个 toy v1 根本不支持的系统
-// （规格 §11），那是一条把人往沟里带的建议。
+// The BSDs and illumos/solaris are here NOT to beat anything (their triples
+// contain no linux) but to classify accurately: without these lines they land
+// in "cannot tell which platform this is", and that message asks the author to
+// hand-write an [artifact] line — terrible advice for a system toy v1 does not
+// support at all (spec §11).
 var foreignWords = map[string]string{
 	"android": "android", "androideabi": "android",
 	"freebsd": "freebsd", "openbsd": "openbsd", "netbsd": "netbsd",
 	"solaris": "solaris", "illumos": "illumos",
 }
 
-// verRe 认文件名里的版本段。只认三段式：两段式（1.2）在文件名里和别的数字对
-// 分不开，认错的下场是把不该动的字符串换成 {version}。
+// verRe matches the version segment inside a filename. Three components only:
+// two-component versions (1.2) are indistinguishable from other numbers in a
+// filename, and guessing wrong means replacing a string that should not have
+// been touched with {version}.
 //
-// `[-+]` 后面那一段是【候选】预发布标签，不是结论 —— 见 preWords。
+// Whatever follows `[-+]` is a CANDIDATE prerelease tag, not a verdict — see
+// preWords.
 var verRe = regexp.MustCompile(`\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?`)
 
-// preWords 是真的预发布标签才会用的词。
+// preWords are the words a real prerelease tag actually uses.
 //
-// 这是这个包里最贵的一条：`ripgrep-15.2.0-aarch64-apple-darwin.tar.gz` 里
-// `-aarch64` 长得和 `-rc.1` 一模一样，于是正则把 `15.2.0-aarch64` 整个当成
-// 版本号，替换之后模板变成 `ripgrep-{version}-apple-darwin.tar.gz` ——
-// **架构名不见了，拼出来的地址每个用户都 404**。而我们自己的合成测试数据
-// （`tool_1.2.0_linux_amd64.tar.gz`，版本后面紧跟 `_`）永远碰不到这个形状。
+// This is the most expensive line in the package. In
+// `ripgrep-15.2.0-aarch64-apple-darwin.tar.gz`, `-aarch64` looks exactly like
+// `-rc.1`, so the regex swallows `15.2.0-aarch64` as the whole version, and
+// after substitution the template becomes
+// `ripgrep-{version}-apple-darwin.tar.gz` — THE ARCHITECTURE IS GONE, and the
+// URL that gets built 404s for every single user. Our own synthetic fixtures
+// (`tool_1.2.0_linux_amd64.tar.gz`, where the version is followed by `_`) can
+// never hit this shape.
 //
-// 判据用白名单而不是"排除掉 os/arch 词"：世界上的架构名太多
-// （aarch64 / riscv64gc / s390x / loong64 / i686 / armv7 / x86…），漏一个就是
-// 一个静默换错版本号的资产名；预发布标签的词汇量小得多，而且认错的方向是
-// 安全的 —— 把真的预发布标签当成平台词，最多是少替一小段，模板仍然是对的。
+// The test is an allowlist, not "exclude the os/arch words": there are far too
+// many architecture names in the world (aarch64 / riscv64gc / s390x / loong64 /
+// i686 / armv7 / x86…) and missing one means an asset name whose version gets
+// silently mangled. The prerelease vocabulary is much smaller, and getting it
+// wrong fails safe — mistaking a real prerelease tag for a platform word costs
+// at most a slightly shorter replacement, and the template is still correct.
 var preWords = map[string]bool{
 	"alpha": true, "beta": true, "rc": true, "pre": true, "preview": true,
 	"dev": true, "devel": true, "next": true, "canary": true,
 	"nightly": true, "snapshot": true, "unstable": true, "edge": true,
 }
 
-// trimFalsePre 把 `15.2.0-aarch64` 削回 `15.2.0`，但让 `1.0.0-rc.1` 原样留着。
+// trimFalsePre cuts `15.2.0-aarch64` back to `15.2.0` while leaving
+// `1.0.0-rc.1` alone.
 //
-// 只管 '-'：`1.2.3+20240101` 那个构建元数据是 tag 的一部分，install 那边
-// `{version}` 展开的就是整串（semver.V.Number 只剥 'v'），削掉会让模板对不上。
+// Only '-' is touched: the build metadata in `1.2.3+20240101` is part of the
+// tag, and install expands {version} to the whole string (semver.V.Number only
+// strips the 'v'), so trimming it would make the template stop matching.
 func trimFalsePre(v string) string {
 	i := strings.IndexByte(v, '-')
 	if i < 0 {
@@ -99,7 +121,7 @@ func trimFalsePre(v string) string {
 	if j := strings.IndexByte(word, '.'); j >= 0 {
 		word = word[:j]
 	}
-	// rc1 / beta2 这种连写的也要认出来。
+	// Catch the run-together spellings too: rc1, beta2.
 	word = strings.TrimRight(strings.ToLower(word), "0123456789")
 	if preWords[word] {
 		return v
@@ -107,7 +129,8 @@ func trimFalsePre(v string) string {
 	return v[:i]
 }
 
-// findVersions 是 verRe 的唯一出口：正则的每个命中都要过一遍 trimFalsePre。
+// findVersions is the only way out of verRe: every match runs through
+// trimFalsePre.
 func findVersions(s string) []string {
 	all := verRe.FindAllString(s, -1)
 	for i, v := range all {
@@ -116,21 +139,26 @@ func findVersions(s string) []string {
 	return all
 }
 
-// companionSuffixes 是「和真资产同名同前缀、但 toy 永远装不了」的那些东西：
-// 校验和、签名、发行版包、各家安装器、证明文件。
+// companionSuffixes are the things that share a name and prefix with a real
+// asset but that toy can never install: checksums, signatures, distro
+// packages, third-party installers, attestations.
 //
-// 它们必须在认平台【之前】就被挑掉：`ripgrep-15.2.0-x86_64-apple-darwin.tar.gz.sha256`
-// 和 `bat-musl_0.26.1_musl-linux-amd64.deb` 里该有的 os/arch 词一个不少，认出来
-// 之后会去和真资产抢同一个平台 key —— 排在前面的那个赢，而 .deb 常常排在前面。
-// 就算没抢赢，它们也会各报一行「认不出/重复」，把真正值得看的那条淹掉（§14.10）。
+// They must be filtered out BEFORE platform detection:
+// `ripgrep-15.2.0-x86_64-apple-darwin.tar.gz.sha256` and
+// `bat-musl_0.26.1_musl-linux-amd64.deb` contain every os/arch word the real
+// asset does, so once recognized they compete for the same platform key —
+// whichever sorts first wins, and the .deb often sorts first. Even when they
+// lose, each one reports a "cannot recognize / duplicate" line that drowns out
+// the one worth reading (§14.10).
 var companionSuffixes = []string{
 	".sha256", ".sha512", ".sha1", ".md5", ".sum", ".sig", ".asc", ".pem",
 	".sbom", ".spdx", ".intoto", ".json", ".txt", ".sha256sum",
 	".deb", ".rpm", ".apk", ".pkg", ".msi", ".dmg", ".snap", ".appimage",
 }
 
-// foreignOS 报告 detect 返回的这个 goos 是不是外来系统。android 由 Classify 单独
-// 出文案（它要解释"名字里带 linux"那件事），所以这里排掉它。
+// foreignOS reports whether the goos detect returned is a foreign system.
+// android gets its own message from Classify (it has to explain the "the name
+// says linux" part), so it is excluded here.
 func foreignOS(goos string) bool {
 	if goos == "" || goos == "android" {
 		return false
@@ -153,7 +181,8 @@ func looksLikeCompanion(f string) bool {
 	return false
 }
 
-// 跳过的原因。文案是给人看的，会被原样打进 toy init 的输出里。
+// Reasons for skipping. These are written for humans and get printed verbatim
+// in toy init's output.
 const (
 	SkipWindows      = "Windows build, and toy v1 does not support Windows (spec §11) — skipped"
 	SkipUnrecognized = "cannot tell which platform this is (no OS or arch recognized) — skipped. " +
@@ -162,29 +191,33 @@ const (
 	SkipAndroid    = "Android (bionic) build — the name says linux, but it will not run on a Linux machine — skipped"
 )
 
-// SkipForeignOS 是「认出来了，但那不是 toy 支持的系统」。和 SkipUnrecognized
-// 分开：后者是在请作者手写一行 [artifact]，而这些系统写了也装不上。
+// SkipForeignOS is "recognized, but that is not a system toy supports". Kept
+// separate from SkipUnrecognized: that one asks the author to hand-write an
+// [artifact] line, and for these systems writing one still would not install.
 func SkipForeignOS(goos string) string {
 	return goos + " build, and toy v1 only supports Linux and macOS (spec §11) — skipped"
 }
 
-// Asset 是一个 release 资产被认出来的样子。
+// Asset is one release asset as recognized.
 type Asset struct {
-	File     string // 原始文件名
-	Platform string // "linux/amd64" / "linux/amd64/musl" / "linux/armv7"，认不出为空
-	Version  string // 从这个文件名里认出的版本串，认不出为空
-	Template string // 版本号换成 {version} 之后的资产名，只有 Infer 会填
-	Skip     string // 非空表示该跳过，内容是给人看的原因
-	// Notable 表示这条跳过值得告诉作者。checksums.txt / LICENSE 这些本来就不是
-	// 资产，为它们各报一行会把真正要看的那条（比如认不出的 freebsd_riscv64）淹掉。
+	File     string // original filename
+	Platform string // "linux/amd64" / "linux/amd64/musl" / "linux/armv7"; empty if unrecognized
+	Version  string // version string found in this filename; empty if none
+	Template string // asset name with the version replaced by {version}; only Infer fills this
+	Skip     string // non-empty means skip it; the content is the human-readable reason
+	// Notable means this skip is worth telling the author about. checksums.txt
+	// and LICENSE were never assets to begin with; a line for each of them
+	// would drown out the one that matters (say, an unrecognized
+	// freebsd_riscv64).
 	Notable bool
 }
 
-// Classify 认一个文件名。纯函数，不碰磁盘也不碰网络。
+// Classify recognizes one filename. Pure: no disk, no network.
 func Classify(name string) Asset {
 	a := Asset{File: name, Version: firstVersion(name)}
 	if looksLikeCompanion(name) {
-		// 静默：这些东西每个真资产旁边都躺着一个，出声就是把真的那条淹掉。
+		// Silent: one of these sits next to every real asset, and speaking up
+		// drowns out the real line.
 		a.Skip = SkipNotAnAsset
 		return a
 	}
@@ -206,39 +239,49 @@ func Classify(name string) Asset {
 	return a
 }
 
-// Result 是认一批文件名的结果。
+// Result is what recognizing a batch of filenames produces.
 type Result struct {
-	// Assets 是认出来的资产，按平台 key 排序，Template 已经填好。
+	// Assets are the recognized assets, sorted by platform key, with Template
+	// already filled in.
 	Assets []Asset
-	// Artifact 是 toy.toml 里 [artifact] 那一段：平台 key → 资产名模板。
+	// Artifact is the [artifact] section of toy.toml: platform key -> asset
+	// name template.
 	Artifact map[string]string
-	// Version 是这批资产的版本串（forceVersion 或从文件名里认出来的）。
+	// Version is this batch's version string (either forceVersion or whatever
+	// was found in the filenames).
 	Version string
-	// Skipped 只收值得告诉作者的那些（Notable）。
+	// Skipped holds only the skips worth telling the author about (Notable).
 	Skipped []Asset
-	// Name 是从资产名公共前缀推出来的包名，推不出为空。
+	// Name is the package name derived from the assets' common prefix; empty
+	// if it cannot be derived.
 	Name string
-	// Unreplaced 非空 = 生成出来的模板里【还留着】一串版本号，没能换成
-	// {version}。这种条目被钉死在这一版：上游一发新版，装的人拿到的是一个
-	// 404 的地址。
+	// Unreplaced non-empty means the generated templates STILL CONTAIN a
+	// version string that could not be turned into {version}. Such an entry is
+	// pinned to this one release: the moment upstream ships a new version,
+	// everyone installing gets a 404.
 	//
-	// 判据是"模板里还有版本号"，不是"模板里没有 {version}"：资产名本来就不带
-	// 版本号（`eza_x86_64-unknown-linux-gnu.tar.gz`、`yq_linux_amd64.tar.gz`）
-	// 的项目一大把，那种模板跨版本天然稳定，对它们报警是误报 —— 而一条每次
-	// 都响的警告等于没有警告。
+	// The test is "the template still has a version in it", not "the template
+	// has no {version}": plenty of projects ship asset names with no version at
+	// all (`eza_x86_64-unknown-linux-gnu.tar.gz`, `yq_linux_amd64.tar.gz`), and
+	// those templates are naturally stable across releases. Warning about them
+	// would be a false positive — and a warning that fires every time is no
+	// warning at all.
 	Unreplaced string
 }
 
-// InferTag 和 Infer 一样，但多知道一件事：这批资产是哪个 tag 发出来的
-// （批量索引生成器从托管方 API 拿得到，`toy init` 拿不到）。
+// InferTag is Infer plus one extra fact: which tag this batch of assets was
+// released under (the bulk index generator can get that from the host's API;
+// `toy init` cannot).
 //
-// tag 在资产名里真的出现时，**它说了算**：正则只能猜，而
-// `ripgrep-15.2.0-aarch64-apple-darwin.tar.gz` 里 `-aarch64` 和 `-rc.1` 长得
-// 一模一样（见 preWords）。已知答案的时候不该去猜。
+// When the tag really does appear in the asset names, THE TAG WINS: the regex
+// can only guess, and in `ripgrep-15.2.0-aarch64-apple-darwin.tar.gz`,
+// `-aarch64` and `-rc.1` look identical (see preWords). Do not guess when the
+// answer is known.
 //
-// 替换用的一定是 `TrimPrefix(tag, "v")` 而不是别的什么变体 —— 那正是 install
-// 那边 {version} 会展开成的东西（semver.V.Number）。拿 `jq-1.8.2` 这种带包名
-// 的 tag 去替换，展开回来就少了 `jq-` 那一截。
+// The replacement always uses `TrimPrefix(tag, "v")` and nothing else — that is
+// exactly what install expands {version} into (semver.V.Number). Substituting
+// with a package-name-prefixed tag like `jq-1.8.2` would expand back missing
+// the `jq-` part.
 func InferTag(files []string, tag string) Result {
 	v := tagVersion(tag)
 	if v != "" && anyContainsVersion(files, v) {
@@ -246,17 +289,20 @@ func InferTag(files []string, tag string) Result {
 	}
 	res := Infer(files, "")
 	if res.Version == "" && v != "" {
-		// 资产名里没有版本号（cargo-dist 那类）。替换不了任何东西，但版本号
-		// 本身仍然要记下来 —— probe 那边拿它判 [bin] 路径稳不稳。
+		// No version in the asset names (the cargo-dist shape). Nothing to
+		// substitute, but the version itself still has to be recorded — probe
+		// uses it to judge whether the [bin] path is stable.
 		res = Infer(files, v)
 	}
 	return res
 }
 
-// tagVersion 把 tag 变成"能安全地在资产名里做字面替换"的那一串，不安全就返回空。
+// tagVersion turns a tag into the string it is safe to substitute literally
+// inside asset names, or returns empty when that is not safe.
 //
-// 两道闸：必须以数字开头（`jq-1.8.2` 这种带包名前缀的 tag 展开回来对不上），
-// 必须含一个点（tag 是裸的 `2` 时，替换会咬进 `tool-2.0.1-…` 的中间）。
+// Two gates: it must start with a digit (a package-prefixed tag like
+// `jq-1.8.2` would not expand back correctly), and it must contain a dot (a
+// bare tag of `2` would bite into the middle of `tool-2.0.1-…`).
 func tagVersion(tag string) string {
 	v := strings.TrimPrefix(strings.TrimSpace(tag), "v")
 	if v == "" || v[0] < '0' || v[0] > '9' || !strings.Contains(v, ".") {
@@ -265,9 +311,10 @@ func tagVersion(tag string) string {
 	return v
 }
 
-// anyContainsVersion 报告 v 是不是【作为一个完整的数字段】出现在某个文件名里。
-// 边界检查不能省：tag `2.0` 会在 `tool-2.0.1-linux.tar.gz` 里命中，
-// 替换出来的 `tool-{version}.1-linux.tar.gz` 是一条谁都装不上的模板。
+// anyContainsVersion reports whether v appears in some filename AS A WHOLE
+// numeric segment. The boundary check is not optional: tag `2.0` matches inside
+// `tool-2.0.1-linux.tar.gz`, and the resulting
+// `tool-{version}.1-linux.tar.gz` is a template nobody can install.
 func anyContainsVersion(files []string, v string) bool {
 	for _, f := range files {
 		for i := 0; i+len(v) <= len(f); i++ {
@@ -288,11 +335,13 @@ func anyContainsVersion(files []string, v string) bool {
 
 func isVerByte(c byte) bool { return c == '.' || (c >= '0' && c <= '9') }
 
-// Infer 认一批文件名。forceVersion 非空时它说了算 —— 文件名里认不出三段式版本
-// （2024.09 这种）时那是唯一的出路。
+// Infer recognizes a batch of filenames. A non-empty forceVersion wins — it is
+// the only way out when the filenames carry no three-component version (things
+// like 2024.09).
 //
-// 同一个平台有多个文件时留排序最前的那一个（.tar.gz 和 .zip 同时发的很常见），
-// 并把这件事记进 Skipped 让作者自己挑。
+// When one platform has several files, the first in sort order is kept
+// (shipping both .tar.gz and .zip is common), and the fact is recorded in
+// Skipped so the author can pick for themselves.
 func Infer(files []string, forceVersion string) Result {
 	res := Result{Artifact: map[string]string{}}
 
@@ -331,8 +380,9 @@ func Infer(files []string, forceVersion string) Result {
 			continue
 		}
 		seen[h.Platform] = h.File
-		// 版本号不换成 {version}，作者每次发版都要回来改 toy.toml ——
-		// 而"打个 tag 就是发新版"是这个产品的卖点。
+		// Without turning the version into {version}, the author has to come
+		// back and edit toy.toml on every release — and "push a tag, that's the
+		// release" is this product's selling point.
 		h.Template = h.File
 		if res.Version != "" {
 			h.Template = strings.ReplaceAll(h.Template, res.Version, "{version}")
@@ -351,9 +401,11 @@ func Infer(files []string, forceVersion string) Result {
 	return res
 }
 
-// looksLikeArchive 判断一个文件像不像发布资产，只用来决定「认不出来时要不要
-// 出声」。宁可漏报不可错报：checksums.txt、LICENSE、README.md 都会落在 dist 里，
-// 为它们各报一行警告，等于把真正需要作者去看的那一条淹掉。
+// looksLikeArchive judges whether a file looks like a release asset, and is
+// only used to decide WHETHER TO SPEAK UP when we cannot recognize it. Prefer
+// missing one over crying wolf: checksums.txt, LICENSE and README.md all end up
+// in dist/, and a warning line for each of them drowns out the one line the
+// author actually needs to look at.
 func looksLikeArchive(f string) bool {
 	l := strings.ToLower(f)
 	for _, ext := range []string{".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tar.zst", ".zip"} {
@@ -364,16 +416,19 @@ func looksLikeArchive(f string) bool {
 	return false
 }
 
-// detect 从一个文件名里认出平台 key。认不出返回空 key；第二个返回值是认出来的
-// GOOS（Windows 要单独说明才跳过，不能静默）。
+// detect recognizes the platform key in a filename. Returns an empty key when
+// it cannot; the second return value is the GOOS it recognized (Windows has to
+// be explained when skipped, never dropped silently).
 //
-// Rust 的 target triple（x86_64-unknown-linux-gnu / aarch64-apple-darwin）不用
-// 特判：切完词之后每一段该有的词都在，unknown / pc 这类多余的段本来就不认。
+// Rust target triples (x86_64-unknown-linux-gnu / aarch64-apple-darwin) need no
+// special case: after tokenizing, every word we need is there, and the extra
+// segments like unknown / pc are simply not recognized.
 func detect(file string) (key, goos string) {
 	toks := tokens(file)
 	var arch, libc string
 	for i, tok := range toks {
-		// 先判外来系统：android 要压过同一个文件名里已经认出来的 linux，而不是排队。
+		// Foreign systems first: android has to beat a linux already recognized
+		// in the same filename, not queue up behind it.
 		if v, ok := foreignWords[tok]; ok {
 			return "", v
 		}
@@ -383,7 +438,7 @@ func detect(file string) (key, goos string) {
 		if v, ok := archWords[tok]; ok && arch == "" {
 			arch = v
 		}
-		// x86_64 被 '_' 切成了两段，用相邻二元组捞回来。
+		// '_' tore x86_64 in half; put it back with the adjacent pair.
 		if i+1 < len(toks) {
 			if v, ok := archWords[tok+"_"+toks[i+1]]; ok && arch == "" {
 				arch = v
@@ -401,7 +456,8 @@ func detect(file string) (key, goos string) {
 		return "", goos
 	}
 	switch {
-	// armv6/armv7 本身就是代次，再挂一层 libc 没有意义（也没人这么发布）。
+	// armv6/armv7 already name a generation; hanging a libc off that means
+	// nothing (and nobody ships that way).
 	case strings.HasPrefix(arch, "armv"):
 		return goos + "/" + arch, goos
 	case goos == "linux" && libc != "":
@@ -417,7 +473,7 @@ func tokens(s string) []string {
 	})
 }
 
-// firstVersion 取这个文件名里出现的第一个版本串。
+// firstVersion takes the first version string that appears in this filename.
 func firstVersion(file string) string {
 	if all := findVersions(file); len(all) > 0 {
 		return all[0]
@@ -425,12 +481,14 @@ func firstVersion(file string) string {
 	return ""
 }
 
-// commonVersion 挑出现次数最多的那个版本串。goreleaser 一批资产的版本是同一个，
-// 所以"最多的那个"就是它；平手时取字典序最小的，好让同一批文件名每次跑出同样的结果。
+// commonVersion picks the version string that appears most often. A goreleaser
+// batch shares one version, so "the most common one" is it; ties break on
+// lexicographic order so the same filenames always produce the same result.
 func commonVersion(files []string) string {
 	count := map[string]int{}
 	for _, f := range files {
-		// 一个文件名里同一个版本可能出现两次（目录前缀 + 包名），只算一次。
+		// The same version can appear twice in one filename (directory prefix +
+		// package name); count it once.
 		for _, v := range slices.Compact(slices.Sorted(slices.Values(findVersions(f)))) {
 			count[v]++
 		}
@@ -444,8 +502,9 @@ func commonVersion(files []string) string {
 	return best
 }
 
-// commonPrefix 从资产名里抠出工具名：取公共前缀，砍掉版本号那一段往后的部分，
-// 再削掉尾巴上的分隔符。`hello_1.2.0_linux_amd64.tar.gz` 这一批得到 `hello`。
+// commonPrefix digs the tool name out of the asset names: take the common
+// prefix, cut everything from the version segment on, then trim trailing
+// separators. The batch `hello_1.2.0_linux_amd64.tar.gz` yields `hello`.
 func commonPrefix(assets []Asset) string {
 	if len(assets) == 0 {
 		return ""
@@ -463,8 +522,9 @@ func commonPrefix(assets []Asset) string {
 		p = p[:loc[0]]
 	}
 	p = strings.TrimRight(p, "-_.")
-	// `fd-v10.5.0-x86_64-…` 这种 `-v` 连写的，砍掉版本号之后前缀是 `fd-v`。
-	// 那个 v 是 tag 的前缀不是名字的一部分 —— 留着就会拿 `fd-v` 当命令名。
+	// For the run-together `-v` spelling (`fd-v10.5.0-x86_64-…`), cutting the
+	// version leaves the prefix `fd-v`. That v is the tag's prefix, not part of
+	// the name — keep it and the command gets named `fd-v`.
 	if n := len(p); n > 1 && (p[n-1] == 'v' || p[n-1] == 'V') && strings.ContainsRune("-_.", rune(p[n-2])) {
 		p = strings.TrimRight(p[:n-1], "-_.")
 	}

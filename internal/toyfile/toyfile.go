@@ -1,4 +1,4 @@
-// Package toyfile 解析并校验作者写的 toy.toml。规格 §3。
+// Package toyfile parses and validates the toy.toml an author writes. Spec §3.
 package toyfile
 
 import (
@@ -23,47 +23,52 @@ type Toyfile struct {
 	Desc     string            `toml:"desc"`
 	License  string            `toml:"license"`
 	Homepage string            `toml:"homepage"`
-	Bin      map[string]string `toml:"bin"`      // PATH 上的名字 -> 包内相对路径
-	Artifact map[string]string `toml:"artifact"` // "linux/amd64" -> 资产名模板
-	SHA256   map[string]string `toml:"sha256"`   // "linux/amd64" -> hex，可选但写了就强制
-	Script   map[string]string `toml:"script"`   // 单文件形态：PATH 名字 -> 资产名模板
+	Bin      map[string]string `toml:"bin"`      // command name on PATH -> path inside the package
+	Artifact map[string]string `toml:"artifact"` // "linux/amd64" -> release asset name template
+	SHA256   map[string]string `toml:"sha256"`   // "linux/amd64" -> hex; optional, but declaring one makes it mandatory
+	Script   map[string]string `toml:"script"`   // single-file form: command name on PATH -> asset name template
 
-	// Origin 记录这份 toyfile 是作者自己写的还是索引提供的（规格 §5 的内联 toyfile）。
-	// **不进磁盘格式**：这是「这几行字节从哪来的」，不是作者能声明的东西 ——
-	// 能声明就等于内联的那份可以自称 upstream，而信任等级正是照着它分档的（铁律 8）。
-	// toml:"-" 也顺带让 toy.toml 里真写了 origin = 的时候落进 Undecoded 被拒。
+	// Origin records whether these bytes came from the author's own repo or from an index
+	// entry (the inline toyfile of spec §5). It is NEVER part of the on-disk format: it says
+	// where the bytes came from, which is not something an author gets to declare -- if it
+	// were, an inline toyfile could claim to be upstream, and the trust level is graded off
+	// exactly this (iron law 8). toml:"-" also means a real `origin =` line in a toy.toml
+	// lands in Undecoded and gets rejected.
 	Origin string `toml:"-"`
 }
 
-// toyfile 的来源。Origin 只有这两个值。
+// Where a toyfile came from. Origin is only ever one of these two.
 const (
-	OriginUpstream = "upstream" // 仓库里那份 toy.toml，作者自己写的
-	OriginIndex    = "index"    // 索引条目内联的那份，提交索引记录的人写的
+	OriginUpstream = "upstream" // the toy.toml in the repo, written by the author
+	OriginIndex    = "index"    // inlined in an index entry, written by whoever submitted it
 )
 
-// Parse 解析并校验。校验必须拒绝：
-//   - artifact 和 script 同时存在或都不存在
-//   - name 为空或含路径分隔符
-//   - bin/script 的 key 含 '/'，或 value 是绝对路径 / 含 ".."（铁律 5、7）
-//   - sha256 的值不是 64 位 hex
+// Parse parses and validates. Validation MUST reject:
+//   - [artifact] and [script] both present, or neither
+//   - an empty name, or a name containing a path separator
+//   - a bin/script key containing '/', or a value that is absolute or contains ".." (iron laws 5 and 7)
+//   - a sha256 value that is not 64 hex characters
 //
-// 报错要说人话，并告诉作者该怎么改。
+// Errors are written for humans and say what to change.
 func Parse(data []byte) (*Toyfile, error) { return ParseFrom(data, OriginUpstream) }
 
-// ParseFrom 是 Parse 加上一条来源标记，校验规则**一模一样，一条都不放松**。
-// 索引内联的那份是远端内容（索引谁都能 fork、谁都能提 PR），比作者自己仓库里
-// 的那份更需要这些检查，不是更不需要 —— 尤其 bin 目标不许绝对路径 / 不许 ".."、
-// artifact 值不许是 URL 这几条，它们挡的正是「一条恶意索引记录能干什么」。
+// ParseFrom is Parse plus a provenance tag. The validation rules are IDENTICAL -- not one
+// of them is relaxed. An inline toyfile is remote content (anyone can fork the index,
+// anyone can open a PR), so it needs these checks MORE than the author's own file, not
+// less. Especially "a bin target may not be absolute or contain .." and "an artifact
+// value may not be a URL": those are precisely what bounds the blast radius of a
+// malicious index record.
 func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 	var t Toyfile
 	md, err := toml.Decode(string(data), &t)
 	if err != nil {
 		return nil, fmt.Errorf("toyfile: toy.toml is not valid TOML: %w", err)
 	}
-	// 认不出来的键一律拒，不能静默忽略：把 [sha256] 打成 [sha265] 的后果是
-	// 「作者以为写了 hash、客户端从头到尾没校验过」，正是铁律 4 要防的那件事。
-	// 顺带也拦住 install/postinstall/hook 这类键 —— toy 不执行包里的任何代码（铁律 1），
-	// 静默忽略会让作者以为它们生效了。
+	// Unknown keys are rejected, never silently ignored: typing [sha265] instead of [sha256]
+	// means "the author believes they pinned a hash, the client never verified anything" --
+	// exactly what iron law 4 exists to prevent. It also catches install/postinstall/hook
+	// keys: toy runs no code from a package (iron law 1), and swallowing those would let an
+	// author believe they took effect.
 	if un := md.Undecoded(); len(un) > 0 {
 		return nil, fmt.Errorf("toyfile: toy.toml has keys toy does not recognize: %s. "+
 			"Only name / desc / license / homepage and the [bin] [artifact] [sha256] [script] sections are valid. "+
@@ -95,7 +100,7 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 			"and you do not need anyone's approval to add it", ErrNoArtifact, t.Name)
 	}
 
-	// bin：PATH 上的名字 -> 解压后包内的相对路径。
+	// bin: command name on PATH -> relative path inside the extracted package.
 	for name, target := range t.Bin {
 		if err := checkBinName("bin", name); err != nil {
 			return nil, err
@@ -105,7 +110,7 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 		}
 	}
 
-	// script 段的 key 也会变成 PATH 上的名字，value 是要下载的资产名。
+	// A [script] key also becomes a command name on PATH; the value is the asset to download.
 	for name, asset := range t.Script {
 		if err := checkBinName("script", name); err != nil {
 			return nil, err
@@ -125,10 +130,11 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 		if err := checkPlatformKey("artifact", plat); err != nil {
 			return nil, err
 		}
-		// 资产名会被原样拼到 release 下载地址的末尾。含 ".." 或绝对路径的话，
-		// URL 归一化之后指向的是另一个仓库 —— 客户端却仍然照着 toy.toml 打印
-		// 「来源 github.com/<作者>」，那句话就成了假话（铁律 8）。空值同理：
-		// 地址会以 / 结尾，下回来一张网页，没有 sha256 时还会被 TOFU 钉住当二进制。
+		// The asset name is appended verbatim to the release download URL. With ".." or an
+		// absolute path, URL normalization lands on a different repo entirely -- while the
+		// client still prints "source github.com/<author>" straight out of toy.toml, which is
+		// now a lie (iron law 8). An empty value is the same story: the URL ends in a slash,
+		// an HTML page comes back, and with no sha256 it gets pinned by TOFU as the binary.
 		if err := checkRelPath("artifact", plat, asset); err != nil {
 			return nil, err
 		}
@@ -142,8 +148,9 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 			return nil, fmt.Errorf("toyfile: the [sha256] value for %q is %q, which is not 64 lowercase hex "+
 				"characters. Paste the digest sha256sum prints, verbatim -- no filename, no uppercase", plat, sum)
 		}
-		// key 打错一个字母，校验就会被静默跳过 —— 而铁律 4 说有 sha256 就必须强制校验，
-		// 所以这里宁可拒绝，也不要装一个没人验过的二进制。
+		// One wrong letter in the key silently skips verification -- and iron law 4 says a
+		// declared sha256 MUST be enforced. Better to refuse outright than to install a
+		// binary nobody checked.
 		if _, ok := t.Artifact[plat]; !ok {
 			if hasScript {
 				return nil, fmt.Errorf("toyfile: %q is a [script] package and has no per-platform assets, so the "+
@@ -159,24 +166,26 @@ func ParseFrom(data []byte, origin string) (*Toyfile, error) {
 	return &t, nil
 }
 
-// IsScript 表示这是单文件脚本形态：下载 + chmod +x + 软链，零解压零构建。
+// IsScript reports the single-file script form: download, chmod +x, symlink -- no
+// extraction, no build.
 func (t *Toyfile) IsScript() bool { return len(t.Script) > 0 }
 
-// Asset 按 goos/goarch 挑出资产名并展开 {version} / {tag} 占位符，
-// 同时返回该平台声明的 sha256（没有就是空串）。
-// 找不到当前平台返回 ErrNoPlatform，并在 error 里列出它支持哪些平台。
+// Asset picks the asset name for goos/goarch, expands the {version} / {tag} placeholders,
+// and returns the sha256 declared for that platform ("" if there is none). If the
+// platform is missing it returns ErrNoPlatform and lists the platforms the toyfile does
+// declare.
 //
-// 只试 goos/goarch 一个 key，没有回退。要 musl / Rosetta / arm 代次那几层回退
-// 就用 AssetFor（internal/platform.Candidates 生成候选）。
+// It tries exactly one key -- no fallback. For the musl / Rosetta / arm-generation
+// fallbacks use AssetFor, fed by internal/platform.Candidates.
 func (t *Toyfile) Asset(goos, goarch, version, tag string) (asset, sha256 string, err error) {
 	a, sum, _, err := t.AssetFor([]string{goos + "/" + goarch}, version, tag)
 	return a, sum, err
 }
 
-// AssetFor 按候选顺序找第一个命中的平台，返回资产名、声明的 sha256、
-// 以及真正命中的那个候选 key —— 调用方要用它告诉用户走的是回退
-// （装 linux/amd64 的包到 Alpine 上、或在 M 系列 Mac 上装 darwin/amd64，
-// 都得说出来，铁律 8）。
+// AssetFor walks the candidates in order and takes the first hit, returning the asset
+// name, the declared sha256, and the candidate key that actually matched. Callers need
+// that last one to tell the user a fallback happened: installing a linux/amd64 build on
+// Alpine, or a darwin/amd64 build on Apple Silicon, has to be said out loud (iron law 8).
 func (t *Toyfile) AssetFor(candidates []string, version, tag string) (asset, sha256, matched string, err error) {
 	if t.IsScript() {
 		return "", "", "", fmt.Errorf("toyfile: %q is a single-file script package ([script]) and has no "+
@@ -188,8 +197,9 @@ func (t *Toyfile) AssetFor(candidates []string, version, tag string) (asset, sha
 		if !ok {
 			continue
 		}
-		// {version} / {tag} 是远端给的（git ls-remote 拿到的 tag、或调用方的 --version），
-		// 展开之后这一串才是真正会被拼进下载地址的东西，所以在这个唯一的出口再验一次。
+		// {version} / {tag} come from the remote (the tag git ls-remote returned, or the
+		// caller's --version). Only after expansion is this the string that actually goes
+		// into the download URL, so check it again here, at the one exit.
 		expanded := Expand(tmpl, version, tag)
 		if err := checkRelPath("artifact", plat, expanded); err != nil {
 			return "", "", "", err
@@ -197,10 +207,11 @@ func (t *Toyfile) AssetFor(candidates []string, version, tag string) (asset, sha
 		return expanded, t.SHA256[plat], plat, nil
 	}
 
-	// 两边都列出来：用户要知道我们试过什么，作者要知道该补哪个 key。
-	// 建议补的那个 key 要取底座（两段），不能直接用首选候选：linux 上的首选候选
-	// 是我们自己合成的 linux/amd64/gnu，而没有任何人会去发布一个叫 gnu 的资产 ——
-	// 让用户拿着这句话去给作者提 issue，提的就是一个错的要求。
+	// List both sides: the user needs to know what we tried, the author needs to know which
+	// key to add. Suggest the two-segment base key, never the first candidate -- on Linux the
+	// first candidate is linux/amd64/gnu, which we synthesized ourselves, and nobody ships an
+	// asset called "gnu". Point the user at that and the issue they open upstream asks for
+	// the wrong thing.
 	want := "the current platform"
 	if len(candidates) > 0 {
 		want = baseKey(candidates[0])
@@ -210,8 +221,8 @@ func (t *Toyfile) AssetFor(candidates []string, version, tag string) (asset, sha
 		ErrNoPlatform, describePlatforms(candidates), describePlatforms(t.Platforms()), want)
 }
 
-// baseKey 把平台 key 截到前两段（goos/goarch）。三段的 linux/amd64/musl → linux/amd64；
-// 本来就两段的原样返回。
+// baseKey trims a platform key to its first two segments (goos/goarch):
+// linux/amd64/musl -> linux/amd64. A key that is already two segments comes back as is.
 func baseKey(plat string) string {
 	if i := strings.Index(plat, "/"); i >= 0 {
 		if j := strings.Index(plat[i+1:], "/"); j >= 0 {
@@ -221,7 +232,7 @@ func baseKey(plat string) string {
 	return plat
 }
 
-// Platforms 返回它声明支持的平台列表，排序稳定，报错时给用户看。
+// Platforms returns the declared platforms in a stable order, for error messages.
 func (t *Toyfile) Platforms() []string {
 	out := make([]string, 0, len(t.Artifact))
 	for plat := range t.Artifact {
@@ -231,8 +242,9 @@ func (t *Toyfile) Platforms() []string {
 	return out
 }
 
-// Expand 展开资产名里的两个占位符：{version} 不带 v 前缀，{tag} 原样。
-// 传进来的 version 带不带 v 都行 —— 这里统一剥掉，免得每个调用方各剥一次。
+// Expand fills in the two placeholders in an asset name: {version} without the v prefix,
+// {tag} verbatim. The version may arrive with or without a leading v -- it is stripped
+// here, once, so every caller does not have to.
 func Expand(tmpl, version, tag string) string {
 	return strings.NewReplacer(
 		"{version}", strings.TrimPrefix(version, "v"),
@@ -247,7 +259,7 @@ func describePlatforms(plats []string) string {
 	return strings.Join(plats, ", ")
 }
 
-// checkName：name 会变成 ~/.toy/pkg 下的一级目录名，所以不能是路径。
+// checkName: name becomes a directory name under ~/.toy/pkg, so it cannot be a path.
 func checkName(name string) error {
 	switch {
 	case name == "":
@@ -261,7 +273,7 @@ func checkName(name string) error {
 	return checkPrintable("name", name)
 }
 
-// checkBinName：这个 key 会变成 ~/.toy/bin 下的软链名，同样不能是路径。
+// checkBinName: this key becomes a symlink name in ~/.toy/bin, so it cannot be a path either.
 func checkBinName(section, name string) error {
 	switch {
 	case name == "":
@@ -279,7 +291,8 @@ func checkBinName(section, name string) error {
 	return checkPrintable(fmt.Sprintf("the name %q in [%s]", name, section), name)
 }
 
-// checkRelPath：等号右边必须是包内的相对路径，逃不出去（铁律 5、7）。
+// checkRelPath: the right-hand side must be a relative path inside the package, with no
+// way out of it (iron laws 5 and 7).
 func checkRelPath(section, name, target string) error {
 	switch {
 	case target == "":
@@ -296,17 +309,20 @@ func checkRelPath(section, name, target string) error {
 				`package directory`, ErrUnsafeTarget, target, name, section)
 		}
 	}
-	// [artifact] 和 [script] 的值会被原样拼进下载地址（host.ReleaseURL / RawURL），
-	// 而 ? 和 # 在 URL 里是 query 和 fragment 的分隔符：写成 "toy.tar.gz?x" 时
-	// 真正被请求的是 "toy.tar.gz"，写成 "a#b" 时是 "a" —— 静默地取到另一个文件，
-	// 而客户端照着 toy.toml 打印的仍然是作者写的那个名字（铁律 8）。
-	// fetch 对 file:// 早就是「宁可报错也不猜」，这里把同一条规矩补齐。
-	// 带 scheme 的绝对 URL 三道检查一个都不沾（不以 / 开头、没有 ".." 段、
-	// 没有 ?#），但它同样不是「包内的相对路径」：规格 §3 说得很死 ——
-	// [artifact] / [script] 里只写 release 资产名，**不写 URL**。放行的话，
-	// 裸地址那条路上 base.ResolveReference 会直接跳到另一台机器（甚至
-	// file:///etc/shadow 和 169.254.169.254），而客户端照着 toy.toml 打印的
-	// 仍然是作者写的那个来源 —— 那句话就成了假话（铁律 8）。
+	// [artifact] and [script] values are appended verbatim to the download URL
+	// (host.ReleaseURL / RawURL), and ? and # are the query and fragment separators there:
+	// "toy.tar.gz?x" actually requests "toy.tar.gz", "a#b" requests "a" -- a different file,
+	// fetched silently, while the client keeps printing the name the author wrote in
+	// toy.toml (iron law 8). fetch has always preferred erroring over guessing for file://;
+	// this closes the same gap here.
+	//
+	// An absolute URL with a scheme trips none of the three checks above (no leading slash,
+	// no ".." segment, no ?#), but it is just as much not "a relative path inside the
+	// package". Spec §3 is blunt about it: [artifact] / [script] hold a release asset name
+	// and NEVER a URL. Let one through and, on the bare-URL install path,
+	// base.ResolveReference jumps straight to another machine -- or to file:///etc/shadow,
+	// or 169.254.169.254 -- while the client still prints the source the author's toy.toml
+	// claims. That line becomes a lie (iron law 8).
 	if i := strings.Index(target, "://"); i > 0 && isURLScheme(target[:i]) {
 		return fmt.Errorf("%w: the value %q for %q in [%s] is a URL. Only the release asset name "+
 			"(or a path inside the package) belongs here -- toy builds the address itself from the host, "+
@@ -322,8 +338,9 @@ func checkRelPath(section, name, target string) error {
 	return checkPrintable(fmt.Sprintf("the path for %q in [%s]", name, section), target)
 }
 
-// isURLScheme 按 RFC 3986 判断 s 是不是一个 scheme（字母开头，后跟字母数字 +-.）。
-// 严格按规范判，免得把 "a:b://c" 这种正常文件名误当成 URL 拦下来。
+// isURLScheme reports whether s is an RFC 3986 scheme: a letter followed by letters,
+// digits, '+', '-' or '.'. Held strictly to the spec so an ordinary filename like
+// "a:b://c" is not mistaken for a URL and rejected.
 func isURLScheme(s string) bool {
 	if s == "" || !(s[0] >= 'a' && s[0] <= 'z' || s[0] >= 'A' && s[0] <= 'Z') {
 		return false
@@ -339,12 +356,14 @@ func isURLScheme(s string) bool {
 	return true
 }
 
-// checkPlatformKey：key 必须是 GOOS/GOARCH，或者带一段 libc 的 GOOS/GOARCH/libc。
-// 写错了不会报错，只会永远匹配不上 —— 所以这里宁可当场拒绝：作者以为自己发布了
-// linux 版，用户被告知「没有适配的构建」，这中间没有任何地方会说话。
+// checkPlatformKey: the key must be GOOS/GOARCH, or GOOS/GOARCH/libc with a libc segment.
+// A malformed key does not fail -- it just never matches, forever. So reject it on the
+// spot: otherwise the author believes they shipped a Linux build, the user is told "no
+// build for your platform", and nothing in between ever says a word.
 func checkPlatformKey(section, plat string) error {
-	// runtime.GOOS/GOARCH 永远是小写、不带空格。写成 "Linux/AMD64" 或 " linux/amd64 "
-	// 不会报错，只会永远匹配不上。这条要先判，因为下面的分段比较是逐字节的。
+	// runtime.GOOS/GOARCH are always lowercase with no whitespace. "Linux/AMD64" or
+	// " linux/amd64 " does not fail, it just never matches. Check this first, because the
+	// segment comparison below is byte for byte.
 	if plat != strings.ToLower(plat) || strings.ContainsAny(plat, " \t") {
 		return fmt.Errorf("toyfile: the key %q in [%s] must be all lowercase with no whitespace -- it has to "+
 			"equal Go's GOOS/GOARCH byte for byte to ever match, e.g. \"linux/amd64\"", plat, section)
@@ -354,8 +373,9 @@ func checkPlatformKey(section, plat string) error {
 		return fmt.Errorf("toyfile: the key %q in [%s] is not in GOOS/GOARCH form -- "+
 			`e.g. "linux/amd64", "darwin/arm64", or with a libc segment, "linux/amd64/musl"`, plat, section)
 	}
-	// arch 那一段不做白名单：Go 每加一个 GOARCH 都会让白名单变成一条假报错，
-	// 而 armv6 / armv7 这种「GOARCH 分不出来的代次」本来就得能写进去。
+	// No allowlist for the arch segment: every new GOARCH Go adds would turn an allowlist
+	// into a bogus rejection, and the generation names GOARCH cannot express -- armv6,
+	// armv7 -- have to be writable here in the first place.
 	if len(parts) == 3 && parts[2] != "musl" && parts[2] != "gnu" {
 		return fmt.Errorf("toyfile: the key %q in [%s] has an unrecognized third segment %q -- that segment "+
 			"is the libc and can only be \"musl\" (Alpine and friends) or \"gnu\" (glibc). Anything else "+
@@ -364,10 +384,12 @@ func checkPlatformKey(section, plat string) error {
 	return nil
 }
 
-// checkPrintable：name/desc/license/homepage、命令名和路径都会被原样打印到终端，
-// 而安装完那一行紧挨着的就是信任等级（规格 §4）。\r 加一段 ANSI 就能把已经打出来的行
-// 擦掉重写，伪造一句「✓ 已签名 · Derrity」—— 铁律 8 要求信任等级如实打印，
-// 所以在解析这一层就把控制字符拒掉：打印的地方有好几处，堵源头只要堵一次。
+// checkPrintable: name/desc/license/homepage, command names and paths all get printed to
+// the terminal verbatim, and the line right next to them on install is the trust level
+// (spec §4). A \r plus an ANSI sequence erases a line already printed and rewrites it,
+// forging "✓ signed · Derrity". Iron law 8 requires the trust level to be printed
+// honestly, so control characters die here at parse time: there are several places that
+// print, and only one that parses.
 func checkPrintable(what, s string) error {
 	for _, r := range s {
 		if r < 0x20 || r == 0x7f {

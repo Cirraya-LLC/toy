@@ -1,6 +1,6 @@
 package main
 
-// 从「一个仓库的发布事实」拼出一份内联 toyfile（规格 §5.1）。
+// Build an inline toyfile (spec §5.1) out of one repo's release facts.
 
 import (
 	"fmt"
@@ -11,35 +11,39 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/toyfile"
 )
 
-// descMax 是 desc 的长度上限（rune）。desc 是远端内容，会被原样写进索引 JSON
-// 再打进 `toy search` 的结果里；一条几 KB 的描述能把整屏搜索结果顶掉。
+// descMax caps the desc length in runes. desc is remote content: it goes verbatim into
+// the index JSON and from there into `toy search` results, so a few-KB description
+// would push a whole screen of search results off the top.
 const descMax = 160
 
-// pack 是一个仓库认出来的全部结果。
+// pack is everything recognised about one repo.
 type pack struct {
 	owner, repo string
 	info        repoInfo
 	res         assetname.Result
-	name        string // 工具名（= toy.toml 的 name，也是包目录名）
-	binName     string // [bin] 左边那个命令名。默认同 name，--probe 探到真文件时改成它的基名
-	binPath     string // [bin] 右边：解压后包内的相对路径
-	binProbed   bool   // true = 解开真包看过的，false = 猜的
-	bare        bool   // true = 资产是裸二进制，[bin] 只对一个平台成立
+	name        string // tool name (= toy.toml's name, also the package directory name)
+	binName     string // the command name on the left of [bin]. Defaults to name; --probe replaces it with the real file's basename
+	binPath     string // right of [bin]: the in-package path after extraction
+	binProbed   bool   // true = read out of a real archive, false = guessed
+	bare        bool   // true = the assets are bare binaries
 	notes       []string
 }
 
-// installable 报告这个资产 toy 真的装得动。
+// installable reports that toy can actually install this asset.
 //
-// 压缩包，加上**认得出平台的裸二进制**（`jq-linux-amd64` 这种 —— install 那边
-// `archive.IsArchive` 为 false 时就是下载 + chmod +x，见 insUnpack 的 default
-// 分支）。把裸二进制整个拒掉，jqlang/jq 这种只发单文件的仓库会被判成
-// 「一个能装的资产都没有」，整个仓库进不了索引。
+// Archives, plus BARE BINARIES WHOSE PLATFORM IS RECOGNISABLE (`jq-linux-amd64` and
+// friends -- when archive.IsArchive is false the install side just downloads and
+// chmod +x's, see the default branch of insUnpack). Reject bare binaries wholesale and
+// a repo like jqlang/jq, which only ships single files, gets judged "not one installable
+// asset" and never makes it into the index at all.
 //
-// 认不出平台的裸文件（checksums.txt、签名、sha256sum.txt）在这里就被挡住：
-// 判据借 assetname.Classify，不在这里另抄一份词表。
+// Bare files whose platform cannot be recognised (checksums.txt, signatures,
+// sha256sum.txt) are stopped right here; the test borrows assetname.Classify rather than
+// keeping a second copy of that word list.
 //
-// 唯一硬拒的是 **.tar.xz**：`internal/archive` 明确回 ErrUnsupported（要外部
-// xz），放进去就是一条生成得出来、装不下去的条目。
+// The one hard rejection is .tar.xz: internal/archive returns ErrUnsupported for it
+// (needs an external xz), so letting it through only produces an entry that generates
+// fine and installs never.
 func installable(name string) bool {
 	l := strings.ToLower(name)
 	if strings.HasSuffix(l, ".tar.xz") || strings.HasSuffix(l, ".txz") {
@@ -51,9 +55,10 @@ func installable(name string) bool {
 	return assetname.Classify(name).Platform != ""
 }
 
-// allBareBinaries 报告这个包的资产【全都】是裸二进制（没有压缩后缀）。
-// 只用来决定 [bin] 上面那句注释怎么写 —— 右边的路径两种形态都是 <名字>，
-// 因为 install 把单文件落成 [bin] 指定的路径而不是资产名。
+// allBareBinaries reports that EVERY asset in this package is a bare binary (no archive
+// suffix). It only decides which comment to write above [bin] -- the path on the right
+// is <name> either way, because install lands a single file at the path [bin] names
+// rather than at the asset name.
 func allBareBinaries(res assetname.Result) bool {
 	if len(res.Assets) == 0 {
 		return false
@@ -66,7 +71,8 @@ func allBareBinaries(res assetname.Result) bool {
 	return true
 }
 
-// makePack 把远端事实变成一个待渲染的包。第二个返回值非 nil 表示这个仓库产不出条目。
+// makePack turns remote facts into a pack ready to render. A non-nil second return value
+// means this repo cannot produce an entry.
 func makePack(owner, repo string, info repoInfo) (pack, error) {
 	p := pack{owner: owner, repo: repo, info: info}
 
@@ -80,13 +86,16 @@ func makePack(owner, repo string, info repoInfo) (pack, error) {
 		return p, noUsableAssets(info)
 	}
 
-	// 版本推断和 `toy init` 走的是同一个函数（internal/assetname），这不是巧合：
-	// 两份实现必然漂移，而漂移意味着「作者接入之后自动让位」那一刻用户装到的
-	// 东西变了，且没有任何地方会说。
+	// Version inference goes through the same function `toy init` uses
+	// (internal/assetname), and that is not incidental: two implementations would drift,
+	// and drift means that at the moment upstream adds its own toy.toml and the inline
+	// entry steps aside, what users install quietly changes -- with nothing anywhere
+	// saying so.
 	//
-	// 这里比 toy init 多知道一件事：release 的 tag。所以走 InferTag ——
-	// tag 在资产名里真的出现时按字面替换，正则只在拿不到 tag 时才上场
-	// （`15.2.0-aarch64` 会被正则整个当成版本号，见 assetname.preWords）。
+	// This side knows one thing toy init does not: the release tag. So it calls InferTag
+	// -- literal substitution when the tag really appears in the asset name, with the
+	// regex only stepping in when there is no tag ("15.2.0-aarch64" would otherwise be
+	// swallowed whole as the version, see assetname.preWords).
 	p.res = assetname.InferTag(names, info.Tag)
 	if len(p.res.Assets) == 0 {
 		return p, fmt.Errorf("none of the %d installable assets in the release has a recognisable os/arch "+
@@ -95,29 +104,34 @@ func makePack(owner, repo string, info repoInfo) (pack, error) {
 
 	p.name, p.binPath = pickName(repo, p.res)
 	p.binName = p.name
-	// 裸二进制不再需要特判：install 把单文件落成 [bin] 右边那个路径而不是
-	// 资产名（cmd/toy/install.go 的 insUnpack），所以 <名字> = "<名字>" 对每个
-	// 平台都成立。以前照资产名写，除了恰好写对的那一个平台其余全是断掉的软链 ——
-	// 索引里 mikefarah/yq 就是这么在 6 个平台里坏了 5 个。
+	// Bare binaries need no special case any more: install lands a single file at the
+	// path on the right of [bin] rather than at the asset name (insUnpack in
+	// cmd/toy/install.go), so <name> = "<name>" holds on every platform. Writing the
+	// asset name instead used to leave a broken symlink on every platform except the one
+	// it happened to match -- that is exactly how mikefarah/yq was broken on 5 of its 6
+	// platforms in the index.
 	p.bare = allBareBinaries(p.res)
 	for _, s := range p.res.Skipped {
 		p.notes = append(p.notes, s.File+": "+s.Skip)
 	}
 	if v := p.res.Unreplaced; v != "" {
-		// 模板里还留着一串版本号 = 这条被钉死在这一版：上游一发新版，装的人
-		// 拿到的是一个 404 的下载地址。这条必须人来看。
+		// A version string still sitting in the template means this entry is pinned to
+		// this one release: the next upstream version hands installers a 404 download
+		// URL. A human has to look at this one.
 		//
-		// 判据是"还留着版本号"而不是"没有 {version}"：资产名本来就不带版本号的
-		// 项目（eza、yq）跨版本天然稳定，对它们报警是误报，而一条每次都响的
-		// 警告会把这一条真的淹掉。
+		// The test is "a version number is still in there", not "there is no {version}":
+		// projects whose asset names never carry a version (eza, yq) are stable across
+		// releases by construction, warning about them is a false positive, and a warning
+		// that fires every time drowns out this real one.
 		p.notes = append(p.notes, "the [artifact] template still spells out the version "+v+" instead of "+
 			"{version} -- the next upstream release makes it point at a file that does not exist; fix it by hand")
 	}
 	return p, nil
 }
 
-// noUsableAssets 把「产不出条目」分成几种，各说各的人话。
-// 一句笼统的「没有可用资产」会让人挨个去仓库页面上看到底是哪种。
+// noUsableAssets splits "cannot produce an entry" into cases, each saying its own thing
+// in plain words. One blanket "no usable assets" would send you to the repo page to
+// figure out which of them it was.
 func noUsableAssets(info repoInfo) error {
 	if len(info.Assets) == 0 {
 		return fmt.Errorf("the latest release (%s) has no assets at all -- most likely a source-only release. "+
@@ -130,22 +144,26 @@ func noUsableAssets(info repoInfo) error {
 		info.Tag, len(info.Assets), strings.Join(head(info.Assets, 6), ", "))
 }
 
-// pickName 定工具名和 [bin] 右边的默认值。
+// pickName settles the tool name and the default for the right of [bin].
 //
-// **资产名前缀优先于仓库名**：仓库叫 cli/cli 而二进制叫 gh 是常见情况，
-// 而资产名是作者的构建脚本自己写出来的，比仓库名更接近真名。
+// THE ASSET-NAME PREFIX BEATS THE REPO NAME: a repo called cli/cli shipping a binary
+// called gh is ordinary, and the asset name is written by the author's own build script,
+// so it is closer to the real name than the repo name is.
 func pickName(repo string, res assetname.Result) (name, binPath string) {
 	name = repo
 	if n := res.Name; cleanName(n) {
 		name = n
 	}
-	// 右边是【解压之后】包内的相对路径。goreleaser 默认不套目录，所以「和命令
-	// 同名的一个文件」是最好的猜测 —— 但它就是个猜测，--probe 才能定死。
+	// The right-hand side is the in-package path AFTER extraction. goreleaser does not
+	// wrap things in a directory by default, so "a file with the same name as the
+	// command" is the best guess available -- but it is a guess, and only --probe
+	// settles it.
 	return name, name
 }
 
-// cleanName 判断这个名字当命令名和目录名都不别扭。真正的校验在 toyfile.ParseFrom
-// （这份 toyfile 渲染完一定会过一遍），这里只是挑一个更像样的候选。
+// cleanName decides whether this name is awkward as a command name or a directory name.
+// The real validation lives in toyfile.ParseFrom (the rendered toyfile always goes
+// through it); this only picks the more presentable candidate.
 func cleanName(s string) bool {
 	if s == "" || len(s) > 64 {
 		return false
@@ -161,13 +179,15 @@ func cleanName(s string) bool {
 	return !strings.Contains(s, "..")
 }
 
-// renderToyfile 拼出内联的 toy.toml 原文。
+// renderToyfile writes the inline toy.toml source.
 //
-// **绝不写 [sha256]**：内联条目跟着上游最新的 tag 走（客户端用 git ls-remote 挑
-// 最高 semver），而 [sha256] 钉的是某一个版本的字节。留着它，上游一发新版所有人
-// 都会拿到「哈希对不上，拒绝安装」—— 读起来完全像投毒警告，而实际上只是作者正常
-// 发了个版。首次安装仍有 TOFU 钉住（铁律 4 的后半句）。
-// 这条刚在 cmd/toy/author.go 的 --inline 上修过一次，别在这里重新引入。
+// NEVER WRITE [sha256]: inline entries follow the upstream's newest tag (the client
+// picks the highest semver out of git ls-remote), while [sha256] pins one version's
+// bytes. Leave it in and the author's next release hands everyone "checksum mismatch,
+// refusing to install" -- which reads exactly like a poisoning warning when all that
+// happened is a normal release. First install is still pinned by trust on first use
+// (second half of rule 4).
+// This was just fixed once on --inline in cmd/toy/author.go; do not reintroduce it here.
 func renderToyfile(p pack) ([]byte, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Generated by toy-index gen from the asset names of %s/%s's latest release (%s).\n",
@@ -206,19 +226,21 @@ func renderToyfile(p pack) ([]byte, error) {
 	}
 
 	data := []byte(b.String())
-	// 自己生成的东西也要过一遍真正的解析器，而且过的是【索引那一档】那个入口 ——
-	// index.validEntry 用的就是它，坏条目在那里会被整条判掉。在这里就炸掉的话
-	// 报错还指得出是哪个仓库；留到 Load 的时候只剩一句「跳过了 N 条坏记录」。
+	// Even what we generate ourselves goes through the real parser, and through the
+	// INDEX-side entry point specifically -- index.validEntry uses the same one, and it
+	// throws out a whole entry when it fails. Blowing up here means the error can name
+	// the repo; left until Load, all you get is "skipped N invalid records".
 	if _, err := toyfile.ParseFrom(data, toyfile.OriginIndex); err != nil {
 		return nil, fmt.Errorf("the generated toy.toml does not parse: %w", err)
 	}
 	return data, nil
 }
 
-// tomlSafe 清掉控制字符并按 rune 截断。这几个字段全是远端内容，会被原样打进
-// 终端 —— 一串 "\r\x1b[32m✓ 已签名" 能把信任等级那一行盖掉重写（铁律 8）。
-// toyfile.checkPrintable 会兜住漏网的，这里先清是为了不把一条本来能用的条目
-// 因为描述里有个 \t 就整条判死。
+// tomlSafe strips control characters and truncates by rune. These fields are all remote
+// content printed verbatim to a terminal -- a "\r\x1b[32m✓ signed" can overwrite the
+// trust-level line that was just printed (rule 8). toyfile.checkPrintable catches
+// anything that slips past; stripping here is so a perfectly good entry does not get
+// killed outright over a stray \t in its description.
 func tomlSafe(s string, max int) string {
 	var b strings.Builder
 	n := 0
@@ -236,15 +258,17 @@ func tomlSafe(s string, max int) string {
 	return strings.TrimSpace(b.String())
 }
 
-// quote 拼一个 toml 基本字符串。**不能用 strconv.Quote**：Go 会把非打印字节写成
-// \xNN，而 toml 根本没有 \x 这种转义 —— 生成出来的是一份语法错误的文件。
-// 控制字符已经被 tomlSafe 清掉了，这里只剩两个字符要转义。
+// quote writes a toml basic string. DO NOT USE strconv.Quote: Go writes non-printable
+// bytes as \xNN, and toml has no \x escape at all -- the output would be a syntactically
+// invalid file. Control characters are already gone via tomlSafe, so only two characters
+// are left to escape.
 func quote(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
 	return `"` + r.Replace(s) + `"`
 }
 
-// tomlKey：裸键只能是 [A-Za-z0-9_-]，别的一律加引号（平台 key 带斜杠，必须引）。
+// tomlKey: a bare key may only be [A-Za-z0-9_-]; everything else gets quoted (platform
+// keys contain a slash, so they must be).
 func tomlKey(s string) string {
 	for _, r := range s {
 		switch {

@@ -1,13 +1,14 @@
-# 索引回归检查。
+# Index regression check.
 #
-# 收录别人的软件 = 我们替别人的打包方式做了担保：上游改一次资产命名习惯，
-# 我们那条条目就烂了，而用户会怪 toy。所以索引和代码一样要有回归测试，
-# 而且必须**定时**跑 —— 条目烂掉的那一刻我们这边一行代码都没动。
+# Carrying someone else's software means we have vouched for their packaging: upstream
+# changes its asset naming habit once and our entry rots, and the user blames toy. So the
+# index needs regression tests exactly like the code does — and they must run **on a
+# schedule**, because the moment an entry rots we have not touched a single line here.
 name: index-check
 
 on:
   schedule:
-    - cron: "17 3 * * *"   # 每天一次（UTC）。错开整点，别和全世界的 cron 挤在一起
+    - cron: "17 3 * * *"   # daily (UTC). Off the hour, so we don't pile in with everyone else's cron
   workflow_dispatch:
   pull_request:
     paths:
@@ -21,27 +22,29 @@ permissions:
 jobs:
   check:
     strategy:
-      fail-fast: false   # 一个平台失败不该掩盖另一个平台的结果
+      fail-fast: false   # one platform failing must not hide the other platform's result
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # PR 上要和 base 比 diff
+          fetch-depth: 0   # PRs need to diff against base
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           check-latest: true
 
-      # PR 只改了两条时不该跑全量：几十个包每次都装一遍要好几分钟。
+      # A PR touching two entries should not run everything: installing dozens of packages
+      # takes minutes each time.
       #
-      # -U40 是故意给足上下文：一个条目最多二十来行（内联的 toyfile 是一整行的
-      # JSON 字符串），所以只改了 "toyfile" 那一行时，同一个条目的 "id" 行一定
-      # 落在上下文里被一起捞出来。代价是顺带捞进两三个邻居条目 —— 多测几条无害，
-      # **漏测才有害**，这个方向是刻意选的。
-      - name: 算出这次 PR 动了哪些条目
+      # -U40 gives deliberately generous context: an entry is at most a couple of dozen
+      # lines (an inlined toyfile is one long JSON string), so when only the "toyfile" line
+      # changed, that entry's "id" line is guaranteed to be pulled in with it. The cost is
+      # sweeping in two or three neighbouring entries — testing a few extra is harmless,
+      # **missing one is not**. That asymmetry is the whole reason for this direction.
+      - name: work out which entries this PR touched
         if: github.event_name == 'pull_request'
         id: only
         run: |
@@ -51,23 +54,24 @@ jobs:
                  | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' \
                  | sed 's/.*"\([^"]*\)"$/\1/' | sort -u | paste -sd, -)"
           if [ -z "$ids" ]; then
-            echo "这次 PR 没动到任何条目，跳过。"
+            echo "this PR touches no entries; skipping."
             echo "skip=1" >> "$GITHUB_OUTPUT"
           else
-            echo "要测：$ids"
+            echo "will test: $ids"
             echo "ids=$ids" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: index-check（只测改动的条目）
+      - name: index-check (only the entries that changed)
         if: github.event_name == 'pull_request' && steps.only.outputs.skip != '1'
         run: bash scripts/index-check.sh --only "${{ steps.only.outputs.ids }}"
 
-      - name: index-check（全量）
+      - name: index-check (everything)
         if: github.event_name != 'pull_request'
         run: bash scripts/index-check.sh
 
-  # 定时那一次失败了要留下痕迹：没人会去翻一个每天都跑的 workflow 的日志。
-  # 同名 issue 已经开着就追加评论，不重复开 —— 连着坏五天不该变成五个 issue。
+  # A failure of the scheduled run has to leave a trace: nobody reads the logs of a
+  # workflow that runs every day. If an issue with the same title is already open, comment
+  # on it instead of opening another — five broken days must not become five issues.
   report:
     needs: check
     if: failure() && github.event_name == 'schedule'
@@ -76,17 +80,18 @@ jobs:
       contents: read
       issues: write
     steps:
-      - name: 开 issue 或者追加评论
+      - name: open an issue, or comment on the existing one
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}   # 有它就不用 checkout 一份代码只为让 gh 认路
+          GH_REPO: ${{ github.repository }}   # with this, no checkout is needed just to orient gh
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          title="索引回归检查失败（$(date -u +%F)）"
-          body=$(printf '定时的 index-check 有条目没过。\n\n完整日志（含失败明细，可直接复制）：%s\n\n三种类别的处理不一样：\n- **条目** —— 改 `index/toy-index.json` 那一条（上游多半换了资产命名习惯）\n- **网络** —— 重试，别动索引\n- **运行** —— 上游那个 release 坏了，或 `[bin]` 右边的包内路径猜错了\n' "$RUN_URL")
-          # 不用 --search：它会分词，中文标题和括号都可能匹不上，然后每天开一个重复的
-          # issue。拉一页开着的自己比标题，短而且是精确的。
+          title="index-check failed ($(date -u +%F))"
+          body=$(printf 'The scheduled index-check has failing entries.\n\nFull log (with the failure details, ready to copy): %s\n\nThe three categories are handled differently:\n- **entry** — fix that record in `index/toy-index.json` (upstream most likely changed its asset naming habit)\n- **network** — retry, leave the index alone\n- **runtime** — upstream'"'"'s release is broken, or the in-package path in `[bin]` was guessed wrong\n' "$RUN_URL")
+          # Not --search: it tokenizes, so punctuation such as the parentheses in the title
+          # can fail to match and we would open a duplicate issue every day. Pulling one
+          # page of open issues and comparing titles ourselves is short and exact.
           existing="$(gh issue list --state open --limit 100 --json number,title \
                       --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
           if [ -n "$existing" ]; then

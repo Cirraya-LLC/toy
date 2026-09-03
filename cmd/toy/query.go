@@ -1,13 +1,16 @@
 package main
 
-// discovery 那一面：list / search / info / index / doctor。
+// The discovery side: list / search / info / index / doctor.
 //
-// 排版有一条统一的规矩：**一切给人看的输出都走 ui**（也就是 stderr，
-// 并且顺带过一遍控制字符转义）。索引里的 desc、toy.toml 里的字段都是外来文本，
-// 直接 fmt.Fprintln 到终端上的话，一句 "\r\x1b[32m✓ 已签名" 就能把刚打出来的
-// 信任等级那一行盖掉重写 —— 铁律 8 说客户端是唯一的安全边界，能被覆写的那一行
-// 就不叫边界。所以表格先用 tabwriter 排进内存缓冲，再逐行交给 ui.Info。
-// 只有 --json 那份机器可读的输出走 stdout（规格 §9）。
+// One rule governs all the formatting here: EVERYTHING MEANT FOR A HUMAN GOES
+// THROUGH ui — that is, stderr, with control characters escaped on the way out. The
+// desc in an index and the fields in a toy.toml are foreign text, and fmt.Fprintln
+// straight to the terminal means one "\r\x1b[32m✓ signed" can paint over the trust
+// line that was just printed. Iron law 8 says the client is the only security
+// boundary there is, and a line somebody else can overwrite is not a boundary. So
+// tables are laid out with tabwriter into an in-memory buffer first, then handed to
+// ui.Info a line at a time. Only the machine-readable --json output goes to stdout
+// (spec §9).
 
 import (
 	"bytes"
@@ -33,33 +36,39 @@ import (
 )
 
 const (
-	// qrySearchLimit 是 `toy search` 默认显示几条。
+	// qrySearchLimit is how many results `toy search` shows by default.
 	qrySearchLimit = 20
-	// qryDescWidth 是描述列的截断宽度（按 rune）。索引里的 desc 长度没有上限，
-	// 一条几百字的描述会把表格冲垮。
+	// qryDescWidth is where the description column gets truncated (in runes). The
+	// desc in an index has no length limit, and a few hundred words of it would
+	// flatten the table.
 	qryDescWidth = 72
-	// qryIndexProbeTimeout 是 doctor 探一个索引的上限。主进程的 ctx 只在 Ctrl-C
-	// 时取消，一个不回话的索引会让整次体检挂在那儿。
+	// qryIndexProbeTimeout caps how long doctor probes one index. The main process
+	// context is only cancelled on Ctrl-C, so an index that never answers would leave
+	// the whole check-up hanging.
 	qryIndexProbeTimeout = 20 * time.Second
 )
 
-// ---------------------------------------------------------------- 排版工具
+// ---------------------------------------------------------------- layout helpers
 
-// qryFlags 建一个子命令的 FlagSet。用法统一由 main 打印（errUsage），
-// 所以这里把 flag 包自己那份 usage 关掉，只留它的错误行。
+// qryFlags builds a FlagSet for one subcommand. Usage is printed by main throughout
+// (errUsage), so the flag package's own usage output is switched off and only its
+// error line survives.
 func qryFlags(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.Usage = func() {}
 	return fs
 }
 
-// qryCell 把一格里的控制字符换成看得见的 \xNN。
+// qryCell replaces the control characters in a cell with visible \xNN.
 //
-// tabwriter 靠 \t 和 \n 划分单元格，而 desc 是索引作者写的：一个 \t 能让这一行
-// 之后的列全部错位，一个 \n 能凭空多造一行（后面那半行长得就像一条正常记录）。
-// ui 那边最终也会转义一次，但那时列已经算完了 —— 必须在进 tabwriter 之前做。
-// 连续空白也折成一个空格：一格内容没有理由自带列间距，而那正是拿一个
-// name 在表里画出一整行假记录的原料。
+// tabwriter uses \t and \n to divide cells, and desc is written by whoever wrote the
+// index entry: one \t throws off every column after it on that row, and one \n
+// conjures an extra row out of nothing (the second half of which reads exactly like
+// a normal record). ui escapes as well in the end, but by then the columns have
+// already been measured — this has to happen before tabwriter sees it. Runs of
+// whitespace collapse to a single space too: a cell's contents have no business
+// carrying their own column spacing, and that spacing is the raw material for
+// painting a whole fake row out of one name.
 func qryCell(s string) string {
 	if strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) < 0 &&
 		!strings.Contains(s, "  ") {
@@ -87,16 +96,18 @@ func qryCell(s string) string {
 	return b.String()
 }
 
-// qryCellWidth 是表格里一格的默认上限（按 rune）。
+// qryCellWidth is the default cap on one table cell (in runes).
 //
-// name / desc / 索引名一路来自 toy.toml 和索引，长度和内容都没有上限。
-// tabwriter 的列宽 = 该列最宽那格 + 2，所以一格 300 列宽的 name 会把它右边
-// 所有列 —— 包括【每一行】的信任等级 —— 一起顶到屏幕外面去，而那一格里正好
-// 排得下一段自己写的 "v3.2.1  ✓ 已签名 9f3c1a20  Derrity/cowsay"。
-// 一个恶意包就能让整张表的信任列消失并伪造自己那一行（铁律 8）。
+// name / desc / index name all come from toy.toml and from indexes, with no limit on
+// either length or content. tabwriter sizes a column to its widest cell plus two, so
+// one 300-column-wide name pushes every column to its right — including the trust
+// level on EVERY ROW — off the screen, while that same cell has ample room for a
+// hand-written "v3.2.1  ✓ signed 9f3c1a20  Derrity/cowsay". One malicious package
+// would be enough to make the whole table's trust column disappear and forge its own
+// row in its place (iron law 8).
 const qryCellWidth = 24
 
-// qryTrunc 按 rune 截断，超了缀省略号。
+// qryTrunc truncates by rune, appending an ellipsis when it cuts.
 func qryTrunc(s string, n int) string {
 	if n <= 0 {
 		return s
@@ -108,14 +119,15 @@ func qryTrunc(s string, n int) string {
 	return string(rs[:n]) + "…"
 }
 
-// qryTable 把 rows 排成对齐的表格打出去。第一行当表头。
+// qryTable prints rows as an aligned table. The first row is the header.
 //
-// 用 tabwriter 的列宽是按 rune 数算的，而中日韩字符在终端上占两格 —— 所以
-// 含中文的列后面会有一两格的参差。把最自由的那一列（描述、来源）放最后就行，
-// 别为了这个自己去实现一张 East Asian Width 表。
+// tabwriter measures column widths in runes, while CJK characters occupy two cells in
+// a terminal — so a column containing CJK text will be a cell or two out of alignment
+// after it. Putting the freest column (description, source) last is enough; do not go
+// implement an East Asian Width table over this.
 //
-// widths 按列给上限，缺的用 qryCellWidth，0 表示不截。最后一列默认不截：
-// 它右边没有东西可以被顶出去。
+// widths caps each column, defaulting to qryCellWidth, with 0 meaning no truncation.
+// The last column is uncapped by default: there is nothing to its right to push off.
 func qryTable(rows [][]string, widths ...int) {
 	if len(rows) == 0 {
 		return
@@ -136,28 +148,33 @@ func qryTable(rows [][]string, widths ...int) {
 		}
 		fmt.Fprintln(w, strings.Join(cells, "\t"))
 	}
-	// tabwriter 只往内存缓冲写，Flush 不会失败到值得处理的地步。
+	// tabwriter only writes into an in-memory buffer, so Flush cannot fail in any
+	// way worth handling.
 	_ = w.Flush()
 	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
 		ui.Info("%s", strings.TrimRight(line, " "))
 	}
 }
 
-// qryTrustLabel 是表格里那一格信任等级。
-// 铁律 8：认不出的等级要说出来，不能当成安全的那一档糊过去。
+// qryTrustLabel is the trust-level cell in a table.
+// Iron law 8: a level we do not recognize has to be said out loud, never smoothed
+// over into whichever level happens to look safe.
 func qryTrustLabel(trust, signer string) string {
 	switch trust {
 	case store.TrustSigned:
 		if signer == "" {
-			// 说"已签名"却说不出是谁签的，等于替一把不知道是谁的钥匙背书。
+			// Saying "signed" while unable to name the signer amounts to
+			// vouching for a key nobody can identify.
 			return "⚠ claims signed, no signer"
 		}
 		return "✓ signed " + signer
 	case store.TrustHost:
 		return "· host account"
 	case store.TrustIndexed:
-		// 这一列要看得出「打包说明是索引提供的」（规则 3）：装哪个资产、
-		// 命令叫什么名字不是作者写的，那是这张表里该一眼看见的事。
+		// This column has to show that the packaging instructions came from the
+		// index (rule 3): which asset gets installed and what the command is
+		// called were not written by the author, and that belongs among the
+		// things you see at a glance in this table.
 		return "⚠ packaging from index"
 	case store.TrustUnverified:
 		return "⚠ unsigned"
@@ -168,20 +185,23 @@ func qryTrustLabel(trust, signer string) string {
 	}
 }
 
-// ---------------------------------------------------------------- 已装索引
+// ---------------------------------------------------------------- installed index
 
-// qryInstalledIndex 把安装清单摊成一张查找表，好回答「这个包装没装过」。
+// qryInstalledIndex flattens the install manifests into a lookup table, so "is this
+// package installed" has an answer.
 //
-// 索引条目的 id 是 "Derrity/tinyserve"、source 是 "github:Derrity/tinyserve"，
-// 而清单的 id 是后者 —— 两头对不上，所以一个清单登记三个 key。
-// 全部小写：GitHub/GitLab 的 owner 和 repo 本来就大小写不敏感。
+// An index entry's id is "Derrity/tinyserve" while its source is
+// "github:Derrity/tinyserve", and a manifest's id is the latter — the two ends do not
+// line up, so each manifest is registered under three keys. All lowercase: owner and
+// repo are case-insensitive on GitHub and GitLab anyway.
 func qryInstalledIndex(ms []store.Manifest) map[string]store.Manifest {
 	out := make(map[string]store.Manifest, len(ms)*3)
 	add := func(k string, m store.Manifest) {
 		k = strings.ToLower(strings.TrimSpace(k))
-		// 先到先得：同一个 owner/repo 在两家托管方各装了一份时，这个笼统的 key
-		// 只能指向其中一个。它只用来显示「已装 v1.2.3」，带 host 的那两个 key
-		// 更具体、也先登记，所以真正会歧义的只有这一个。
+		// First one wins: with the same owner/repo installed from two different
+		// hosts, this loose key can only point at one of them. It is used solely
+		// to display "installed v1.2.3", and the two host-qualified keys are more
+		// specific and registered first, so this is the only genuinely ambiguous one.
 		if k == "" || k == ":" {
 			return
 		}
@@ -201,7 +221,7 @@ func qryInstalledIndex(ms []store.Manifest) map[string]store.Manifest {
 	return out
 }
 
-// qryLookupInstalled 按给的几个 key 依次查，先具体后笼统。
+// qryLookupInstalled tries the given keys in order, most specific first.
 func qryLookupInstalled(idx map[string]store.Manifest, keys ...string) (store.Manifest, bool) {
 	for _, k := range keys {
 		if m, ok := idx[strings.ToLower(strings.TrimSpace(k))]; ok {
@@ -232,8 +252,9 @@ func runList(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	// 信任放第一列：它是这张表里唯一不能被挤掉的东西，而放在第一列就不存在
-	// 「被左边那格顶出屏幕」这回事（铁律 8）。
+	// Trust goes in the first column: it is the one thing in this table that must
+	// not be squeezed out, and in the first column there is no such thing as being
+	// pushed off screen by the cell to its left (iron law 8).
 	rows := [][]string{{"TRUST", "NAME", "VERSION", "SOURCE"}}
 	for _, m := range ms {
 		name := m.Name
@@ -245,7 +266,8 @@ func runList(ctx context.Context, args []string) error {
 			version = m.Tag
 		}
 		if version == "" {
-			// 裸地址那条路没有版本可言（resolve 说得很清楚），编一个出来就是撒谎。
+			// The plain-URL route has no version to speak of (resolve is very
+			// clear about that), and inventing one would be a lie.
 			version = "—"
 		}
 		source := m.ID
@@ -254,7 +276,7 @@ func runList(ctx context.Context, args []string) error {
 		}
 		rows = append(rows, []string{qryTrustLabel(m.Trust, m.Signer), name, version, source})
 	}
-	// 信任那一格要放得下完整指纹，所以它的上限比别的列宽。
+	// The trust cell has to fit a full fingerprint, so its cap is wider than the rest.
 	qryTable(rows, 48, qryCellWidth, 16, 0)
 	ui.Info("")
 	ui.Info("%d installed. `toy info <ref>` for details, `toy update` to upgrade.", len(ms))
@@ -263,8 +285,9 @@ func runList(ctx context.Context, args []string) error {
 
 // ---------------------------------------------------------------- toy search
 
-// qrySearchHit 是 --json 的一条结果。刻意不直接吐 index.Entry：
-// 索引里以后加的字段不该自动出现在我们承诺的输出格式里。
+// qrySearchHit is one result in the --json output. Deliberately not index.Entry
+// itself: a field added to the index later must not automatically appear in an
+// output format we have promised.
 type qrySearchHit struct {
 	ID     string   `json:"id"`
 	Source string   `json:"source"`
@@ -272,11 +295,13 @@ type qrySearchHit struct {
 	Tags   []string `json:"tags,omitempty"`
 	Index  string   `json:"index"`
 	Score  int      `json:"score"`
-	// HasKey 只说明索引条目里有一把格式合法的 ed25519 公钥。**不是「已签名」**：
-	// search 手里没有那一版的 toy.toml（要为每条结果各发一次网络请求才拿得到），
-	// 所以它一次签名都验不了。抄一把别人的公钥是零成本的，条目里连 sig 都可以
-	// 是空的 —— 叫它 signed 等于把这三个字白送给任何一个能改索引的人（规格 §5、
-	// 铁律 8）。真正验过签名的只有 install / info 那条路。
+	// HasKey only says the index entry carries a well-formed ed25519 public key. IT
+	// IS NOT "SIGNED": search does not have that version's toy.toml (getting it would
+	// take one network request per result), so it cannot verify a single signature.
+	// Copying somebody else's public key costs nothing, and the entry's sig may even
+	// be empty — calling this signed would hand that word free of charge to anyone
+	// who can edit an index (spec §5, iron law 8). The only route that really
+	// verifies a signature is install / info.
 	HasKey           bool   `json:"has_key"`
 	KeyFingerprint   string `json:"key_fingerprint,omitempty"`
 	Installed        bool   `json:"installed"`
@@ -302,9 +327,9 @@ func runSearch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// 一个索引都没配是【默认状态】，不是出错（见 store.DefaultIndexURL）。
-	// 走下去只会打出一句「索引里没有匹配 X 的包」—— 那句话是假的，我们根本
-	// 没找过任何地方（铁律 8）。
+	// No index configured at all is THE DEFAULT STATE, not a failure (see
+	// store.DefaultIndexURL). Carrying on would print "no package in the indexes
+	// matches X" — which is false, because we did not look anywhere (iron law 8).
 	if len(cfg.Indexes) == 0 {
 		qryNoIndexHelp()
 		if *asJSON {
@@ -316,7 +341,8 @@ func runSearch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// 装没装过是本地信息，读不出来不该让整次搜索失败 —— 那一列缺了就是缺了。
+	// Whether something is installed is local information, and failing to read it
+	// must not fail the whole search — that column is simply missing then.
 	ms, err := st.ListManifests()
 	if err != nil {
 		ui.Warn("cannot read the install manifests (%v), so the \"installed\" column is missing this time", err)
@@ -334,8 +360,9 @@ func runSearch(ctx context.Context, args []string) error {
 			Index:  r.Index,
 			Score:  r.Score,
 		}
-		// 索引里那把 key 不是合法的 ed25519 公钥时，绝不能渲染成一个看起来
-		// 正常的指纹（铁律 8）—— rsvFingerprint 认不出就返回空串。
+		// When the key in the index is not a valid ed25519 public key it must
+		// never be rendered as a normal-looking fingerprint (iron law 8) —
+		// rsvFingerprint returns the empty string for anything it cannot read.
 		if fp := rsvFingerprint(r.Entry.Key); fp != "" {
 			h.HasKey, h.KeyFingerprint = true, fp
 		}
@@ -351,9 +378,10 @@ func runSearch(ctx context.Context, args []string) error {
 	}
 
 	if len(hits) == 0 {
-		// 搜不到不等于装不了：索引只是个目录，托管方才是真相（规格 §5，
-		// 「下架无害」说的就是这件事）。一句光秃秃的「没找到」会让人以为
-		// 这个工具装不了，而它多半就躺在 GitHub 上等着。
+		// Not found does not mean uninstallable: an index is only a directory and
+		// the host is the truth (spec §5 — that is what "delisting is harmless"
+		// means). A bare "not found" leaves people thinking the tool cannot be
+		// installed, when it is most likely sitting on GitHub waiting for them.
 		ui.Info("No package in the indexes matches %q.", query)
 		ui.Info("")
 		ui.Info("An index is only a directory; the host is the source of truth. If you know where it")
@@ -384,8 +412,9 @@ func runSearch(ctx context.Context, args []string) error {
 	return nil
 }
 
-// qrySearchJSON 是 --json 那份输出。规格 §9：机器可读的走 stdout，其余一切走 stderr。
-// 没有结果时也要吐一份合法的空结果，别让脚本对着空 stdout 猜是不是崩了。
+// qrySearchJSON is the --json output. Spec §9: machine-readable goes to stdout,
+// everything else to stderr. With no results it still emits a valid empty result —
+// do not leave a script guessing whether empty stdout means a crash.
 func qrySearchJSON(query string, hits []qrySearchHit) error {
 	if hits == nil {
 		hits = []qrySearchHit{}
@@ -399,11 +428,13 @@ func qrySearchJSON(query string, hits []qrySearchHit) error {
 	}{query, len(hits), hits})
 }
 
-// qryNoIndexHelp 说清楚「一个索引都没配」是怎么回事，并给出照抄就能用的命令。
+// qryNoIndexHelp explains what "no index configured" means and gives commands that
+// can be copied as they stand.
 //
-// 这是合法状态而不是故障：内置索引现在是空的（store.DefaultIndexURL），
-// 而 `toy install github:owner/repo` 那条路从头到尾不经过索引。所以这里只讲
-// 「怎么加一个」和「不加也能装」，一个叉都不打。
+// This is a legal state, not a fault: the built-in index is currently empty
+// (store.DefaultIndexURL), and `toy install github:owner/repo` never goes through an
+// index from end to end. So this only covers "how to add one" and "you can install
+// without one", and prints not a single ✗.
 func qryNoIndexHelp() {
 	ui.Info("No index is configured, so there is nothing to search. This is the default, not a fault.")
 	ui.Info("")
@@ -429,11 +460,13 @@ func runInfo(ctx context.Context, args []string) error {
 	}
 	r, err := ref.Parse(args[0])
 	if err != nil {
-		// `toy list` 和 `toy uninstall` 都认已装的那个短名字（tinyserve），而 info
-		// 只认 ref —— 于是「列表里看到的名字」在这一个子命令上报「缺少斜杠」，
-		// 同一个字符串在同一个 CLI 里有两种含义。装过的包我们手里就有它的 id，
-		// 没有理由让用户再拼一遍。找不到就把原来那条解析错误还回去：
-		// 那时它确实是个写坏了的 ref，不是一个已装的包。
+		// `toy list` and `toy uninstall` both accept the short installed name
+		// (tinyserve) while info only accepts a ref — so the name you just read in
+		// the list reports "missing slash" in this one subcommand, and the same
+		// string means two different things inside the same CLI. For an installed
+		// package we already hold its id; there is no reason to make the user spell
+		// it out again. If it is not installed, hand back the original parse error:
+		// at that point it really is a malformed ref, not an installed package.
 		m, ferr := st.FindByName(args[0])
 		if ferr != nil {
 			return err
@@ -458,7 +491,8 @@ func runInfo(ctx context.Context, args []string) error {
 		add("description", tf.Desc)
 	}
 	if res.Entry != nil && res.Entry.Desc != "" && res.Entry.Desc != tf.Desc {
-		// 索引里的描述和作者自己写的可能不一样，两个都给 —— 哪个是哪个要说清楚。
+		// The index's description and the author's own may differ, so show both —
+		// and be explicit about which is which.
 		add("index description", res.Entry.Desc)
 	}
 	add("license", qryOr(tf.License, "not declared by the author"))
@@ -471,15 +505,18 @@ func runInfo(ctx context.Context, args []string) error {
 	if res.Tag != "" {
 		add("latest version", res.Tag)
 	} else {
-		// 裸地址那条路压根没有 tag 可挑，编一个版本号出来就是撒谎（铁律 8）。
+		// The plain-URL route has no tags to choose from at all, and inventing a
+		// version number would be a lie (iron law 8).
 		add("version", "unknown — a plain URL carries no version; you get whatever that file is right now")
 	}
 
-	// 只比一个精确 key 会把「其实能装」（Rosetta、musl 退回通用构建）报成
-	// 「没有对应构建」，所以这里和 install 一样按候选顺序判断。
+	// Comparing against one exact key would report "installable after all" cases
+	// (Rosetta, musl falling back to a generic build) as "no matching build", so this
+	// walks the candidate order exactly as install does.
 	cands := platform.Candidates()
-	// 报给人看的是两段的底座，不是 cands[0] —— linux 上那个是我们自己合成的
-	// linux/amd64/gnu，把它当成「你的平台」写出来会让人去找一个不存在的资产。
+	// What gets reported to a human is the two-segment base, not cands[0] — on linux
+	// that one is the linux/amd64/gnu toy synthesizes itself, and printing it as
+	// "your platform" would send people looking for an asset that does not exist.
 	cur, matched := platform.Base(), cands[0]
 	if tf.IsScript() {
 		add("kind", "single-file script: download + chmod +x, nothing unpacked, nothing built")
@@ -488,18 +525,20 @@ func runInfo(ctx context.Context, args []string) error {
 		add("kind", "release binary: download + unpack, not one line of script is run")
 		plats := tf.Platforms()
 		add("platforms", strings.Join(plats, "  "))
-		// 「是不是真的回退」只有一处判据 —— install 打的那句话就是它决定的。
-		// info 和 install 对同一个包给出不同说法，比两边都说错更糟。
+		// "Is this really a fallback" has exactly one test, and it is the same one
+		// that decides the line install prints. info and install disagreeing about
+		// the same package would be worse than both of them being wrong.
 		switch hit := qryMatchPlatform(plats, cands); {
 		case hit == "":
 			add("this machine", cur+"  ✗ no matching build, cannot install")
 			add("", "tried "+strings.Join(cands, ", ")+
 				". Open an issue upstream asking the author to publish a "+cur+" asset and add one line for it in toy.toml")
 		default:
-			matched = hit // 下面挑 sha256 要用真正命中的那个 key
-			// 装得上，但装的不是为这台机器构建的那个 —— 原因直接用 install 那句话，
-			// 别在这里另写一版：cur 和 hit 在「作者按 libc 分了档」时是同一个字符串，
-			// 拼成「回退：linux/amd64」会指着自己说自己。
+			matched = hit // picking the sha256 below needs the key actually matched
+			// Installable, but not the build made for this machine. Reuse install's
+			// wording for the reason rather than writing a second version here: cur
+			// and hit are the same string when the author split by libc, and a
+			// "falling back to: linux/amd64" line would then be pointing at itself.
 			if note := insFallbackNote(cands, hit, plats); note != "" {
 				add("this machine", cur+"  ✓ installable, but not the build made for this machine")
 				add("", note)
@@ -509,7 +548,8 @@ func runInfo(ctx context.Context, args []string) error {
 		}
 	}
 
-	// 装完之后会出现在 PATH 上的名字 —— 这是「装之前该看的那一屏」里最实在的一格。
+	// The names that will appear on PATH after installing — the most concrete cell on
+	// the screen you are supposed to read before installing.
 	declared, what := tf.Bin, "path in the package"
 	if tf.IsScript() {
 		declared, what = tf.Script, "release asset"
@@ -547,14 +587,16 @@ func runInfo(ctx context.Context, args []string) error {
 
 	qryTable(rows, 16, 0)
 	ui.Info("")
-	// 信任等级走 ui.Trust，和安装完那一行是同一套措辞（规格 §4、铁律 8）。
+	// The trust level goes through ui.Trust, so it is worded exactly like the line
+	// printed after an install (spec §4, iron law 8).
 	ui.Trust(res.Trust, insTrustDetail(res))
 	return nil
 }
 
-// qryMatchPlatform 返回 candidates 里第一个被声明了的平台 key，一个都没有就是空串。
-// 和 toyfile.AssetFor 的挑选顺序必须一致 —— 不一致的话 info 会说"装得上"而 install 拒绝，
-// 或者反过来。
+// qryMatchPlatform returns the first candidate that is a declared platform key, or
+// the empty string when none is. This MUST pick in the same order as
+// toyfile.AssetFor — diverge and info says "installable" while install refuses, or
+// the other way round.
 func qryMatchPlatform(declared, candidates []string) string {
 	for _, c := range candidates {
 		if slices.Contains(declared, c) {
@@ -571,7 +613,7 @@ func qryOr(s, fallback string) string {
 	return s
 }
 
-// qryHostLabel 是给人看的来源，形如 "github.com/Derrity"。
+// qryHostLabel is the human-readable source, of the form "github.com/Derrity".
 func qryHostLabel(res *resolved) string {
 	if u, err := url.Parse(res.Host.WebURL(res.Owner, res.Repo)); err == nil && u.Hostname() != "" {
 		return u.Hostname() + "/" + res.Owner
@@ -631,8 +673,9 @@ func qryIndexAdd(st *store.Store, cfg store.Config, name, rawURL string) error {
 				spec.Name, spec.URL, name)
 		}
 		if spec.URL == u {
-			// 允许，但要说 —— 同一个地址挂两个名字会被拉两遍，搜索结果里靠后
-			// 那份会被去重掉，看起来像是「加了没生效」。
+			// Allowed, but say so: the same URL under two names gets fetched
+			// twice, and the second copy's results are deduplicated away, which
+			// looks exactly like "I added it and nothing happened".
 			ui.Warn("index %q already points at this URL; the same index under two names just gets fetched twice", spec.Name)
 		}
 	}
@@ -656,8 +699,9 @@ func qryIndexRm(st *store.Store, cfg store.Config, name string) error {
 			return err
 		}
 		ui.Info("removed: %s -> %s", spec.Name, spec.URL)
-		// 缓存留着不删：它只在离线回退时被读，而那时这条索引已经不在配置里了，
-		// 没人会去读它。真要清就删 ~/.toy/index/ 下对应那个文件。
+		// The cache is left in place: it is only read as an offline fallback, and
+		// by then this index is no longer in the config, so nothing reads it.
+		// To clear it for real, delete the matching file under ~/.toy/index/.
 		if len(cfg.Indexes) == 0 {
 			ui.Warn("no indexes are left, so `toy search` will find nothing. " +
 				"`toy install github:owner/repo` does not go through an index and still works")
@@ -685,7 +729,8 @@ func qryIndexList(st *store.Store, cfg store.Config) error {
 		ui.Info("The config file is %s.", filepath.Join(st.Root, "config.toml"))
 		return nil
 	}
-	// 包数和缓存时间都只看本地缓存 —— 列个索引不该联网，那是 `toy doctor` 的活。
+	// The package count and the cache time both come from the local cache: listing
+	// indexes has no business going online — that is `toy doctor`'s job.
 	rows := [][]string{{"NAME", "PACKAGES", "LAST CACHED", "URL"}}
 	for _, spec := range cfg.Indexes {
 		name := strings.TrimSpace(spec.Name)
@@ -702,14 +747,16 @@ func qryIndexList(st *store.Store, cfg store.Config) error {
 	return nil
 }
 
-// qryIndexCacheInfo 读本地缓存报出包数和缓存时间。没缓存过就如实说没有。
+// qryIndexCacheInfo reads the local cache and reports the package count and cache
+// time. Never cached means saying so plainly.
 func qryIndexCacheInfo(st *store.Store, name string) (count, when string) {
 	path := rsvIndexCache(st, name)
 	fi, err := os.Stat(path)
 	if err != nil {
-		// 用 "—" 而不是「还没拉过」：tabwriter 按 rune 数排列，而中文一个字占两格，
-		// 同一列里中英混排会把后面那一列顶得参差（见 qryTable 的注释）。
-		// 这一格的含义交给表格下面那句话去说。
+		// A "—" rather than a phrase: tabwriter aligns by rune count, and a cell
+		// mixing wide and narrow characters knocks the following column out of
+		// alignment (see the comment on qryTable). What this cell means is
+		// explained by the sentence printed under the table.
 		return "—", "—"
 	}
 	when = fi.ModTime().Local().Format("2006-01-02 15:04")
@@ -724,9 +771,10 @@ func qryIndexCacheInfo(st *store.Store, name string) (count, when string) {
 	return fmt.Sprint(len(idx.Packages)), when
 }
 
-// qryIndexURL 把用户写的索引地址规范化。
-// 裸路径当本地文件处理：规格 §5 说索引来源「实现上就是一个 URL」，而 v1 的
-// 索引通常就是本地一个 json，逼人手写 file:///绝对路径 只会劝退。
+// qryIndexURL normalizes the index location the user typed.
+// A bare path is treated as a local file: spec §5 says an index source "is just a URL
+// as far as the implementation is concerned", and a v1 index is usually a local json
+// — making people hand-write file:///absolute/path only drives them away.
 func qryIndexURL(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -743,7 +791,8 @@ func qryIndexURL(s string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%q is not a usable index location (it has to be https://… or file:///absolute/path): %w", s, err)
 	}
-	// ref.Parse 见到 "://" 就只会给出 KindURL 或报错，这里只是把那个前提写下来。
+	// Given a "://", ref.Parse can only return KindURL or an error; this just writes
+	// that assumption down.
 	if r.Kind != ref.KindURL {
 		return "", fmt.Errorf("%q is not a location — an index has to be https://… or file:///absolute/path", s)
 	}
@@ -752,8 +801,9 @@ func qryIndexURL(s string) (string, error) {
 
 // ---------------------------------------------------------------- toy doctor
 
-// qryCheck 是体检的一条。有问题就必须给得出具体的修复命令 ——
-// 一份只报告不给办法的体检报告等于把问题原样退回给用户。
+// qryCheck is one line of the check-up. Anything wrong MUST come with the exact
+// command that fixes it — a report that names problems without offering a way out
+// just hands the problem straight back to the user.
 type qryCheck struct {
 	ok    bool
 	title string
@@ -805,27 +855,32 @@ func runDoctor(ctx context.Context, args []string) error {
 		ui.Info("All %d checks passed.", len(checks))
 		return nil
 	}
-	// 返回 error 就是退出码 1（见 main），错误信息本身也得说人话。
+	// Returning an error means exit code 1 (see main), and the message itself has
+	// to read like a sentence too.
 	return fmt.Errorf("%d of %d checks failed — each one above prints the command that fixes it", bad, len(checks))
 }
 
-// qryPlatformInfo 打印这台机器会去要哪些构建。
+// qryPlatformInfo prints which builds this machine will ask for.
 //
-// 它【不是】检查项，所以不打 ✓/✗ —— 「这台机器是 musl」既不对也不错，
-// 给它一个红叉会让人去修一件根本没坏的事。它存在的理由是：装出来的东西起不来时
-// （musl 上跑 glibc 二进制、Rosetta 没装、armv6 上跑 armv7），
-// 报错里没有一个字指向平台，而这几行是唯一能对上号的线索。
+// It is NOT a check, so it prints no ✓/✗ — "this machine uses musl" is neither right
+// nor wrong, and a red cross next to it would send people off fixing something that
+// is not broken. It exists because when the installed thing will not start (a glibc
+// binary on musl, Rosetta not installed, armv7 on an armv6 board), not one word of
+// the error points at the platform, and these lines are the only clue that matches.
 func qryPlatformInfo() {
 	ui.Info("platform %s", platform.Current())
 	ui.Info("    tried in this order: %s", strings.Join(platform.Candidates(), " -> "))
 	if lvl := platform.CPULevelHint(); lvl != "" {
-		// 只是线索：toy 不做微架构匹配（要解析 CPUID，标准库不给，引库违反规格 §10）。
+		// A hint only: toy does no microarchitecture matching (that means
+		// parsing CPUID, which the standard library does not offer, and pulling
+		// in a library would violate spec §10).
 		ui.Info("    CPU is roughly %s (a hint only, it plays no part in picking a build)", lvl)
 	}
 	ui.Info("")
 }
 
-// qryCheckPath 是新用户第一个坑：装完了，命令却「找不到」。
+// qryCheckPath covers the first hole a new user falls into: it installed, and the
+// command is still "not found".
 func qryCheckPath(st *store.Store) qryCheck {
 	bin := st.BinDir()
 	if st.InPath() {
@@ -838,8 +893,9 @@ func qryCheckPath(st *store.Store) qryCheck {
 	}
 }
 
-// qryCheckDir 检查目录在不在、权限对不对。
-// strict 是 keys/ 那一档：里面是私钥，别人一点都不能读。
+// qryCheckDir checks that a directory exists and has the right mode.
+// strict is the keys/ tier: there is a private key in there and nobody else gets to
+// read any of it.
 func qryCheckDir(label, dir string, strict bool) qryCheck {
 	fi, err := os.Stat(dir)
 	if err != nil {
@@ -878,12 +934,14 @@ func qryCheckDir(label, dir string, strict bool) qryCheck {
 	return qryCheck{ok: true, title: fmt.Sprintf("%s %s mode %#o", label, dir, perm)}
 }
 
-// qryCheckGit：没有 git 就没有版本发现，github:/gitlab: 那整条路都是废的（规格 §2）。
+// qryCheckGit: no git means no version discovery, which makes the whole
+// github:/gitlab: route dead (spec §2).
 //
-// 走 autGitPath 而不是 exec.LookPath：toy 真正会执行的就是它挑出来的那一个，
-// 体检报的必须是同一个。用 LookPath 的话，一个装上来的包把 git 这个名字占下时，
-// doctor 会指着 ~/.toy/bin/git 说一句「git 在：…」—— 一条如实但把攻击说成健康的话
-// （铁律 8）。
+// It goes through autGitPath rather than exec.LookPath: the one autGitPath picks is
+// the one toy will actually execute, and the check-up has to report that same one.
+// With LookPath, a package that has taken the name git would make doctor point at
+// ~/.toy/bin/git and say "git found at …" — a statement that is true and that
+// reports an attack as good health (iron law 8).
 func qryCheckGit(binDir string) qryCheck {
 	path, err := autGitPath(binDir)
 	if err == nil {
@@ -898,9 +956,11 @@ func qryCheckGit(binDir string) qryCheck {
 
 func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 	if len(cfg.Indexes) == 0 {
-		// 这不是本机的毛病：内置索引现在就是空的（store.DefaultIndexURL），
-		// 报成 ✗ 等于让每个新用户第一次体检就看见一条红叉，还以为是自己装坏了。
-		// 中性地说一句，办法照给（铁律 8：如实说，但别栽赃）。
+		// Nothing is wrong with this machine: the built-in index is currently
+		// empty (store.DefaultIndexURL), and reporting a ✗ would show every new
+		// user a red cross on their first check-up and leave them thinking they
+		// broke the install. State it neutrally and still give the way forward
+		// (iron law 8: say it plainly, but do not pin it on the innocent).
 		return []qryCheck{{
 			ok:    true,
 			title: "no index configured (`toy search` has nothing to search yet)",
@@ -943,7 +1003,8 @@ func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 		}
 		c := qryCheck{ok: true, title: fmt.Sprintf("index %s reachable, %d packages", name, len(idx.Packages))}
 		if skipped > 0 {
-			// 索引方的问题，不是本机的问题 —— 不算 ✗，但也不能不说。
+			// The index's problem, not this machine's — not a ✗, but not
+			// something to leave unsaid either.
 			c.note = fmt.Sprintf("%d record(s) in it are invalid and were skipped — those packages will not turn up in a search until the index maintainer fixes them", skipped)
 		}
 		out = append(out, c)
@@ -951,8 +1012,8 @@ func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 	return out
 }
 
-// qryCheckLinks 找 bin/ 里指向已经不存在的东西的软链。
-// 那种链在 PATH 上看起来是个命令，敲下去只会说「文件不存在」。
+// qryCheckLinks finds symlinks in bin/ pointing at things that are gone.
+// On PATH such a link looks like a command; typing it only ever says "no such file".
 func qryCheckLinks(st *store.Store) qryCheck {
 	bin := st.BinDir()
 	entries, err := os.ReadDir(bin)
@@ -965,7 +1026,7 @@ func qryCheckLinks(st *store.Store) qryCheck {
 			continue
 		}
 		p := filepath.Join(bin, e.Name())
-		if _, err := os.Stat(p); err == nil { // Stat 跟随软链，能跟到就是好的
+		if _, err := os.Stat(p); err == nil { // Stat follows symlinks; if it resolves, the link is fine
 			continue
 		}
 		target, err := os.Readlink(p)
@@ -984,8 +1045,9 @@ func qryCheckLinks(st *store.Store) qryCheck {
 	}
 }
 
-// qryCheckManifests 找孤儿清单：清单还在，pkg 目录没了。
-// 那种包 `toy list` 列得出来，跑起来却什么都没有。
+// qryCheckManifests finds orphaned manifests: the manifest is still there, the pkg
+// directory is gone. `toy list` lists such a package while there is nothing at all
+// behind it.
 func qryCheckManifests(st *store.Store) []qryCheck {
 	ms, err := st.ListManifests()
 	if err != nil {
@@ -997,7 +1059,7 @@ func qryCheckManifests(st *store.Store) []qryCheck {
 	}
 	var orphans []string
 	for _, m := range ms {
-		if m.PkgDir == "" { // 单文件脚本形态可能压根没有 pkg 目录，别冤枉它
+		if m.PkgDir == "" { // the single-file script shape may have no pkg directory at all; do not accuse it
 			continue
 		}
 		if _, err := os.Stat(m.PkgDir); err != nil {
@@ -1014,8 +1076,10 @@ func qryCheckManifests(st *store.Store) []qryCheck {
 	}}
 }
 
-// qryPlural 是最小的单复数：写 "1 result(s)" 会让整个 CLI 显得像半成品，
-// 而这一行是搜索结果的落款，用户看得最多。
+// qryPlural is the smallest possible pluralization: writing "1 result(s)" makes the
+// whole CLI look half-finished, and this line signs off the search results, which is
+// what users read most.
+
 func qryPlural(n int, one, many string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, one)

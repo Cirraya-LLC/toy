@@ -15,7 +15,7 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/store"
 )
 
-// sgnKey 造一把测试用的 ed25519 密钥对。
+// sgnKey mints a throwaway ed25519 key pair for tests.
 func sgnKey(t *testing.T) sign.KeyPair {
 	t.Helper()
 	kp, err := sign.Generate()
@@ -27,16 +27,19 @@ func sgnKey(t *testing.T) sign.KeyPair {
 
 const sgnTOML = "name = \"tinyserve\"\n[bin]\ntinyserve = \"tinyserve\"\n[artifact]\n\"linux/amd64\" = \"tinyserve_{version}_linux_amd64.tar.gz\"\n"
 
-// 审计 S1：签名只证明「有人签过这条记录」，不证明「是这个仓库的主人签的」。
+// Audit S1: a signature only proves SOMEBODY signed this record. It does not
+// prove the repo's owner signed it.
 //
-// 索引是一个谁都能 fork、谁都能提 PR 的 JSON。攻击者拿自己的私钥去签
-// **别人的** id + source + toy.toml —— 签名当然验得过，因为消息里没有任何
-// 东西把 key 和 owner 绑在一起。客户端于是打出
+// The index is a JSON file anyone can fork and anyone can send a PR against.
+// An attacker signs SOMEONE ELSE'S id + source + toy.toml with their own
+// private key -- and of course it verifies, because nothing in the message
+// binds a key to an owner. The client then prints:
 //
-//	✓ 已签名 · Derrity (key <攻击者的指纹>)
+//	✓ signed · Derrity (key <the attacker's fingerprint>)
 //
-// 括号外那个名字是仓库 owner，括号里那把钥匙是攻击者的。铁律 8 要求信任等级
-// 如实打印，而这一行读起来就是「Derrity 签的」。
+// The name outside the parens is the repo owner; the key inside is the
+// attacker's. Iron law 8 demands the trust tier be printed honestly, and that
+// line reads as "Derrity signed this".
 func TestAuditAnyoneCanSignSomeoneElsesEntry(t *testing.T) {
 	attacker := sgnKey(t)
 	e := index.Entry{
@@ -52,31 +55,37 @@ func TestAuditAnyoneCanSignSomeoneElsesEntry(t *testing.T) {
 	rsvApplySignature("default", e, res)
 
 	if res.Trust != store.TrustSigned {
-		return // 客户端连勾都不打了，更没得撒谎
+		return // no checkmark at all, so there is nothing left to lie about
 	}
-	// 勾还在的话，那一行能说的只有「索引里登记的这把钥匙签过这一版」。
-	// 把仓库 owner 印在勾后面就是撒谎：签名消息里没有一个字节把它俩绑起来。
+	// With the checkmark still there, all that line can claim is "the key
+	// registered in the index signed this version". Printing the repo owner
+	// behind it is a lie: not one byte of the signed message ties the two
+	// together.
 	detail := insTrustDetail(res)
 	if strings.HasPrefix(detail, "Derrity ") || strings.Contains(detail, "Derrity (key") {
-		t.Fatalf("攻击者用自己的钥匙签了 Derrity 的条目，客户端照样打「✓ 已签名 · %s」——"+
-			"key 和 owner 之间没有任何绑定，这个勾只说明「有人签过」", detail)
+		t.Fatalf("the attacker signed Derrity's entry with their own key and the client still prints "+
+			"\"✓ signed · %s\" -- nothing binds key to owner, so this checkmark only means \"somebody signed it\"", detail)
 	}
 	if !strings.Contains(detail, res.Signer) {
-		t.Fatalf("信任那一行至少要说清楚是哪一把钥匙签的：%q", detail)
+		t.Fatalf("the trust line must at least name which key did the signing: %q", detail)
 	}
 }
 
-// 审计 S2：作者公钥的 TOFU 钉在 host:owner/repo 上，而那一串是从**索引条目的
-// source** 推出来的。改掉 source 就等于换了一个身份，于是换钥匙这件事根本
-// 不会被 Check 看到 —— 规格 §4 说「公钥首次安装钉住，之后变了要大声警告并拒绝」。
+// Audit S2: the author's public key is pinned by TOFU against host:owner/repo,
+// and that string is derived from the INDEX ENTRY'S source. Change the source
+// and you have changed identity, so the key swap never reaches Check at all --
+// while spec 4 says "the public key is pinned on first install; if it changes,
+// warn loudly and refuse".
 //
-// 剧本：Derrity/tinyserve 已装、已签名、公钥 K 已钉住。攻击者提一个 PR，
-// 把这一条的 source 改成自己的仓库、key/sig 换成自己的。`toy update` 会走
-// m.IndexID 再查一次索引（insUpdateOne），拿到新 source，然后：
-//   - insTrustDowngraded 只比等级，两边都是 signed，过；
-//   - insTOFU 用新的 insPackageID 当 id，钥匙环里没有这一条，TrustNew，过。
+// The script: Derrity/tinyserve is installed, signed, public key K pinned. The
+// attacker sends a PR that repoints this entry's source at their own repo and
+// swaps in their own key/sig. `toy update` goes back through the index via
+// m.IndexID (insUpdateOne), picks up the new source, and then:
+//   - insTrustDowngraded only compares tiers, both are signed, pass;
+//   - insTOFU uses the new insPackageID as its id, the keyring has no such
+//     entry, TrustNew, pass.
 //
-// 整个过程没有任何一句话提到「作者公钥变了」。
+// At no point does anything say "the author's public key changed".
 func TestAuditChangingSourceRotatesTheKeyPinIdentity(t *testing.T) {
 	ring, err := sign.OpenRing(t.TempDir())
 	if err != nil {
@@ -87,14 +96,15 @@ func TestAuditChangingSourceRotatesTheKeyPinIdentity(t *testing.T) {
 	victimKey := hex.EncodeToString(victim.Public)
 	attackerKey := hex.EncodeToString(attacker.Public)
 
-	// 第一次安装：source 指向真作者，公钥 K 钉住。
+	// First install: source points at the real author, public key K is pinned.
 	old := insTestResolved(t, "github:Derrity/tinyserve", "v1.0.0")
 	old.Entry = &index.Entry{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Key: victimKey}
 	if err := ring.Pin(insKeyID(old), "key", victimKey); err != nil {
 		t.Fatal(err)
 	}
 
-	// 索引条目被改：同一个 id，source 换成攻击者的仓库，key/sig 也是攻击者的。
+	// The index entry is edited: same id, source repointed at the attacker's
+	// repo, key and sig now the attacker's too.
 	e := index.Entry{ID: "Derrity/tinyserve", Source: "github:evil/tinyserve", Key: attackerKey}
 	e.Sig = sign.Sign(attacker.Private, autSignMessage(e.ID, e.Source, []byte(sgnTOML)))
 	next := insTestResolved(t, e.Source, "v9.9.9")
@@ -102,40 +112,41 @@ func TestAuditChangingSourceRotatesTheKeyPinIdentity(t *testing.T) {
 	next.Entry = &e
 	rsvApplySignature("default", e, next)
 	if next.Trust != store.TrustSigned {
-		t.Fatalf("攻击者的签名该是验得过的，实际 trust=%q", next.Trust)
+		t.Fatalf("the attacker's signature should verify, got trust=%q", next.Trust)
 	}
 
-	// 这就是 insPerform 里那一次检查。
+	// This is the exact check insPerform performs.
 	trust, pinned, err := ring.Check(insKeyID(next), "key", attackerKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if trust == sign.TrustChanged {
-		return // 修好了
+		return // fixed
 	}
-	t.Fatalf("同一个索引 id %q 的作者公钥从 %s… 换成了 %s…，"+
-		"但 TOFU 的 id 跟着 source 从 %q 变成了 %q，于是 Check 返回 %v（钉住的旧值 %q）—— "+
-		"换钥匙这件事一句话都没有",
+	t.Fatalf("the author public key for index id %q went from %s… to %s…, "+
+		"but the TOFU id followed source from %q to %q, so Check returned %v (old pin %q) -- "+
+		"not a single word about the key swap",
 		e.ID, victimKey[:8], attackerKey[:8],
 		insKeyID(old), insKeyID(next), trust, pinned)
 }
 
-// 审计 S3：`toy search --json` 的 "signed": true 只看条目里有没有一把
-// 格式合法的公钥，**从来不验签名**。规格 §5 原话：「只有 key 不算已签名」。
-// 于是任何人往别人的条目里抄一把公钥（连签名都不用伪造），机器可读的输出
-// 就会说这个包是已签名的。
+// Audit S3: "signed": true in `toy search --json` only checks whether the
+// entry carries a well-formed public key. It NEVER verifies the signature.
+// Spec 5, verbatim: "a key alone does not count as signed". So anyone who
+// copies a public key into someone else's entry -- without even forging a
+// signature -- gets the machine-readable output to call that package signed.
 func TestAuditSearchJSONCallsAnythingWithAKeySigned(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TOY_HOME", home)
 
-	// 一把合法的公钥 + 一段根本验不过的签名。
+	// A well-formed public key plus a signature that cannot possibly verify.
 	bogus := sgnKey(t)
 	idx := index.Index{Version: 1, Packages: []index.Entry{{
 		ID:     "Derrity/tinyserve",
 		Source: "github:Derrity/tinyserve",
-		Desc:   "一个很小的静态文件服务器",
+		Desc:   "a very small static file server",
 		Key:    hex.EncodeToString(bogus.Public),
-		Sig:    "AAAA", // 不是有效签名，长度都不对
+		Sig:    "AAAA", // not a valid signature; not even the right length
 	}}}
 	data, err := idx.Marshal()
 	if err != nil {
@@ -146,10 +157,10 @@ func TestAuditSearchJSONCallsAnythingWithAKeySigned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 先确认这个 sig 真的验不过，免得测的是别的东西。
+	// Confirm the sig really does not verify, so we are not testing something else.
 	if err := sign.Verify(hex.EncodeToString(bogus.Public),
 		autSignMessage(idx.Packages[0].ID, idx.Packages[0].Source, []byte(sgnTOML)), "AAAA"); err == nil {
-		t.Fatal("这段签名不该验得过")
+		t.Fatal("this signature must not verify")
 	}
 
 	st, err := store.Open(home)
@@ -164,7 +175,7 @@ func TestAuditSearchJSONCallsAnythingWithAKeySigned(t *testing.T) {
 
 	out := sgnCaptureStdout(t, func() {
 		if err := runSearch(t.Context(), []string{"--json", "tinyserve"}); err != nil {
-			t.Fatalf("search 失败：%v", err)
+			t.Fatalf("search failed: %v", err)
 		}
 	})
 
@@ -177,28 +188,33 @@ func TestAuditSearchJSONCallsAnythingWithAKeySigned(t *testing.T) {
 		} `json:"results"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("输出不是 JSON：%v\n%s", err, out)
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
 	}
 	if len(got.Results) != 1 {
-		t.Fatalf("想要一条结果，得到 %d 条：%s", len(got.Results), out)
+		t.Fatalf("want one result, got %d: %s", len(got.Results), out)
 	}
 	if got.Results[0].Signed {
-		t.Fatalf("签名验不过，`toy search --json` 却说 %q 是 signed:true —— "+
-			"这一格只看了 key 在不在（cmd/toy/query.go 的 rsvFingerprint 那一行）", got.Results[0].ID)
+		t.Fatalf("the signature does not verify, yet `toy search --json` reports %q as signed:true -- "+
+			"that field only looked at whether a key was present (the rsvFingerprint line in cmd/toy/query.go)",
+			got.Results[0].ID)
 	}
-	// 「有一把公钥」本身是有用的信息，别顺手删掉 —— 只是它不叫「已签名」。
+	// "There is a public key here" is useful information; do not delete it in
+	// passing. It just is not the same thing as "signed".
 	if !got.Results[0].HasKey || got.Results[0].FP == "" {
-		t.Fatalf("条目里确实有一把合法公钥，has_key/key_fingerprint 该照实说：%s", out)
+		t.Fatalf("the entry really does carry a valid public key; has_key/key_fingerprint must say so: %s", out)
 	}
 }
 
-// 原本怀疑：`--force` 一个开关管着六件事，用户为了「重装同一个版本」或者
-// 「我知道这个命令名会遮蔽」打上它，顺带就静默接受了「作者换了一把公钥」——
-// 而那正是规格 §4 说要「大声警告并拒绝」的。
+// Originally suspected: `--force` was one switch governing six separate
+// things, so a user who set it to "reinstall the same version" or to say "yes,
+// I know this command name shadows something" also silently accepted "the
+// author swapped in a different public key" -- exactly what spec 4 says we
+// must "warn loudly and refuse" about.
 //
-// 这条是成立的，已经修了：`--reinstall` 专管重装，`--force` 只放行安全检查报出的
-// 变化，而且真的放行时逐条打印放行了什么（铁律 8）。
-// 这个测试现在守的是换钥匙那一条 —— 一次重装不许把它一并放行。
+// This one held up, and it is fixed: `--reinstall` handles reinstalls only,
+// `--force` waives nothing but the changes the safety checks report, and when
+// it does waive something it prints each waiver out loud (iron law 8).
+// What this test guards now is the key swap: a reinstall must not waive it.
 func TestReinstallDoesNotWaiveAKeySwap(t *testing.T) {
 	fh := audNewFakeHost(t)
 	fh.publish(t, "alice", "tool", "v1.0.0", "#!/bin/sh\necho GOOD\n")
@@ -216,7 +232,7 @@ func TestReinstallDoesNotWaiveAKeySwap(t *testing.T) {
 
 	write(a)
 	if err := runInstall(context.Background(), []string{"alice/tool"}); err != nil {
-		t.Fatalf("装不上：%v", err)
+		t.Fatalf("install failed: %v", err)
 	}
 	st, err := store.Open(home)
 	if err != nil {
@@ -227,34 +243,36 @@ func TestReinstallDoesNotWaiveAKeySwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	if m.Trust != store.TrustSigned {
-		t.Fatalf("这一版该是已签名的，实际是 %v —— 后面的换钥匙就无从谈起", m.Trust)
+		t.Fatalf("this version should be signed, got %v -- without that the key swap below means nothing", m.Trust)
 	}
 
-	// 索引里那把公钥被换成了另一把（新签名自洽，所以信任等级没有降级，
-	// 唯一能拦住它的就是 TOFU 记的「上次是哪把钥匙」）。
+	// The public key in the index is swapped for a different one. The new
+	// signature is self-consistent, so the trust tier does not drop; the only
+	// thing that can stop this is TOFU remembering which key it was last time.
 	write(b)
 
 	err = runInstall(context.Background(), []string{"--reinstall", "alice/tool"})
 	if err == nil {
-		t.Fatal("--reinstall 把「作者换了一把公钥」也一并放行了 —— " +
-			"重装是日常操作，不该顺手接受一个换了的作者身份（规格 §4）")
+		t.Fatal("--reinstall waived \"the author swapped public keys\" as well -- " +
+			"reinstalling is an everyday operation and must not casually accept a changed author identity (spec 4)")
 	}
 	if !errors.Is(err, sign.ErrChanged) {
-		t.Fatalf("拒是拒了，但错误不带 sign.ErrChanged，调用方分不清这是哪一种拒绝：%v", err)
+		t.Fatalf("it refused, but the error does not carry sign.ErrChanged, so callers cannot tell which refusal this is: %v", err)
 	}
 
-	// --force 才放行，而且必须说清楚放行的是换钥匙这件事。
+	// Only --force waives it, and it must say that a key swap is what it waived.
 	out := captureStderr(t, func() {
 		if err := runInstall(context.Background(), []string{"--reinstall", "--force", "alice/tool"}); err != nil {
-			t.Fatalf("--reinstall --force 都给了还是装不上：%v", err)
+			t.Fatalf("still cannot install with both --reinstall and --force: %v", err)
 		}
 	})
 	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "author public key") {
-		t.Fatalf("--force 放行了一次换钥匙却没说是放行了什么：\n%s", out)
+		t.Fatalf("--force waived a key swap without saying what it waived:\n%s", out)
 	}
 }
 
-// sgnSignedIndexPath 把 home 的配置指到一个新的索引文件上（沿用 fake 托管方）。
+// sgnSignedIndexPath repoints home's config at a fresh index file (keeping the
+// fake host).
 func sgnSignedIndexPath(t *testing.T, home string) string {
 	t.Helper()
 	st, err := store.Open(home)
@@ -273,7 +291,8 @@ func sgnSignedIndexPath(t *testing.T, home string) string {
 	return path
 }
 
-// sgnWriteSignedIndex 写一条【带签名】的索引条目。签的就是 autSignMessage 那三段。
+// sgnWriteSignedIndex writes one SIGNED index entry. What gets signed is
+// exactly the three parts autSignMessage joins.
 func sgnWriteSignedIndex(t *testing.T, path, id, source string, raw []byte, kp sign.KeyPair) {
 	t.Helper()
 	e := index.Entry{
@@ -292,11 +311,14 @@ func sgnWriteSignedIndex(t *testing.T, path, id, source string, raw []byte, kp s
 	}
 }
 
-// 审计 S5（对照，不是问题）：签名消息 id+"\n"+source+"\n"+toy.toml 缺长度前缀，
-// 但 id 和 source 都被白名单挡住了换行和空格，能在边界上挪动的只有
-// source 尾部的空白（ref.Parse 会 TrimSpace，index.validEntry 因此放行），
-// 而它只能吞掉 toy.toml 开头的空行 —— TOML 语义不变。留个测试钉住这个前提：
-// 一旦 source 允许了内部空白或换行，拼接就真的有歧义了。
+// Audit S5 (a control, not a finding): the signed message id+"\n"+source+"\n"+
+// toy.toml has no length prefixes, but id and source are both whitelisted
+// against newlines and spaces. The only thing that can move on the boundary is
+// trailing whitespace on source (ref.Parse trims it, so index.validEntry lets
+// it through), and all that can swallow is blank lines at the start of the
+// toy.toml -- TOML semantics do not change. This test pins that premise down:
+// the moment source starts allowing internal whitespace or newlines, the
+// concatenation really does become ambiguous.
 func TestAuditSignMessageBoundariesStayUnambiguous(t *testing.T) {
 	for _, bad := range []string{
 		"github:a/b\nname = \"x\"",
@@ -308,16 +330,16 @@ func TestAuditSignMessageBoundariesStayUnambiguous(t *testing.T) {
 			continue
 		}
 		if skipped == 0 || len(idx.Packages) != 0 {
-			t.Fatalf("source %q 带内部空白/换行却被索引接受了 —— "+
-				"这样 source 和 toy.toml 之间的分界就可以任意挪动，"+
-				"一条签名能对上两组不同的输入", bad)
+			t.Fatalf("source %q carries internal whitespace/newlines and the index accepted it -- "+
+				"now the boundary between source and toy.toml can be slid at will, "+
+				"and one signature covers two different inputs", bad)
 		}
 	}
-	// 尾部空白确实过得去，记在案。
+	// Trailing whitespace does get through; noted for the record.
 	idx, _, err := index.Load(sgnIndexJSON(t, "github:a/b \n"), "t")
 	if err == nil && len(idx.Packages) == 1 {
-		t.Logf("source 尾部空白被接受（%q）：只能吞掉 toy.toml 开头的空白，语义不变",
-			idx.Packages[0].Source)
+		t.Logf("trailing whitespace on source is accepted (%q): it can only swallow leading whitespace "+
+			"in the toy.toml, so the semantics do not change", idx.Packages[0].Source)
 	}
 }
 
@@ -332,7 +354,7 @@ func sgnIndexJSON(t *testing.T, source string) []byte {
 	return b
 }
 
-// sgnCaptureStdout 抓一段代码往 os.Stdout 写的东西。
+// sgnCaptureStdout captures whatever a piece of code writes to os.Stdout.
 func sgnCaptureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# 两件事：
-#   1. 把 index/toy-index.json 复制成 site/index.json（**同一份字节**，不许手抄一份 ——
-#      两份必然漂移，而漂移意味着网页上写着有的包装不上）。
-#   2. 用 site/index.template.html + site/i18n.json 生成三份静态页（简体 / 繁体 / 英文）。
-#      **不手维护三份 HTML**（必然漂移），**也不做纯客户端切换**（禁 JS 就只剩一种语言，
-#      SEO 也只收得到一份，而这个站的无 JS 降级是验过的）。
+# Two jobs:
+#   1. Copy index/toy-index.json to site/index.json (**the same bytes** — never hand-copy
+#      a second version; the two would inevitably drift, and drift means the site lists
+#      packages that cannot be installed).
+#   2. Generate three static pages from site/index.template.html + site/i18n.json
+#      (Simplified Chinese / Traditional Chinese / English).
+#      **No hand-maintaining three HTML files** (they would drift), and **no pure
+#      client-side switching** either: with JS disabled only one language would survive,
+#      SEO would only ever see one, and this site's no-JS degradation is tested.
 #
-# Cloudflare Pages：构建命令 `bash scripts/build-site.sh`，输出目录 `site`。
+# Cloudflare Pages: build command `bash scripts/build-site.sh`, output directory `site`.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -14,9 +17,10 @@ cd "$(dirname "$0")/.."
 src=index/toy-index.json
 dst=site/index.json
 
-[ -f "$src" ] || { echo "✗ 找不到 $src"; exit 1; }
+[ -f "$src" ] || { echo "✗ cannot find $src"; exit 1; }
 
-# 校验放在复制之前：宁可不发布，也不要发布一份客户端拉下来会炸的索引。
+# Validate before copying: better to publish nothing than to publish an index that blows
+# up in the client that downloads it.
 read -r version packages < <(
   python3 - "$src" <<'PY'
 import json, sys
@@ -25,32 +29,35 @@ print(d.get("version"), len(d.get("packages") or []))
 PY
 )
 
-[ "$version" = "1" ]  || { echo "✗ $src 的 version 是 $version，不是 1"; exit 1; }
-[ "$packages" -gt 0 ] || { echo "✗ $src 里一条包都没有"; exit 1; }
+[ "$version" = "1" ]  || { echo "✗ $src has version $version, not 1"; exit 1; }
+[ "$packages" -gt 0 ] || { echo "✗ $src holds no packages at all"; exit 1; }
 
 cp "$src" "$dst"
-cmp -s "$src" "$dst" || { echo "✗ 复制之后字节对不上"; exit 1; }
+cmp -s "$src" "$dst" || { echo "✗ bytes differ after the copy"; exit 1; }
 
-echo "✓ $dst —— version $version，$packages 条，和 $src 逐字节一致"
+echo "✓ $dst — version $version, $packages entries, byte-identical to $src"
 
 python3 - <<'PY'
 import html, json, os, re, sys
 
-LANGS = ["zh-Hans", "zh-Hant", "en"]          # 第一个是默认语言，落在站根
+LANGS = ["zh-Hans", "zh-Hant", "en"]          # the first is the default, served at the site root
 OUT   = {"zh-Hans": ".", "zh-Hant": "zh-Hant", "en": "en"}
+# Endonyms on purpose: a reader looking for their own language scans for the name written
+# in that language, not for an English label they may not read.
 NAME  = {"zh-Hans": "简体", "zh-Hant": "繁體", "en": "English"}
 HREF  = {l: "/" if OUT[l] == "." else "/" + OUT[l] + "/" for l in LANGS}
 
 i18n = json.load(open("site/i18n.json", encoding="utf-8"))
 tpl  = open("site/index.template.html", encoding="utf-8").read()
 
-# 三语必须齐 —— 缺一条就整个构建失败，而不是生成一份漏字的页面。
+# All three languages must be present — a missing string fails the whole build rather
+# than shipping a page with holes in it.
 for k, v in i18n.items():
     if k.startswith("_"):
         continue
     missing = [l for l in LANGS if not (isinstance(v, dict) and v.get(l))]
     if missing:
-        sys.exit(f"✗ i18n.json 的 {k} 缺 {missing}")
+        sys.exit(f"✗ {k} in i18n.json is missing {missing}")
 
 def esc(s):
     return html.escape(s, quote=True)
@@ -59,12 +66,13 @@ for lang in LANGS:
     d = OUT[lang]
     a = "" if d == "." else "../"
 
-    # hreflang 三份互相指认，含 x-default 指向默认语言（自指那条也要有）。
+    # All three hreflangs point at each other, plus x-default for the default language
+    # (the self-referential one has to be there too).
     alt = "\n".join(
         f'<link rel="alternate" hreflang="{l}" href="{HREF[l]}">' for l in LANGS
     ) + f'\n<link rel="alternate" hreflang="x-default" href="{HREF[LANGS[0]]}">'
 
-    # 语言切换器就是三个普通链接 —— 禁 JS 也能切。
+    # The language switcher is three ordinary links — it works with JS disabled.
     items = []
     for l in LANGS:
         on = ' class="is-on" aria-current="page"' if l == lang else ""
@@ -72,7 +80,7 @@ for lang in LANGS:
     nav = ('<nav class="langnav" aria-label="%s">%s</nav>'
            % (esc(i18n["langnav_label"][lang]), "".join(items)))
 
-    # app.js 要的那几条文案：挂在 <body data-i18n> 上，不在 JS 里硬编码。
+    # The strings app.js needs: carried on <body data-i18n>, never hard-coded in the JS.
     js = {k[3:]: v[lang] for k, v in i18n.items() if k.startswith("js_")}
 
     raw = {"hreflang": alt, "langnav": nav}
@@ -85,9 +93,9 @@ for lang in LANGS:
         if k in txt:
             return esc(txt[k])
         if k not in i18n:
-            sys.exit(f"✗ 模板里的 {{{{{k}}}}} 在 i18n.json 里没有")
+            sys.exit(f"✗ the template uses {{{{{k}}}}}, which i18n.json does not define")
         v = i18n[k][lang]
-        # 只有确实需要 HTML 的 key 才原样插入，其余一律转义。
+        # Only keys that genuinely carry HTML are inserted raw; everything else is escaped.
         return v if k.endswith("_html") else esc(v)
 
     page = re.sub(r"\{\{(\w+)\}\}", sub, tpl)
@@ -97,5 +105,5 @@ for lang in LANGS:
     path = os.path.join(dirpath, "index.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)
-    print(f"✓ {path} —— lang={lang}")
+    print(f"✓ {path} — lang={lang}")
 PY

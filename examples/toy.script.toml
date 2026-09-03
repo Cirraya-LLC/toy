@@ -1,10 +1,10 @@
-# 单文件脚本形态：不用编译、不用打包、不用 release 资产之外的任何东西。
-# toy 下载它、chmod +x、软链进 ~/.toy/bin，就这样。
+# Single-file script form: nothing to compile, nothing to package, nothing beyond one
+# release asset. toy downloads it, chmod +x, symlinks it into ~/.toy/bin. That's all.
 #
-# [artifact] 和 [script] 二选一，不能同时写。
+# [artifact] and [script] are mutually exclusive -- pick one, never both.
 
 name    = "gitwip"
-desc    = "把当前改动存成一个 WIP 提交再原地弹回来"
+desc    = "stash the working tree into a WIP commit and pop straight back"
 license = "MIT"
 
 [script]

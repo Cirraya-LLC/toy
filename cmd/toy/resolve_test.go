@@ -13,33 +13,35 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/store"
 )
 
-// 挑版本是 install / update 都要走的那一步，选错了就装错东西。
+// Picking a version is the step both install and update go through. Get it
+// wrong and the wrong thing gets installed.
 func TestPickVersion(t *testing.T) {
 	tags := []string{"v1.0.0", "release-junk", "v2.0.0-rc.1", "v1.2.0"}
 
 	v, err := rsvPickVersion(tags, "")
 	if err != nil || v.Raw != "v1.2.0" {
-		t.Fatalf("不带 --version 应该挑最高的正式版 v1.2.0，得到 %q（err=%v）", v.Raw, err)
+		t.Fatalf("without --version it should pick the highest stable release v1.2.0, got %q (err=%v)", v.Raw, err)
 	}
-	// 用户写 1.2.0 和写 v1.2.0 指的是同一个 tag。
+	// Writing 1.2.0 and writing v1.2.0 mean the same tag.
 	if v, err := rsvPickVersion(tags, "1.2.0"); err != nil || v.Raw != "v1.2.0" {
-		t.Fatalf("1.2.0 应该对上 tag v1.2.0，得到 %q（err=%v）", v.Raw, err)
+		t.Fatalf("1.2.0 should match tag v1.2.0, got %q (err=%v)", v.Raw, err)
 	}
-	// 指名一个不存在的版本要报错，并且把有哪些版本说出来。
+	// Naming a version that does not exist has to error and say which ones do.
 	_, err = rsvPickVersion(tags, "v9.9.9")
 	if err == nil || !strings.Contains(err.Error(), "v1.2.0") {
-		t.Fatalf("没有的版本要报错并列出现有版本，得到 %v", err)
+		t.Fatalf("a missing version must error and list the existing ones, got %v", err)
 	}
 }
 
-// 两个索引名转义之后不能撞到同一份缓存 —— 撞了会在离线时拿出别人的索引。
+// Two index names must not escape to the same cache file — a collision hands
+// out somebody else's index when offline.
 func TestIndexCacheNamesDoNotCollide(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a, b := rsvIndexCache(st, "a/b"), rsvIndexCache(st, "a:b"); a == b {
-		t.Fatalf("%q 和 %q 撞到了同一个缓存文件 %s", "a/b", "a:b", a)
+		t.Fatalf("%q and %q collided on the same cache file %s", "a/b", "a:b", a)
 	}
 }
 
@@ -58,30 +60,34 @@ func TestLoadIndexesCachesAndFallsBack(t *testing.T) {
 
 	idxs, err := loadIndexes(context.Background(), st, cfg)
 	if err != nil || len(idxs) != 1 {
-		t.Fatalf("应该加载出 1 个索引，得到 %d 个（err=%v）", len(idxs), err)
+		t.Fatalf("should load 1 index, got %d (err=%v)", len(idxs), err)
 	}
 
-	// 源没了也要能用上次缓存的那份，而不是变成「搜不到这个包」。
+	// With the source gone it still has to use the last cached copy instead of
+	// turning into "no such package".
 	os.Remove(src)
 	idxs, err = loadIndexes(context.Background(), st, cfg)
 	if err != nil || len(idxs) != 1 {
-		t.Fatalf("源不可达时应该回退到缓存，得到 %d 个（err=%v）", len(idxs), err)
+		t.Fatalf("should fall back to the cache when the source is unreachable, got %d (err=%v)", len(idxs), err)
 	}
 	if _, ok := idxs[0].Find("derrity/tinyserve"); !ok {
-		t.Fatal("缓存里的条目没读出来")
+		t.Fatal("the cached entry did not come back")
 	}
 
-	// 缓存也没有时，全部失败要如实报错 —— 不能静默地返回一个空结果。
+	// With no cache either, failing everywhere has to be reported honestly —
+	// never a silent empty result.
 	os.RemoveAll(st.IndexDir())
 	if _, err := loadIndexes(context.Background(), st, cfg); err == nil {
-		t.Fatal("索引全拉不到还说成功了")
+		t.Fatal("every index failed to load and it still reported success")
 	}
 }
 
-// TestRsvApplySignatureOnlyTrustsAVerifiedSignature 是铁律 8 在索引这条路上的落点：
-// 「✓ 已签名」只能在真的验过签名之后才打得出来。索引是个谁都能 fork、谁都能提 PR
-// 的 JSON 文件，往条目里抄一把公钥是零成本的 —— 见到 key 就打勾等于把这三个字
-// 白送给任何一个能改索引的人。
+// TestRsvApplySignatureOnlyTrustsAVerifiedSignature is where iron law 8 lands on
+// the index path: "✓ signed" may only be printed after a signature actually
+// verified. The index is a JSON file anyone can fork and anyone can send a PR
+// against, and copying a public key into an entry costs nothing — printing the
+// check mark on sight of a key hands those two characters to anyone who can edit
+// the index.
 func TestRsvApplySignatureOnlyTrustsAVerifiedSignature(t *testing.T) {
 	kp, err := sign.Generate()
 	if err != nil {
@@ -101,34 +107,34 @@ func TestRsvApplySignatureOnlyTrustsAVerifiedSignature(t *testing.T) {
 		name  string
 		entry index.Entry
 		raw   []byte
-		want  string // 想要的 Trust
+		want  string // the Trust we want
 	}{
-		{"验过的签名才算已签名",
+		{"only a verified signature counts as signed",
 			index.Entry{ID: id, Source: source, Key: pub, Sig: good}, raw, store.TrustSigned},
-		{"有 key 没 sig 不算",
+		{"a key with no sig does not count",
 			index.Entry{ID: id, Source: source, Key: pub}, raw, store.TrustHost},
-		{"toy.toml 被换过就验不过",
+		{"a swapped toy.toml does not verify",
 			index.Entry{ID: id, Source: source, Key: pub, Sig: good},
-			[]byte("name = \"tinyserve\"\n# 偷偷加一行\n"), store.TrustHost},
-		{"别人的钥匙配这个签名也不算",
+			[]byte("name = \"tinyserve\"\n# one line snuck in\n"), store.TrustHost},
+		{"somebody else's key against this signature does not count",
 			index.Entry{ID: id, Source: source, Key: hex.EncodeToString(other.Public), Sig: good},
 			raw, store.TrustHost},
-		{"key 不是合法公钥",
+		{"the key is not a valid public key",
 			index.Entry{ID: id, Source: source, Key: "zzzz", Sig: good}, raw, store.TrustHost},
-		{"没认领过名字就没有签名这回事",
+		{"no claimed name means there is no signature to speak of",
 			index.Entry{ID: id, Source: source}, raw, store.TrustHost},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			res := &resolved{Trust: store.TrustHost, Raw: c.raw}
-			rsvApplySignature("测试索引", c.entry, res)
+			rsvApplySignature("test index", c.entry, res)
 			if res.Trust != c.want {
-				t.Fatalf("Trust = %q，想要 %q", res.Trust, c.want)
+				t.Fatalf("Trust = %q, want %q", res.Trust, c.want)
 			}
 			if c.want != store.TrustSigned && res.Signer != "" {
-				t.Fatalf("没验过就不该给出签名者，得到 %q", res.Signer)
+				t.Fatalf("nothing verified, so there must be no signer, got %q", res.Signer)
 			}
 			if c.want == store.TrustSigned && res.Signer == "" {
-				t.Fatal("验过了却说不出是谁签的")
+				t.Fatal("it verified but cannot say who signed")
 			}
 		})
 	}

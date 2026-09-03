@@ -1,263 +1,307 @@
-# 安全说明
+# Security
 
-toy 是一个装二进制的工具。装二进制这件事本身就是在把别人的代码放到你的机器上，
-所以下面这份文档的目的不是让你放心，是让你**准确地知道自己在信谁**。
+toy installs binaries. Installing a binary means putting somebody else's code on your
+machine, so the point of this document is not to reassure you. It is to tell you
+**exactly who you are trusting**.
 
 ---
 
-## 1. 威胁模型
+## 1. Threat model
 
-### toy 防的
+### What toy defends against
 
-| 威胁 | 怎么防的 |
+| Threat | How |
 | --- | --- |
-| 安装期代码执行（`preinstall` / `postinstall` / build 脚本 / hook） | 这类钩子**在设计上不存在**。toy 只会下载、验哈希、解压、建软链 |
-| 包的内容被悄悄换掉 | 有 `[sha256]` 就强制校验；没有则首次安装钉住（TOFU），之后变了拒绝安装 |
-| 上游 tag 被 force-push、release 资产被重传 | 同上 —— 版本一旦钉住就不再改指向 |
-| 作者身份被顶替 | 作者公钥同样 TOFU 钉住，换了钥匙会停下来 |
-| 解压时写到包目录外面（tar-slip、符号链接逃逸、硬链接、绝对路径、PAX/GNU 长名头里藏路径） | 解压器逐条拒绝，并且**跟随符号链接时按真实路径而不是词法路径判断** |
-| 解压炸弹 | 总字节数上限，判据是**实际写入的字节**，不是压缩包自报的大小 |
-| 遮蔽 PATH 上已有的命令（`bin = "sudo"`） | 默认拒绝，要 `--force` |
-| 包占住 toy 自己要执行的程序名（`bin = "git"`） | 无条件拒绝，**`--force` 也不放行**，见 §3 |
-| 镜像投毒 | 镜像内容按哈希核对；**没有哈希时根本不走镜像** |
-| 传输降级 | https 一旦开始就不许落回 http（判据扫整条重定向链，不只看上一跳） |
-| 终端注入（用控制字符改写已经打出来的信任等级那一行） | 所有给人看的输出都经过转义；表格先排进内存再逐行输出 |
-| URL 里的凭据泄漏 | 在错误构造的那一刻就抹掉，不依赖输出层兜底 |
+| Code execution at install time (`preinstall` / `postinstall` / build scripts / hooks) | These hooks **do not exist by design**. toy downloads, verifies a hash, extracts, and creates symlinks. That is the whole list |
+| Package contents swapped out underneath you | A `[sha256]` block is enforced when present; otherwise the first install pins the hash (TOFU) and any later change is refused |
+| Upstream tag force-pushed, release asset re-uploaded | Same answer — once a version is pinned it never re-points |
+| Author identity taken over | The author's public key is pinned the same way; a changed key stops the install |
+| Writing outside the package directory during extraction (tar-slip, symlink escape, hard links, absolute paths, paths hidden in PAX/GNU long-name headers) | The extractor refuses each of these, and **judges symlinks by real path, not lexical path** |
+| Zip bombs | A total-byte ceiling, measured by **bytes actually written**, not by the size the archive claims |
+| Shadowing a command already on PATH (`bin = "sudo"`) | Refused by default, `--force` overrides |
+| A package claiming a name toy itself executes (`bin = "git"`) | Refused unconditionally — **`--force` does not override this one**. See §3 |
+| Mirror poisoning | Mirror content is checked against the hash; **with no hash, mirrors are never used at all** |
+| Transport downgrade | Once it is https it never falls back to http (the check scans the whole redirect chain, not just the last hop) |
+| Terminal injection (control characters rewriting the trust line that was already printed) | Everything printed for a human goes through an escaping layer; tables are laid out in memory first, then emitted line by line |
+| Credentials leaking out of a URL | Stripped at the moment the error is constructed, not left to the output layer |
 
-### toy 不防的
+### What toy does not defend against
 
-这一节比上一节重要。
+This section matters more than the one above.
 
-- **包本身是恶意的。** toy 保证的是「装的时候什么都不跑」，不是「跑起来是安全的」。
-  你运行 `tinyserve` 的那一刻，它就是一个普通程序，能做你能做的任何事。
-  toy 不做沙箱、不做权限声明、不做行为分析。
-- **作者的账号被接管。** 攻击者拿到仓库的写权限就能发一个新 tag。TOFU 只在
-  「同一个版本换了内容」时报警，**新版本本来就是新内容**。
-- **`✓ 已签名` 不等于「是仓库主人签的」。** 见 §4，这是当前最需要说清楚的一条。
-- **托管方本身。** 走 `github:owner/repo` 就是信 GitHub 的账号体系和 TLS。
-- **索引托管处的写权限。** 条目可以内联一份 `toy.toml`（上游还没接入 toy 时），
-  所以能改那份 JSON 的人，**能改变你装到的东西**，而 `source` 一个字都不变。
-  半径是夹住的 —— 只能在那个仓库自己的 release 里换一个资产、换一个命令名，
-  换不了下载地址（那是 host 模板 + tag 拼的），也占不了 `git` 这种保留名字或
-  PATH 上已有的命令。这样装的包会打印「⚠ 打包说明来自索引」，**那一行就是你
-  察觉这件事的唯一途径**。不想要这一档就别加第三方索引：`github:owner/repo`
-  那条路从头到尾不经过索引。
-- **你自己的 PATH。** PATH 上任何目录里的假 `git` 都会被执行 —— 那是 PATH 本来的
-  语义。toy 只额外保证**包能写进去的那个目录**（`~/.toy/bin`）不会成为这条路。
-- **供应链的上游。** 作者机器上被投毒的编译器、CI 里被篡改的构建产物，toy 看不见。
-  它只能保证「你这次装到的字节，和作者发布时那份是同一份」。
-- **首次安装。** TOFU 的第一次就是无条件信任。第一次装到的如果就是坏的，
-  toy 会忠实地把它钉住。第一次安装该看的是 `source` 指向哪里。
-- **拒绝服务。** 有体积上限和重定向上限，但没有速率限制、没有超时策略调优。
-
----
-
-## 2. 八条铁律的安全含义
-
-### 铁律 1 —— 任何时候都不执行包里的任何代码
-
-**这是整个项目的存在理由，别的都是它的推论。**
-
-没有 install、postinstall、build、hook，一个都没有。这不是「默认关闭」也不是
-「沙箱里跑」，是这些概念在代码里根本没有对应物。
-
-它挡掉的是一整类攻击而不是一个 CVE：吃掉 700+ 个 npm 包的 Shai-Hulud 蠕虫靠的是
-`preinstall`；Homebrew 的 formula 是可执行 Ruby，6.0 不得不为此加了一道 Tap Trust。
-一个从设计上就没有执行入口的分发器，这类攻击无从谈起 —— 不是「更难」，是**没有
-可以利用的东西**。
-
-这条铁律有一个不显然的边界，见 §3：「装的那一刻不执行」和「这个包永远拿不到执行」
-不是同一句话。
-
-### 铁律 2 —— 绝不从源码构建
-
-只装 ① release 二进制 ② 单文件脚本，别的报错。构建就要管工具链，而工具链是一个
-比包本身大得多的攻击面（也是一个大得多的项目）。
-
-### 铁律 3 —— 包与包之间没有依赖
-
-没有依赖图就没有传递性信任。你装一个包，就只装了那一个包 —— 不存在「我审了直接
-依赖，但它的第 47 个间接依赖被投毒了」这回事。
-
-### 铁律 4 —— 有 sha256 就强制校验，没有则 TOFU 钉住
-
-哈希对不上一律拒绝安装。这也是镜像（§8）能不被信任的**唯一**前提：内容可以按哈希
-核对。所以没有哈希的时候，镜像回退整条路径消失，而不是「降级使用」。
-
-**缓存命中也要重算哈希。** 缓存目录的文件名就是内容哈希，只看文件在不在等于把
-`~/.toy/cache` 变成一个谁都能写的信任根 —— 而那个目录正是 `toy serve` 对外提供的。
-
-### 铁律 5 —— 绝不遮蔽 PATH 上已有的命令
-
-否则 `bin = "sudo"` 就是一个提权洞。默认拒绝，`--force` 可以覆盖 —— 用户对
-「我知道我在覆盖 `ls`」是判断得出后果的。
-
-**这条有一个盲区，而那个盲区是一条 critical，见 §3。**
-
-### 铁律 6 —— 版本不可变
-
-某个 `ref@version` 的哈希一旦记下就永不改指向。left-pad、投毒抗议、tag 被
-force-push —— 这三件事在别的生态里都真的发生过，而它们的共同形状是「同一个坐标，
-不同的字节」。
-
-TOFU 记录**按资产名钉**而不是按 `ref@version` 钉：同一个版本在 musl 机器和 glibc
-机器上命中的是不同的构建，只按版本钉的话，共享 `$HOME` 的第二台机器会被报成
-「内容被人换掉了」—— 一个假警报出现在最不该狼来了的地方。
-
-### 铁律 7 —— 解压必须防路径穿越
-
-`../` 和绝对路径一律拒绝，符号链接不跟随出目标目录。
-
-判定按**真实路径**而不是词法路径：包里只要有一个链接指得比自己浅（`x -> "."`），
-词法校验和内核的解析就错开一层，后面一个 `..` 就爬出去了。「放行的链接必定指向
-内部、跟随它们也逃不出去」这条归纳是错的。
-
-还有两条不显然的：**setuid / setgid 位不会被带出来**；**不认识的 tar 成员类型如果
-声明了内容，必须响亮地失败而不是静默跳过** —— `continue` 掉等于让 tar reader 把
-那些字节从 gzip 流里解出来丢掉，字节上限数不到它们。
-
-### 铁律 8 —— 信任等级必须如实打印，不许静默成功
-
-这条是给人看的那一半安全性。它管三件事：
-
-1. **信任等级本身**（§4）。
-2. **`--force` 真的放行了什么** —— 一次静默的放行等于没有这道检查，所以每一条放行
-   都逐条打印。
-3. **字节是从哪来的** —— 原始地址挂了、包是从镜像拿到的时候会多打一行说明。
-   内容是哈希寻址的所以镜像不需要被信任，但「不需要信任」不等于「不需要知道」。
-   平台候选回退（装到的不是为这台机器构建的那个）同理。
-
-正因为这一行是用户唯一的判断依据，它也是一个攻击目标 —— 见 §5 的终端注入。
+- **The package itself being malicious.** toy's guarantee is "nothing runs while you
+  install it", not "what you installed is safe to run". The moment you run `tinyserve`
+  it is an ordinary program that can do anything you can do. No sandbox, no permission
+  manifest, no behavioral analysis.
+- **The author's account being taken over.** Anyone with write access to the repo can
+  push a new tag. TOFU only fires when *the same version* changes content, and
+  **a new version is new content by definition**.
+- **`✓ signed` does not mean "signed by the repo owner".** See §4. This is the one
+  thing here that most needs saying precisely.
+- **The host itself.** Installing via `github:owner/repo` means trusting GitHub's
+  account system and TLS.
+- **Write access to wherever an index is hosted.** An entry may inline a `toy.toml`
+  (for upstreams that have not adopted toy yet), so whoever can edit that JSON
+  **can change what you end up installing** while `source` stays byte-for-byte the same.
+  The blast radius is bounded — they can only swap in a different asset from that repo's
+  own releases and pick a different command name; they cannot change the download URL
+  (that is built from the host template plus the tag), and they cannot claim a reserved
+  name like `git` or a command already on your PATH. A package installed this way prints
+  `⚠ packaging instructions come from the index`, and **that line is your only way to
+  notice**. If you do not want this tier, do not add third-party indexes:
+  `github:owner/repo` never goes through an index at all.
+- **Your own PATH.** A fake `git` in any directory on your PATH will be executed —
+  that is what PATH means. toy only guarantees that **the one directory packages can
+  write into** (`~/.toy/bin`) will not be that path.
+- **The upstream supply chain.** A poisoned compiler on the author's machine, a tampered
+  build in their CI — toy cannot see any of it. All it can promise is that the bytes you
+  got are the same bytes the author published.
+- **The first install.** The first use in trust on first use is unconditional trust. If
+  what you install the first time is already bad, toy will faithfully pin it. On a first
+  install, the thing to look at is where `source` points.
+- **Denial of service.** There are size ceilings and a redirect ceiling, but no rate
+  limiting and no tuned timeout policy.
 
 ---
 
-## 3. 那条 critical：「装的时候不跑」和「永远不跑」不是一句话
+## 2. What the eight iron laws mean for security
 
-一个包可以声明：
+### Iron Law 1 — never execute any code from a package, ever
+
+**This is why the project exists. Everything else follows from it.**
+
+No install, no postinstall, no build, no hooks. Not "off by default", not "sandboxed" —
+these concepts have no counterpart anywhere in the code.
+
+What that blocks is a whole class of attack rather than one CVE: the Shai-Hulud worm ate
+700+ npm packages through `preinstall`; Homebrew formulas are executable Ruby, which is
+why 6.0 had to bolt on Tap Trust. Against a distributor with no execution entry point by
+design, this class of attack has nothing to talk about — not "harder", but **nothing to
+work with**.
+
+This law has one non-obvious boundary, covered in §3: "nothing runs at install time" and
+"this package never gets to run" are not the same sentence.
+
+### Iron Law 2 — never build from source
+
+Only ① release binaries and ② single-file scripts get installed; anything else is an
+error. Building means owning a toolchain, and a toolchain is a far larger attack surface
+than the package itself (and a far larger project).
+
+### Iron Law 3 — no dependencies between packages
+
+No dependency graph means no transitive trust. You install one package and that is what
+you installed — there is no such thing here as "I audited the direct dependency, but its
+47th transitive dependency was poisoned".
+
+### Iron Law 4 — enforce sha256 when it is declared, pin it on first use when it is not
+
+A checksum mismatch always refuses the install. This is also the **only** reason mirrors
+(§8) do not have to be trusted: content can be checked against a hash. So when there is
+no hash, the mirror fallback disappears entirely rather than degrading into "use it anyway".
+
+**A cache hit re-hashes the file too.** The cache filenames *are* the content hashes, so
+merely checking that a file exists would turn `~/.toy/cache` into a trust root anyone can
+write to — and that directory is exactly what `toy serve` hands out.
+
+### Iron Law 5 — never shadow a command already on PATH
+
+Otherwise `bin = "sudo"` is a privilege-escalation hole. Refused by default, `--force`
+overrides — a user *can* reason about the consequences of "yes, I am replacing `ls`".
+
+**This law has a blind spot, and that blind spot was a critical. See §3.**
+
+### Iron Law 6 — versions are immutable
+
+Once a hash is recorded for some `ref@version` it never re-points. left-pad, protestware,
+a force-pushed tag — all three really happened in other ecosystems, and they share one
+shape: **same coordinate, different bytes**.
+
+TOFU records are keyed **by asset name**, not by `ref@version`: the same version resolves
+to different builds on a musl machine and a glibc machine, so pinning by version alone
+would make a second machine sharing the same `$HOME` report "the content was swapped out"
+— a false alarm in the one place you can least afford to cry wolf.
+
+### Iron Law 7 — extraction must refuse path traversal
+
+`../` and absolute paths are refused, and symlinks are not followed out of the destination.
+
+The judgment is made on the **real path**, not the lexical one: one link inside the
+archive pointing shallower than itself (`x -> "."`) is enough for lexical validation and
+the kernel's resolution to be off by one level, and then a single `..` climbs out. The
+induction "links we allowed must point inward, so following them cannot escape either" is
+simply false.
+
+Two more that are not obvious: **setuid / setgid bits never survive extraction**; and
+**an unrecognized tar member type that declares content must fail loudly rather than be
+skipped** — a `continue` lets the tar reader pull those bytes out of the gzip stream and
+throw them away, where the byte ceiling never counts them.
+
+### Iron Law 8 — print the trust level honestly, never succeed silently
+
+This is the half of security that is aimed at a human. It covers three things:
+
+1. **The trust level itself** (§4).
+2. **What `--force` actually waived** — a silent waiver is the same as not having the
+   check, so every waiver is printed, one line each.
+3. **Where the bytes came from** — an extra line when the original URL was down and the
+   package came from a mirror. Content is hash-addressed, so a mirror does not need to be
+   trusted; "does not need to be trusted" is not the same as "does not need to be known".
+   Platform-candidate fallback (you did not get the build made for this machine) is the
+   same story.
+
+Precisely because that line is the user's only basis for judgment, it is also a target —
+see the terminal injection in §5.
+
+---
+
+## 3. The critical: "nothing runs at install time" and "nothing ever runs" are different sentences
+
+A package can declare:
 
 ```toml
 [bin]
 git = "payload"
 ```
 
-装完之后 `~/.toy/bin/git` 就在 PATH 上 —— 而 `~/.toy/bin` 正是 `toy doctor` 教用户
-放在 PATH 最前面的目录。**toy 自己靠 `git ls-remote` 发现版本**，所以下一条
-`toy install` / `toy update` / `toy doctor` 就执行了这个包里的文件。
+After installing, `~/.toy/bin/git` is on PATH — and `~/.toy/bin` is exactly the directory
+`toy doctor` tells users to put **first** on their PATH. **toy discovers versions by
+running `git ls-remote`**, so the next `toy install` / `toy update` / `toy doctor`
+executes a file from that package.
 
-安装那一刻确实一行都没跑，铁律 1 的字面意思成立 —— 执行只是**推迟了一条命令**。
+Not one line ran during the install. Iron Law 1 holds literally. Execution was merely
+**deferred by one command**.
 
-**遮蔽检查（铁律 5）挡不住它**：那道检查只挡「PATH 上已经存在的同名程序」。在一台
-还没装 git 的机器上（macOS 没装 Xcode CLT、slim 容器、CI 基础镜像都是这样，而裸地址
-那条安装路径压根不需要 git），`LookPath("git")` 找不到东西，检查就放行了。
+**The shadowing check (Iron Law 5) does not stop this**: that check only catches "a
+program with the same name already exists on PATH". On a machine that does not have git
+yet — a Mac without Xcode CLT, a slim container, a CI base image, all of which are
+normal, and the bare-URL install route needs git for nothing at all —
+`LookPath("git")` finds nothing, so the check waves it through.
 
-修在两半，**缺一半都不成立**：
+The fix is in two halves and **neither half works alone**:
 
-1. `internal/store` 的 `reservedLinkNames`：拒绝把包链成 `git`。这是全项目**唯一
-   一条 `--force` 也不放行**的检查 —— 一个包没有任何正当理由要占住 toy 自己的
-   工具链名字，而用户对着「确认要覆盖再加 --force」判断不出后果。
-2. `internal/host` 的 `lookupGit()`：自己走一遍 PATH 解析出绝对路径，**跳过
-   `$TOY_HOME/bin`**，也跳过 PATH 里的相对项。假 git 是 PATH 上唯一的 git 时直接
-   拒绝执行并明说这很可能是一次攻击。
+1. `reservedLinkNames` in `internal/store`: refuse to link any package as `git`. This is
+   the **only check in the entire project that `--force` does not waive** — no package has
+   a legitimate reason to claim a name from toy's own toolchain, and a user cannot reason
+   about the consequences of "confirm the override with --force".
+2. `lookupGit()` in `internal/host`: walk PATH itself and resolve an absolute path,
+   **skipping `$TOY_HOME/bin`** and skipping relative PATH entries. When the fake git is
+   the only git on PATH, refuse to execute and say plainly that this is most likely an
+   attack.
 
-第一半只挡新装的包，第二半连一个已经躺在 `bin/` 里的 git 也不跑。
+The first half only stops newly installed packages. The second half also refuses to run a
+git that is already sitting in `bin/`.
 
-**给以后改代码的人**：toy 只要新增一个「按名字 exec 的外部程序」，就必须同时加进
-`reservedLinkNames`。`internal/host` 不许 import `internal/store`（会成环），所以
-bin 目录推导在两边各有一份 —— 改一边忘了另一边，这条防御会静默失效，而失效的样子
-和正常一模一样。
+**For whoever changes this code next**: the moment toy execs one more external program
+**by name**, that name must be added to `reservedLinkNames`. `internal/host` may not
+import `internal/store` (import cycle), so the bin-directory derivation exists in both
+places — change one and forget the other and this defense fails silently, and failing
+looks exactly like working.
 
-完整复现在 `cmd/toy/ironlaw1_audit_test.go`、`internal/store/link_audit_test.go`、
-`internal/host/exec_audit_test.go`。
-
----
-
-## 4. 四档信任等级各自证明了什么
-
-安装完成那一行会打印下面四种之一。**读的时候要读它证明不了的那部分。**
-
-### `✓ 已签名 · key a3f9… · 索引 X 登记（不代表 github.com/Y 本人）`
-
-签名消息是 `id + "\n" + source + "\n" + toy.toml 的原始字节`。
-
-**这三样都是公开可读的，里面没有一个字节把这把公钥和仓库的 owner 绑起来。**
-
-索引是一个谁都能 fork、谁都能提 PR 的 JSON，抄一把公钥零成本。所以一个人完全可以
-fork 一份索引、用**自己的**密钥给同一个 `id` 重新签一条、把 `source` 指向自己的
-仓库 —— 第一次安装的人照样看到这个勾。
-
-**它能证明的只有：索引里登记的这把钥匙，签过这一版的 `toy.toml`。**
-加上 TOFU（公钥首次安装即钉住，换了拒绝安装），它保证的是**连续性**：
-你上次从这个 id 装到的东西，和这次是同一个人签的。
-
-所以：
-
-- 那一行永远带着「不代表某某本人」这句尾巴。
-- **不许把仓库 owner 印在勾后面** —— `✓ 已签名 · Derrity (key a3f9…)` 读起来就是
-  「Derrity 签的」，那是在替一把不知道是谁的钥匙背书。
-- **第一次安装时该看的是 `source` 指向哪里，不是有没有勾。**
-
-真正的归属绑定需要索引有一个会校验提交者对那个仓库有 push 权限的入口。索引上平台
-之前，这个勾就只有上面那个含义。见 `ROADMAP.md`。
-
-### `· 来源 github.com/Y · 未签名`
-
-你信的是**托管方的账号体系**：GitHub 说这个仓库属于这个账号，TLS 说你连到的是
-GitHub。没有作者签名，也不需要 —— 这是绝大多数包的默认状态，而且它是一个诚实的
-状态，不是一个降级。
-
-### `⚠ 打包说明来自索引 · 二进制取自作者的 release，但装哪个资产、命令叫什么名字由索引提供`
-
-作者没写过 `toy.toml`，索引条目里内联了一份。所以：**字节是作者的，打包说明不是。**
-
-这一档比「托管方账号」低、比「未签名」高，而且**内联的 toyfile 永远到不了
-`✓ 已签名`** —— 签名者是提交索引记录的人，不是作者。
-
-不说「部分可信」这种含糊话：用户要能据此判断风险，而风险的具体形状是
-「谁决定了软链成什么命令名」。
-
-### `⚠ 未签名 · 首次安装，已钉住 sha256`
-
-裸 URL。**你什么都没信** —— 但内容变了会被拦下来。
+Full reproductions live in `cmd/toy/ironlaw1_audit_test.go`,
+`internal/store/link_audit_test.go`, and `internal/host/exec_audit_test.go`.
 
 ---
 
-## 5. 输出本身也是攻击面
+## 4. What each of the four trust levels actually proves
 
-信任等级那一行是用户唯一的判断依据（铁律 8），所以它是个目标。
+The last line of an install prints one of the four below. **Read them for what they do
+not prove.**
 
-包的 `name`、`desc`、错误里回显的服务器文本，全是攻击者可控的。一条带
-`\r\x1b[32m✓ 已签名` 的 desc 能把刚打出来的那一行盖掉重写。更隐蔽的是**裸字节
-`0x9b`（8 位形式的 CSI）**：在按 8 位 C1 解释的终端上，`CSI 1A` + `CSI 2K` 就是
-光标上移一行 + 擦掉整行。
+### `✓ signed · key a3f9… · registered in index X (this is not a claim about github.com/Y themselves)`
 
-所以：一切给人看的输出都过转义层，表格先排进内存再逐行输出，每一格按 rune 封顶
-（一个超长的 `name` 不用任何控制字符就能把整列顶出屏幕），`toy list` 的信任列放
-第一列 —— 放第一列就不存在被左边那格顶出去这回事。
+The signed message is `id + "\n" + source + "\n" + the raw bytes of toy.toml`.
 
-只有 `toy search --json` 走 stdout，那是给机器读的。
+**All three are publicly readable, and not one byte of them binds this public key to the
+repo's owner.**
+
+An index is a JSON file anyone can fork and anyone can send a PR against, and copying a
+public key costs nothing. So somebody can fork an index, re-sign the same `id` with
+**their own** key, and point `source` at their own repo — and a first-time installer still
+sees the checkmark.
+
+**All it can prove is: the key registered in the index signed this version of the
+`toy.toml`.** Together with TOFU (the public key is pinned on first install, and a changed
+key refuses to install), what you get is **continuity**: whatever you installed from this
+id last time was signed by the same person as this time.
+
+Therefore:
+
+- That line always carries the "this is not a claim about X themselves" tail.
+- **Never print the repo owner after the checkmark.** `✓ signed · Derrity (key a3f9…)`
+  reads as "Derrity signed this", which is vouching for a key nobody has identified.
+- **On a first install, the thing to read is where `source` points, not whether there is
+  a checkmark.**
+
+Real attribution needs an index with an intake path that verifies the submitter has push
+access to that repo. Until an index runs on a platform, the checkmark means only what is
+written above. See `ROADMAP.md`.
+
+### `· from github.com/Y · unsigned`
+
+What you are trusting is **the host's account system**: GitHub says this repo belongs to
+this account, and TLS says you reached GitHub. No author signature, and none needed —
+this is the default state for the vast majority of packages, and it is an honest state,
+not a downgrade.
+
+### `⚠ packaging instructions come from the index · the bytes are from the author's own release, but which asset gets installed and what the command is called come from the index`
+
+The author never wrote a `toy.toml`, so the index entry inlines one. Which means:
+**the bytes are the author's, the packaging instructions are not.**
+
+This tier sits below "host account" and above "unsigned", and **an inlined toyfile can
+never reach `✓ signed`** — the signer is whoever submitted the index record, not the author.
+
+We do not fudge this as "partially trusted": the user has to be able to judge the risk,
+and the concrete shape of the risk is *who decided what command name this gets symlinked as*.
+
+### `⚠ unsigned · first install, sha256 pinned (trust on first use)`
+
+A bare URL. **You trusted nothing** — but if the content changes, that will be stopped.
 
 ---
 
-## 6. 报告漏洞
+## 5. The output is an attack surface too
 
-**请不要开公开 issue。**
+That trust line is the user's only basis for judgment (Iron Law 8), which makes it a target.
 
-用 GitHub 的私有安全报告：仓库的 **Security → Report a vulnerability**
-（Private vulnerability reporting）。
+A package's `name` and `desc`, and server text echoed back in an error, are all attacker
+controlled. A `desc` containing `\r\x1b[32m✓ signed` can overwrite the line that was just
+printed. Subtler: **the raw byte `0x9b`, the 8-bit form of CSI** — on a terminal that
+interprets 8-bit C1, `CSI 1A` + `CSI 2K` is cursor-up one line plus erase the whole line.
 
-报告里有这几样会快很多：
+So: everything printed for a human goes through the escaping layer, tables are laid out in
+memory and then emitted line by line, and every cell is capped by rune count (an
+absurdly long `name` can push a column off the screen without a single control character).
+The trust column in `toy list` is **the first column** — nothing can push the first column
+off the right edge.
 
-- 一个**能跑的复现**。这个项目每一条确认的发现都有一个测试，我们会照着你的复现
-  写一个，然后把它翻转成回归测试。
-- **具体的坏结果**，而不是「这里看起来不安全」。这个项目在审计里推翻了 17 条
-  发现，理由几乎都是「说得通，但走不到」或者「那是用户显式要求的」。
-- 你认为它属于 §1 里的哪一栏。如果它属于「toy 不防的」那一栏但你认为不该属于，
-  那本身就是一条值得讨论的报告。
+Only `toy search --json` writes to stdout; that output is for machines.
 
-**我们会做的**：确认收到、判定、修、在 `CHANGELOG.md` 里写清楚它是什么。
-默认公开致谢，你说不要就不写。
+---
 
-**我们不做的**：没有赏金，没有 SLA。这是一个人在维护的小工具，别指望 24 小时响应。
+## 6. Reporting a vulnerability
 
-**如果你的报告被判为「不成立」，我们会写清楚为什么走不到** —— 而不是关掉了事。
-`docs/audit-2026-08.md` 里有 17 条这样的判定，那是它们该有的待遇。
+**Please do not open a public issue.**
+
+Use GitHub private reporting: **Security → Report a vulnerability** on the repo
+(Private vulnerability reporting).
+
+These make a report move much faster:
+
+- **A reproduction that runs.** Every confirmed finding in this project has a test behind
+  it; we will write one from your repro and then flip it into a regression test.
+- **A concrete bad outcome**, not "this looks insecure". This project overturned 17
+  findings in its audit, almost all of them for "plausible, but unreachable" or "that is
+  what the user explicitly asked for".
+- Which column of §1 you think it belongs in. If it belongs in "what toy does not defend
+  against" but you think it should not, that itself is a report worth having.
+
+**What we will do**: acknowledge, triage, fix, and write down in `CHANGELOG.md` what it
+was. Credit is public by default; say the word and we leave it out.
+
+**What we will not do**: there is no bounty and no SLA. This is a small tool maintained by
+one person; do not expect a 24-hour response.
+
+**If we rule your report unreachable, we will write down why** rather than just closing it.
+`docs/audit-2026-08.md` has 17 of those verdicts, which is the treatment they deserve.

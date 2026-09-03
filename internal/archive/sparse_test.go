@@ -8,10 +8,11 @@ import (
 	"testing"
 )
 
-// GNU 稀疏文件（`tar --sparse -cf x.tar tool`）的 typeflag 是 'S'，Go 的 reader
-// 认它、把内容展开好了才交给我们，却【保留】这个 typeflag。它一旦落进 untar 的
-// default 分支就会被和设备文件一起 continue 掉：文件静默消失，Extract 照样成功，
-// 装完是一条不存在的命令。这里断言内容真的落盘。
+// A GNU sparse file (`tar --sparse -cf x.tar tool`) carries typeflag 'S'. Go's reader
+// understands it and hands us the fully expanded content, but KEEPS that typeflag. The
+// moment it falls into untar's default branch it gets continue'd away alongside device
+// nodes: the file vanishes silently, Extract still reports success, and the install
+// leaves behind a command that does not exist. This asserts the content really lands.
 func TestGNUSparseFileIsExtractedWithItsContent(t *testing.T) {
 	outside, dest := canary(t)
 	payload := []byte("this is the real payload of the tool binary")
@@ -23,22 +24,22 @@ func TestGNUSparseFileIsExtractedWithItsContent(t *testing.T) {
 
 	files, err := Extract(src, dest)
 	if err != nil {
-		t.Fatalf("稀疏文件应该被正常解出来，实际 err=%v", err)
+		t.Fatalf("a sparse file should extract normally, got err=%v", err)
 	}
 	canaryIntact(t, outside)
 	if len(files) != 1 || files[0] != "tool" {
-		t.Fatalf("文件列表 = %v，想要 [tool]", files)
+		t.Fatalf("file list = %v, want [tool]", files)
 	}
 	got, err := os.ReadFile(filepath.Join(dest, "tool"))
 	if err != nil {
-		t.Fatalf("tool 没落盘：%v", err)
+		t.Fatalf("tool never landed on disk: %v", err)
 	}
 	if !bytes.Equal(got, payload) {
-		t.Fatalf("内容 = %q，想要 %q", got, payload)
+		t.Fatalf("content = %q, want %q", got, payload)
 	}
 }
 
-// 稀疏文件展开后可以远大于压缩包本身，字节上限必须照常兜住。
+// An expanded sparse file can dwarf the archive itself, so the byte limit still applies.
 func TestGNUSparseFileStillHitsTheByteLimit(t *testing.T) {
 	_, dest := canary(t)
 	payload := bytes.Repeat([]byte("A"), 4096)
@@ -50,16 +51,17 @@ func TestGNUSparseFileStillHitsTheByteLimit(t *testing.T) {
 
 	files, err := extractTo(src, dest, 1024)
 	if !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("4 KiB 的稀疏文件在 1 KiB 上限下应该报 ErrTooLarge，实际 files=%v err=%v", files, err)
+		t.Fatalf("a 4 KiB sparse file under a 1 KiB limit should be ErrTooLarge, got files=%v err=%v", files, err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dest, "big")); !os.IsNotExist(statErr) {
-		t.Fatalf("失败之后不该留下半个文件：%v", statErr)
+		t.Fatalf("a failure must not leave half a file behind: %v", statErr)
 	}
 }
 
-// 不认识的 typeflag 如果声明了内容，continue 掉等于让 Go 的 reader 把这些字节从
-// gzip 流里解出来丢掉：MaxTotalBytes 数不到，几 KiB 的包能烧掉几百 MiB 的解压，
-// 而且包里少了东西却安装成功。必须响亮地失败。
+// An unknown typeflag that declares content cannot just be continue'd away: Go's reader
+// decompresses those bytes out of the gzip stream and discards them, MaxTotalBytes never
+// sees them (a few KiB of archive can burn hundreds of MiB of decompression), and the
+// package silently installs with something missing. It has to fail loudly.
 func TestUnknownTypeflagWithContentIsRejected(t *testing.T) {
 	_, dest := canary(t)
 	body := []byte("payload nobody will ever see")
@@ -71,12 +73,13 @@ func TestUnknownTypeflagWithContentIsRejected(t *testing.T) {
 
 	files, err := Extract(src, dest)
 	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("带内容的未知类型应该被拒，实际 files=%v err=%v", files, err)
+		t.Fatalf("an unknown type carrying content should be refused, got files=%v err=%v", files, err)
 	}
 }
 
-// 对照组：没有内容的非常规成员（设备文件、FIFO、PAX 全局头）照旧静默跳过，
-// 不能因为上面那条把 git archive 生成的包整个拒掉。
+// Control: contentless irregular members (device nodes, FIFOs, PAX global headers) are
+// still skipped quietly. The rule above must not reject every archive git archive
+// produces.
 func TestContentlessIrregularMembersStillSkipped(t *testing.T) {
 	_, dest := canary(t)
 	var m bytes.Buffer
@@ -91,9 +94,9 @@ func TestContentlessIrregularMembersStillSkipped(t *testing.T) {
 
 	files, err := Extract(src, dest)
 	if err != nil {
-		t.Fatalf("没有内容的非常规成员应该被跳过而不是报错，实际 %v", err)
+		t.Fatalf("contentless irregular members should be skipped, not error out, got %v", err)
 	}
 	if len(files) != 1 || files[0] != "real.txt" {
-		t.Fatalf("文件列表 = %v，想要只有 real.txt", files)
+		t.Fatalf("file list = %v, want real.txt only", files)
 	}
 }

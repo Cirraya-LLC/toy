@@ -1,5 +1,6 @@
-// Package semver 是一个够用就好的语义化版本比较器。
-// 规格 §10：不引第三方库 —— 就是三个整数加可选预发布标签的比较。
+// Package semver is a good-enough semantic version comparator.
+// Spec §10: no third-party libraries — this is three integers plus an optional
+// pre-release tag, compared.
 package semver
 
 import (
@@ -10,20 +11,22 @@ import (
 	"strings"
 )
 
-// maxLen 和 internal/ref 的 maxSegment 一致：版本号会变成 ~/.toy/pkg 下的
-// 一级目录名，而单个路径分量在多数文件系统上只有 255 字节。tag 是从
-// git ls-remote 来的、上游想写多长写多长，所以这道闸必须在这里。
+// maxLen matches maxSegment in internal/ref: a version becomes a directory
+// level under ~/.toy/pkg, and a single path component is capped at 255 bytes on
+// most filesystems. Tags come from git ls-remote, so upstream can make them as
+// long as it likes — this gate has to be here.
 const maxLen = 100
 
-// V 是一个解析过的版本。Pre 为空表示正式发布。
+// V is a parsed version. An empty Pre means a stable release.
 type V struct {
 	Major, Minor, Patch int
-	Pre                 string // 不含前导 '-'
-	Raw                 string // 原始 tag，可能带 'v' 前缀
+	Pre                 string // without the leading '-'
+	Raw                 string // the original tag, possibly with a 'v' prefix
 }
 
-// Parse 接受 "v1.2.3" / "1.2.3" / "1.2.3-rc.1"。
-// 不合法的 tag 返回 error —— 调用方应当跳过它而不是当成 0.0.0。
+// Parse accepts "v1.2.3" / "1.2.3" / "1.2.3-rc.1".
+// An invalid tag returns an error — callers should skip it, never treat it as
+// 0.0.0.
 func Parse(s string) (V, error) {
 	raw := strings.TrimSpace(s)
 	if raw == "" {
@@ -33,10 +36,12 @@ func Parse(s string) (V, error) {
 		return V{}, fmt.Errorf("version is too long (%d characters, %d max)", len(raw), maxLen)
 	}
 	body := strings.TrimPrefix(raw, "v")
-	// 构建元数据（'+' 之后的部分）按 semver 不参与比较，但**必须校验字符**：
-	// Raw 原样进 ~/.toy/pkg 的目录名（规格 §6）和 Number() 拼出的下载 URL（§2.4），
-	// 而 "v1.2.3+a/b" 是一个 git 真的允许推上去的 tag —— 不校验就等于让上游
-	// 往我们的路径和 URL 里塞斜杠。校验完再丢掉。
+	// Build metadata (everything after '+') takes no part in comparison, but its
+	// CHARACTERS MUST STILL BE VALIDATED: Raw goes verbatim into the directory
+	// name under ~/.toy/pkg (spec §6) and into the download URL that Number()
+	// builds (§2.4), and "v1.2.3+a/b" is a tag git will genuinely let you push.
+	// Not validating it means letting upstream inject slashes into our paths and
+	// URLs. Validate, then discard.
 	if i := strings.IndexByte(body, '+'); i >= 0 {
 		if err := checkIdents(body[i+1:]); err != nil {
 			return V{}, fmt.Errorf("build metadata in %q is invalid: %w", raw, err)
@@ -45,8 +50,9 @@ func Parse(s string) (V, error) {
 	}
 	var pre string
 	if i := strings.IndexByte(body, '-'); i >= 0 {
-		// 有连字符就必须有预发布标签，所以校验放在这个分支里：
-		// 写成 "1.0.0-" 时 pre 是空的，绝不能因为「空标签 = 正式版」而被放行。
+		// A hyphen implies a pre-release tag, so validate inside this branch:
+		// "1.0.0-" leaves pre empty, and it must never slip through on the
+		// theory that "empty tag == stable release".
 		pre, body = body[i+1:], body[:i]
 		if err := checkIdents(pre); err != nil {
 			return V{}, fmt.Errorf("pre-release tag in %q is invalid: %w", raw, err)
@@ -68,7 +74,7 @@ func Parse(s string) (V, error) {
 	return v, nil
 }
 
-// parseNum 只接受纯数字，所以 "-2"、"x"、"" 这些都会被挡下来。
+// parseNum accepts digits only, so "-2", "x" and "" are all rejected.
 func parseNum(s string) (int, error) {
 	if s == "" {
 		return 0, errors.New("one of the three number parts is empty")
@@ -85,8 +91,9 @@ func parseNum(s string) (int, error) {
 	return n, nil
 }
 
-// checkIdents 校验点分标识符：每段非空且只含字母、数字和连字符。
-// 预发布标签和构建元数据在 semver 里是同一套文法，所以共用这一个校验。
+// checkIdents validates dot-separated identifiers: every part non-empty, and
+// letters, digits and hyphens only. Pre-release tags and build metadata share
+// one grammar in semver, so they share this one check.
 func checkIdents(s string) error {
 	for _, id := range strings.Split(s, ".") {
 		if id == "" {
@@ -102,10 +109,12 @@ func checkIdents(s string) error {
 	return nil
 }
 
-// Compare 返回 -1 / 0 / 1。预发布版本排在同号正式版之前（1.0.0-rc < 1.0.0）。
+// Compare returns -1 / 0 / 1. A pre-release sorts before the stable release of
+// the same number (1.0.0-rc < 1.0.0).
 func Compare(a, b V) int {
-	// 用 cmp.Compare 而不是相减：V 的字段是导出的，手工构造出负数时
-	// 相减会溢出并把大小关系判反。
+	// cmp.Compare rather than subtraction: V's fields are exported, so a
+	// hand-built negative value would overflow the subtraction and invert the
+	// ordering.
 	if c := cmp.Compare(a.Major, b.Major); c != 0 {
 		return c
 	}
@@ -119,15 +128,16 @@ func Compare(a, b V) int {
 	case a.Pre == "" && b.Pre == "":
 		return 0
 	case a.Pre == "":
-		return 1 // 正式版高于同号预发布版
+		return 1 // a stable release beats the pre-release of the same number
 	case b.Pre == "":
 		return -1
 	}
 	return comparePre(a.Pre, b.Pre)
 }
 
-// comparePre 逐段比预发布标签：纯数字段按数值比（rc.2 < rc.10），
-// 数字段低于含字母的段，段数多的更大（rc.1 < rc.1.1）。
+// comparePre compares pre-release tags part by part: all-digit parts compare
+// numerically (rc.2 < rc.10), numeric parts rank below parts containing
+// letters, and more parts wins (rc.1 < rc.1.1).
 func comparePre(a, b string) int {
 	as, bs := strings.Split(a, "."), strings.Split(b, ".")
 	for i := 0; i < len(as) && i < len(bs); i++ {
@@ -151,7 +161,8 @@ func compareIdent(a, b string) int {
 	return strings.Compare(a, b)
 }
 
-// compareNumeric 按数值比两串数字，但不做 strconv —— 再长的数字也不会溢出。
+// compareNumeric compares two digit strings by value without strconv, so no
+// number is ever long enough to overflow.
 func compareNumeric(a, b string) int {
 	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
 	if len(a) != len(b) {
@@ -172,8 +183,9 @@ func allDigits(s string) bool {
 	return true
 }
 
-// Max 从一堆 tag 里挑出最高的正式版本。全部解析失败时返回 error。
-// 除非 allowPre，否则忽略预发布版本 —— 用户装东西默认不该拿到 rc。
+// Max picks the highest stable version out of a pile of tags, and errors when
+// none of them parse. Pre-releases are ignored unless allowPre — installing
+// something should not hand you an rc by default.
 func Max(tags []string, allowPre bool) (V, error) {
 	var (
 		best       V
@@ -183,7 +195,7 @@ func Max(tags []string, allowPre bool) (V, error) {
 	for _, t := range tags {
 		v, err := Parse(t)
 		if err != nil {
-			continue // 仓库里常有 "release-2024" 这种非 semver 的 tag，跳过而不是当成 0.0.0
+			continue // repos are full of non-semver tags like "release-2024"; skip them rather than treating them as 0.0.0
 		}
 		if v.Pre != "" && !allowPre {
 			skippedPre++
@@ -202,10 +214,12 @@ func Max(tags []string, allowPre bool) (V, error) {
 	return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3); this repository may not have tagged a release yet", len(tags))
 }
 
-// Number 返回不带 'v' 前缀的版本号，用于 toy.toml 里的 {version} 占位符。
+// Number returns the version without the 'v' prefix, for the {version}
+// placeholder in toy.toml.
 func (v V) Number() string {
-	// 优先照原始 tag 去掉 'v'：作者的 release 资产名就是照着 tag 起的，
-	// 重新拼一遍反而可能对不上（比如带构建元数据的 tag）。
+	// Prefer stripping 'v' off the original tag: the author's release asset
+	// names are derived from that tag, so rebuilding the string from parts can
+	// fail to match (a tag carrying build metadata, for instance).
 	if v.Raw != "" {
 		return strings.TrimPrefix(v.Raw, "v")
 	}

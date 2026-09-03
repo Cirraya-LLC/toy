@@ -1,26 +1,32 @@
-// Command toy-index 是索引维护者用的批量条目生成器：喂一个 owner/repo 列表，
-// 产出可以直接进索引 JSON 的条目，把"手写 50 条"变成"跑一条命令 + 人工过一眼"。
+// Command toy-index is the index maintainer's bulk entry generator: feed it a list of
+// owner/repo lines and it produces entries you can drop straight into the index JSON,
+// turning "hand-write 50 records" into "run one command, then read it over once".
 //
-// # 为什么是单独一个二进制，而不是 toy 的一个子命令
+// # Why a separate binary instead of a toy subcommand
 //
-// `toy` 客户端**永远不用托管方的 REST API**（规格 §2）：未认证 60 次/小时的限流
-// 会让用户第一天就撞墙，而且 GitHub / GitLab / Gitea 要写三套适配器。它只用
-// `git ls-remote` + raw URL 模板，一条命令对所有 git 托管方都成立。
+// The `toy` client NEVER touches a host's REST API (spec §2): unauthenticated 60/hour
+// rate limits would wall users off on day one, and GitHub / GitLab / Gitea would each
+// need their own adapter. It uses `git ls-remote` + raw URL templates instead -- one
+// command that behaves the same on every git host.
 //
-// 而索引生成是**我们自己跑的离线批处理**：跑它的人是索引维护者，带 token 调 API
-// 完全没问题，限流也只砸到自己头上。把它做成 `toy index gen` 会让上面那条规矩
-// 变成「toy 不用 API，除了那个子命令」—— 一句迟早被下一个人当成先例的话。
-// 分成两个二进制，规矩就还是清楚的：`cmd/toy` 里一个打 api.github.com 的调用都
-// 不该有，`grep api.github.com cmd/toy` 应该永远是空的。
+// Index generation is a different animal: it is an offline batch job WE run. Whoever
+// runs it is the index maintainer, hitting the API with a token is fine, and the rate
+// limit only lands on us. Making it `toy index gen` would soften that rule into "toy
+// does not use the API, except for that one subcommand" -- a sentence the next person
+// will treat as precedent. Split into two binaries, the rule still has a shape you can
+// check mechanically: nothing under cmd/toy should ever call api.github.com, and
+// `grep api.github.com cmd/toy` should always come back empty.
 //
-// # 产出的是内联条目（规格 §5.1），所以有两条硬约束
+// # What it emits are inline entries (spec §5.1), which imposes two hard constraints
 //
-//   - **绝不写 [sha256]**。内联条目跟着上游最新的 tag 走，而 [sha256] 钉的是
-//     某一个版本的字节 —— 留着它，上游一发新版所有人都会拿到「哈希对不上，
-//     拒绝安装」，读起来完全像投毒警告。首次安装仍有 TOFU 钉住。
-//   - **[bin] 左边那些命令名要人过一眼**（§14.9 第 2 条）：`reservedLinkNames`
-//     挡住了 `git`、PATH 遮蔽检查挡住了已存在的命令，但一个 PATH 上还不存在的
-//     名字是能被占的。所以报告最后会把它们单独列一遍。
+//   - NEVER write [sha256]. Inline entries follow the upstream's newest tag, while
+//     [sha256] pins one version's bytes -- leave it in and the author's next release
+//     hands everyone a checksum mismatch that reads exactly like a poisoning warning.
+//     First install is still pinned by trust on first use.
+//   - The command names on the left of [bin] need a human to read them (§14.9 rule 2):
+//     reservedLinkNames blocks `git` and the shadow check blocks commands that already
+//     exist, but a name that is not yet on PATH can be claimed. So the report lists
+//     them all at the end.
 package main
 
 import (
@@ -35,7 +41,7 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
-// errUsage 让子命令能要求打印用法而不必自己排版。
+// errUsage lets a subcommand ask for the usage text without formatting it itself.
 var errUsage = errors.New("usage")
 
 var usageLines = []string{
@@ -89,8 +95,9 @@ func printUsage() {
 	}
 }
 
-// readRepoList 读仓库列表。一行一个 owner/repo，# 是注释（整行或行内都算），
-// 空行忽略。重复的行只留第一条 —— 同一个仓库跑两遍只是白烧两次 API 配额。
+// readRepoList reads the repo list. One owner/repo per line, # starts a comment (whole
+// line or trailing), blank lines ignored. Duplicates keep only the first occurrence --
+// running the same repo twice just burns API quota for nothing.
 func readRepoList(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

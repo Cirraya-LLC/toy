@@ -15,7 +15,7 @@ import (
 
 func umaskSet(m int) int { return syscall.Umask(m) }
 
-// ---- 审计用的造包工具：比 archive_test.go 那套多几个自由度 ----
+// ---- archive builders for the audit: a few more degrees of freedom than archive_test.go's ----
 
 type advEntry struct {
 	name   string
@@ -23,7 +23,7 @@ type advEntry struct {
 	mode   int64
 	link   string
 	body   string
-	format tar.Format // 0 = 让 Go 自己挑
+	format tar.Format // 0 = let Go pick
 	pax    map[string]string
 }
 
@@ -45,16 +45,16 @@ func buildAdvTar(t *testing.T, name string, gz bool, entries []advEntry) string 
 			hdr.Size = 0
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
-			t.Fatalf("写 tar 头 %q 失败：%v", e.name, err)
+			t.Fatalf("writing tar header %q failed: %v", e.name, err)
 		}
 		if e.typ == tar.TypeReg && e.body != "" {
 			if _, err := tw.Write([]byte(e.body)); err != nil {
-				t.Fatalf("写内容失败：%v", err)
+				t.Fatalf("writing content failed: %v", err)
 			}
 		}
 	}
 	if err := tw.Close(); err != nil {
-		t.Fatalf("关 tar 失败：%v", err)
+		t.Fatalf("closing tar failed: %v", err)
 	}
 	out := raw.Bytes()
 	if gz {
@@ -66,12 +66,12 @@ func buildAdvTar(t *testing.T, name string, gz bool, entries []advEntry) string 
 	}
 	p := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(p, out, 0o644); err != nil {
-		t.Fatalf("落盘失败：%v", err)
+		t.Fatalf("writing the file failed: %v", err)
 	}
 	return p
 }
 
-// canary 在 destDir 的【外面】放一个哨兵文件，用来证明包没写/没删到界外。
+// canary drops a sentinel file OUTSIDE destDir, to prove no archive wrote or deleted out of bounds.
 func canary(t *testing.T) (outside string, dest string) {
 	t.Helper()
 	root := t.TempDir()
@@ -90,14 +90,14 @@ func canaryIntact(t *testing.T, outside string) {
 	t.Helper()
 	b, err := os.ReadFile(outside)
 	if err != nil {
-		t.Fatalf("界外哨兵被删了/动了：%v", err)
+		t.Fatalf("the out-of-bounds sentinel was deleted or touched: %v", err)
 	}
 	if string(b) != "original" {
-		t.Fatalf("界外哨兵被改写了：%q", b)
+		t.Fatalf("the out-of-bounds sentinel was overwritten: %q", b)
 	}
 }
 
-// ---------- A. PAX / GNU longname 扩展头里藏路径（手搓字节，绕开 Go 的 Writer） ----------
+// ---------- A. paths smuggled in PAX / GNU longname extended headers (raw bytes, around Go's Writer) ----------
 
 func TestAuditRawPAXPathSmugglesTraversal(t *testing.T) {
 	outside, dest := canary(t)
@@ -112,7 +112,7 @@ func TestAuditRawPAXPathSmugglesTraversal(t *testing.T) {
 	t.Logf("files=%v err=%v", files, err)
 	canaryIntact(t, outside)
 	if !errors.Is(err, ErrTraversal) {
-		t.Fatalf("PAX path=../SECRET 应该被拒，实际 err=%v files=%v", err, files)
+		t.Fatalf("PAX path=../SECRET should be refused, got err=%v files=%v", err, files)
 	}
 }
 
@@ -126,11 +126,11 @@ func TestAuditRawPAXLinkpathSmugglesTraversal(t *testing.T) {
 	canaryIntact(t, outside)
 	if err == nil {
 		if tgt, e := os.Readlink(filepath.Join(dest, "l")); e == nil && strings.Contains(tgt, "..") {
-			t.Fatalf("PAX linkpath 把一个指向界外的链接放进了包：%s -> %s", "l", tgt)
+			t.Fatalf("PAX linkpath put a link pointing out of bounds into the package: %s -> %s", "l", tgt)
 		}
 	}
 	if !errors.Is(err, ErrTraversal) {
-		t.Fatalf("PAX linkpath=../SECRET 应该被拒，实际 err=%v", err)
+		t.Fatalf("PAX linkpath=../SECRET should be refused, got err=%v", err)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestAuditRawGNULongNameSmugglesTraversal(t *testing.T) {
 	t.Logf("files=%v err=%v", files, err)
 	canaryIntact(t, outside)
 	if !errors.Is(err, ErrTraversal) {
-		t.Fatalf("GNU longname=../SECRET 应该被拒，实际 err=%v", err)
+		t.Fatalf("GNU longname=../SECRET should be refused, got err=%v", err)
 	}
 }
 
@@ -162,15 +162,15 @@ func TestAuditRawGNULongLinkSmugglesTraversal(t *testing.T) {
 	canaryIntact(t, outside)
 	if err == nil {
 		if tgt, e := os.Readlink(filepath.Join(dest, "l")); e == nil {
-			t.Fatalf("GNU longlink 放进了一个指向 %q 的链接", tgt)
+			t.Fatalf("GNU longlink installed a link pointing at %q", tgt)
 		}
 	}
 	if !errors.Is(err, ErrTraversal) {
-		t.Fatalf("GNU longlink=../SECRET 应该被拒，实际 err=%v", err)
+		t.Fatalf("GNU longlink=../SECRET should be refused, got err=%v", err)
 	}
 }
 
-// 名字里带 NUL：Go 的 tar.Writer 拒绝生成，只能手搓
+// A NUL in the name: Go's tar.Writer refuses to produce one, so it has to be hand-rolled
 func TestAuditRawNULInName(t *testing.T) {
 	for _, n := range []string{"a\x00/../../SECRET", "\x00", "ok\x00.txt"} {
 		t.Run(strings.ReplaceAll(n, "\x00", "NUL"), func(t *testing.T) {
@@ -187,14 +187,14 @@ func TestAuditRawNULInName(t *testing.T) {
 			ents, _ := os.ReadDir(root)
 			for _, e := range ents {
 				if e.Name() != "SECRET" && e.Name() != "dest" {
-					t.Fatalf("界外多出了 %q", e.Name())
+					t.Fatalf("%q appeared out of bounds", e.Name())
 				}
 			}
 		})
 	}
 }
 
-// 绝对路径的各种写法（手搓，Go 的 Writer 也会挑剔）
+// Every spelling of an absolute path (hand-rolled; Go's Writer is picky about these too)
 func TestAuditRawAbsoluteNames(t *testing.T) {
 	for _, n := range []string{"/SECRET", "//SECRET", "/./SECRET", "///../SECRET"} {
 		t.Run(n, func(t *testing.T) {
@@ -206,14 +206,14 @@ func TestAuditRawAbsoluteNames(t *testing.T) {
 			src := rawTar(t, "abs.tar", m.Bytes())
 			_, err := Extract(src, dest)
 			if !errors.Is(err, ErrTraversal) {
-				t.Fatalf("绝对路径 %q 应该被拒，实际 %v", n, err)
+				t.Fatalf("absolute path %q should be refused, got %v", n, err)
 			}
 			canaryIntact(t, outside)
 		})
 	}
 }
 
-// ---------- B. 成员名里带 NUL / 空白 / 纯点 ----------
+// ---------- B. member names with NUL / whitespace / nothing but dots ----------
 
 func TestAuditDotAndEmptyNames(t *testing.T) {
 	_, dest := canary(t)
@@ -232,12 +232,13 @@ func TestAuditDotAndEmptyNames(t *testing.T) {
 	}
 }
 
-// ---------- C. 同名成员出现两次 ----------
+// ---------- C. the same name appearing twice ----------
 
 func TestAuditDuplicateFileThenSymlinkThenHardlink(t *testing.T) {
 	outside, dest := canary(t)
-	// 经典绕过：第一次以普通文件登记进 e.regular，第二次把同一个名字换成符号
-	// 链接（e.regular 那条记录没被清），第三次拿硬链接去链它。
+	// The classic bypass: register the name as a regular file in e.regular, then reuse
+	// that same name as a symlink (the e.regular entry was never cleared), then hard-link
+	// to it.
 	src := buildAdvTar(t, "dup.tar", false, []advEntry{
 		{name: "a", typ: tar.TypeReg, mode: 0o644, body: "real"},
 		{name: "sub", typ: tar.TypeDir, mode: 0o755},
@@ -250,14 +251,14 @@ func TestAuditDuplicateFileThenSymlinkThenHardlink(t *testing.T) {
 	if err == nil {
 		fi, lerr := os.Lstat(filepath.Join(dest, "b"))
 		if lerr == nil {
-			t.Logf("b 的模式=%v（符号链接？%v）", fi.Mode(), fi.Mode()&os.ModeSymlink != 0)
+			t.Logf("b mode=%v (symlink? %v)", fi.Mode(), fi.Mode()&os.ModeSymlink != 0)
 		}
 	}
 }
 
 func TestAuditDuplicateSymlinkThenWriteThrough(t *testing.T) {
 	outside, dest := canary(t)
-	// 两步走：先建一个指向 dest 内部目录的链接，再通过它写。
+	// Two steps: create a link at a directory inside dest, then write through it.
 	src := buildAdvTar(t, "two.tar", false, []advEntry{
 		{name: "sub", typ: tar.TypeDir, mode: 0o755},
 		{name: "link", typ: tar.TypeSymlink, mode: 0o777, link: "sub"},
@@ -265,7 +266,7 @@ func TestAuditDuplicateSymlinkThenWriteThrough(t *testing.T) {
 	})
 	_, err := Extract(src, dest)
 	if !errors.Is(err, ErrTraversal) {
-		t.Fatalf("穿过符号链接往里写应该被拒，实际 err=%v", err)
+		t.Fatalf("writing through a symlink should be refused, got err=%v", err)
 	}
 	canaryIntact(t, outside)
 }
@@ -280,12 +281,12 @@ func TestAuditFileThenDirSameName(t *testing.T) {
 	files, err := Extract(src, dest)
 	t.Logf("files=%v err=%v", files, err)
 	if err == nil {
-		t.Fatalf("同名先文件后目录竟然成功了")
+		t.Fatalf("the same name as file then directory somehow succeeded")
 	}
 	mustBeEmpty(t, dest)
 }
 
-// ---------- D. zip：目录项和文件项同名 / 反斜杠 / 符号链接 ----------
+// ---------- D. zip: dir entry and file entry sharing a name / backslashes / symlinks ----------
 
 func TestAuditZipDirEntryAndFileEntrySameName(t *testing.T) {
 	_, dest := canary(t)
@@ -306,7 +307,7 @@ func TestAuditZipSymlinkThenWriteThrough(t *testing.T) {
 	})
 	_, err := Extract(src, dest)
 	if !errors.Is(err, ErrTraversal) {
-		t.Fatalf("zip 穿链写入应该被拒，实际 err=%v", err)
+		t.Fatalf("writing through a zip symlink should be refused, got err=%v", err)
 	}
 	canaryIntact(t, outside)
 }
@@ -317,7 +318,7 @@ func TestAuditZipBackslashEscape(t *testing.T) {
 		src := buildZip(t, "bs.zip", []zipEntry{{name: n, mode: 0o644, body: "pwned"}})
 		_, err := Extract(src, dest)
 		if !errors.Is(err, ErrTraversal) {
-			t.Fatalf("zip 名字 %q 应该被拒，实际 err=%v", n, err)
+			t.Fatalf("zip name %q should be refused, got err=%v", n, err)
 		}
 		canaryIntact(t, outside)
 	}
@@ -329,17 +330,17 @@ func TestAuditZipSymlinkAbsoluteAndOutside(t *testing.T) {
 		src := buildZip(t, "slt.zip", []zipEntry{{name: "l", mode: os.ModeSymlink | 0o777, body: target}})
 		_, err := Extract(src, dest)
 		if !errors.Is(err, ErrTraversal) {
-			t.Fatalf("zip 符号链接指向 %q 应该被拒，实际 err=%v", target, err)
+			t.Fatalf("a zip symlink pointing at %q should be refused, got err=%v", target, err)
 		}
 		canaryIntact(t, outside)
 	}
 }
 
-// ---------- E. 压缩炸弹：上限按【实际写入】还是按【自报大小】 ----------
+// ---------- E. compression bombs: is the limit on BYTES ACTUALLY WRITTEN or on the DECLARED size? ----------
 
 func TestAuditZipBombCountsRealBytesNotDeclared(t *testing.T) {
 	_, dest := canary(t)
-	// 100 MiB 的零，deflate 之后几十 KB。limit 给 1 MiB。
+	// 100 MiB of zeros, a few dozen KB after deflate. Budget: 1 MiB.
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	w, _ := zw.Create("bomb")
@@ -353,16 +354,17 @@ func TestAuditZipBombCountsRealBytesNotDeclared(t *testing.T) {
 
 	_, err := extractTo(p, dest, 1<<20)
 	if !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("zip 炸弹应该被 ErrTooLarge 拦下，实际 %v", err)
+		t.Fatalf("a zip bomb should be stopped by ErrTooLarge, got %v", err)
 	}
 	mustBeEmpty(t, dest)
-	// 落盘的字节不能远远超出上限
+	// The bytes on disk must not run far past the limit
 }
 
 func TestAuditTarLyingSizeHeader(t *testing.T) {
 	_, dest := canary(t)
-	// 手搓一个 tar 头：Size 声明 10，实际内容远不止（靠连续两个成员）。
-	// Go 的 tar reader 会按声明截断，所以这里主要验"声明小实际大"不会让上限失效。
+	// Hand-roll a tar header whose Size claims 10 while the real content is far more (via
+	// two consecutive members). Go's tar reader truncates at the declared size, so what
+	// this really checks is that "declares small, is actually large" cannot defeat the limit.
 	var raw bytes.Buffer
 	tw := tar.NewWriter(&raw)
 	big := strings.Repeat("A", 3<<20)
@@ -374,12 +376,12 @@ func TestAuditTarLyingSizeHeader(t *testing.T) {
 
 	_, err := extractTo(p, dest, 1<<20)
 	if !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("超上限应该 ErrTooLarge，实际 %v", err)
+		t.Fatalf("going over the limit should be ErrTooLarge, got %v", err)
 	}
 	mustBeEmpty(t, dest)
 }
 
-// ---------- F. 权限位 ----------
+// ---------- F. permission bits ----------
 
 func TestAuditSetuidSetgidStickyAreStripped(t *testing.T) {
 	_, dest := canary(t)
@@ -391,22 +393,22 @@ func TestAuditSetuidSetgidStickyAreStripped(t *testing.T) {
 		{name: "ww", typ: tar.TypeReg, mode: 0o666, body: "x"},
 	})
 	if _, err := Extract(src, dest); err != nil {
-		t.Fatalf("解压失败：%v", err)
+		t.Fatalf("extract failed: %v", err)
 	}
 	for _, n := range []string{"suid", "sgid", "sticky", "all", "ww"} {
 		fi, err := os.Lstat(filepath.Join(dest, n))
 		if err != nil {
-			t.Fatalf("%s 不见了：%v", n, err)
+			t.Fatalf("%s is gone: %v", n, err)
 		}
 		m := fi.Mode()
 		if m&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
-			t.Fatalf("%s 带出了特殊位：%v", n, m)
+			t.Fatalf("%s carried special bits out: %v", n, m)
 		}
 		if p := m.Perm(); p != 0o755 && p != 0o644 {
-			t.Fatalf("%s 权限 %o 不是两档之一", n, p)
+			t.Fatalf("%s has permissions %o, which is neither tier", n, p)
 		}
 		if p := m.Perm(); p&0o022 != 0 {
-			t.Fatalf("%s 是组/其他可写：%o", n, p)
+			t.Fatalf("%s is group/other writable: %o", n, p)
 		}
 	}
 }
@@ -417,40 +419,42 @@ func TestAuditZipSetuidStripped(t *testing.T) {
 		{name: "s", mode: os.ModeSetuid | 0o755, body: "x"},
 	})
 	if _, err := Extract(src, dest); err != nil {
-		t.Fatalf("解压失败：%v", err)
+		t.Fatalf("extract failed: %v", err)
 	}
 	fi, _ := os.Lstat(filepath.Join(dest, "s"))
 	if fi.Mode()&os.ModeSetuid != 0 {
-		t.Fatalf("zip setuid 带出来了：%v", fi.Mode())
+		t.Fatalf("zip setuid survived: %v", fi.Mode())
 	}
 }
 
-// umask 之后 chmod 是不是反而放宽了权限
+// Does the chmod after umask end up WIDENING permissions?
 func TestAuditChmodWidensPastUmask(t *testing.T) {
 	old := umaskSet(0o077)
 	defer umaskSet(old)
 	_, dest := canary(t)
-	// 顶层故意留【两个】条目：只有一个顶层目录的话 stripTopDir 会把 d 剥掉，
-	// 那时候这个测试就不再看得到目录的权限位了（它要验的正是目录那一档）。
+	// Two top-level entries on purpose: with only one top-level directory, stripTopDir
+	// would strip d away and this test could no longer see a directory's permission bits,
+	// which is exactly the tier it exists to check.
 	src := buildAdvTar(t, "um.tar", false, []advEntry{
 		{name: "keep", typ: tar.TypeReg, mode: 0o644, body: "x"},
 		{name: "d", typ: tar.TypeDir, mode: 0o755},
 		{name: "d/f", typ: tar.TypeReg, mode: 0o755, body: "x"},
 	})
 	if _, err := Extract(src, dest); err != nil {
-		t.Fatalf("解压失败：%v", err)
+		t.Fatalf("extract failed: %v", err)
 	}
 	fd, _ := os.Lstat(filepath.Join(dest, "d"))
 	ff, _ := os.Lstat(filepath.Join(dest, "d", "f"))
-	t.Logf("umask 077 下：目录 %o 文件 %o", fd.Mode().Perm(), ff.Mode().Perm())
+	t.Logf("under umask 077: dir %o file %o", fd.Mode().Perm(), ff.Mode().Perm())
 }
 
-// ---------- G. 清理逻辑会不会删到界外 ----------
+// ---------- G. can the cleanup path delete out of bounds? ----------
 
 func TestAuditCleanupCannotDeleteOutsideDest(t *testing.T) {
 	outside, dest := canary(t)
-	// dest 里预先放一个指向界外的符号链接（模拟"目标目录里本来就有别人的东西"），
-	// 再让包在这条链上做文章，最后故意超上限触发 cleanup。
+	// Plant a symlink pointing out of bounds inside dest (simulating "destDir already held
+	// someone else's files"), let the archive work that link, then blow the limit on
+	// purpose to trigger cleanup.
 	if err := os.Symlink(filepath.Dir(dest), filepath.Join(dest, "esc")); err != nil {
 		t.Fatal(err)
 	}
@@ -471,51 +475,51 @@ func TestAuditCleanupDoesNotFollowPackageSymlinkOut(t *testing.T) {
 	})
 	_, err := extractTo(src, dest, 64)
 	if !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("想要 ErrTooLarge，实际 %v", err)
+		t.Fatalf("want ErrTooLarge, got %v", err)
 	}
 	mustBeEmpty(t, dest)
 	canaryIntact(t, outside)
 }
 
-// ---------- H. 符号链接逃逸的各种变体 ----------
+// ---------- H. symlink escape variants ----------
 
 func TestAuditSymlinkEscapeVariants(t *testing.T) {
 	cases := []struct {
 		name    string
 		entries []advEntry
 	}{
-		{"直接指绝对路径", []advEntry{
+		{"straight at an absolute path", []advEntry{
 			{name: "l", typ: tar.TypeSymlink, mode: 0o777, link: "/etc/passwd"},
 		}},
-		{"直接指上一层", []advEntry{
+		{"straight up one level", []advEntry{
 			{name: "l", typ: tar.TypeSymlink, mode: 0o777, link: "../SECRET"},
 		}},
-		{"点自己再回头", []advEntry{
+		{"point at self, then double back", []advEntry{
 			{name: "x", typ: tar.TypeSymlink, mode: 0o777, link: "."},
 			{name: "x/up", typ: tar.TypeSymlink, mode: 0o777, link: ".."},
 			{name: "x/up/SECRET", typ: tar.TypeReg, mode: 0o644, body: "pwned"},
 		}},
-		{"深目录里的链接回头", []advEntry{
+		{"a link deep in the tree climbing back", []advEntry{
 			{name: "a", typ: tar.TypeDir, mode: 0o755},
 			{name: "a/b", typ: tar.TypeDir, mode: 0o755},
 			{name: "a/b/l", typ: tar.TypeSymlink, mode: 0o777, link: "../.."},
 			{name: "a/b/l/../SECRET", typ: tar.TypeReg, mode: 0o644, body: "pwned"},
 		}},
-		{"链接目标里夹一个回头的 ..", []advEntry{
+		{"a backtracking .. in the middle of the target", []advEntry{
 			{name: "d", typ: tar.TypeDir, mode: 0o755},
 			{name: "l", typ: tar.TypeSymlink, mode: 0o777, link: "d/../.."},
 		}},
-		{"链接指向另一个链接再出界", []advEntry{
+		{"a link pointing at another link, then out", []advEntry{
 			{name: "a", typ: tar.TypeSymlink, mode: 0o777, link: "."},
 			{name: "b", typ: tar.TypeSymlink, mode: 0o777, link: "a/.."},
 		}},
-		{"多级回头但落点在界内", []advEntry{
+		{"several levels back, but landing inside", []advEntry{
 			{name: "p", typ: tar.TypeDir, mode: 0o755},
 			{name: "p/q", typ: tar.TypeDir, mode: 0o755},
 			{name: "p/q/l", typ: tar.TypeSymlink, mode: 0o777, link: "../.."},
 			{name: "p/q/l/SECRET", typ: tar.TypeReg, mode: 0o644, body: "pwned-inside"},
 		}},
-		{"反斜杠当分隔符的链接目标", []advEntry{
+		{"backslash as separator in the link target", []advEntry{
 			{name: "l", typ: tar.TypeSymlink, mode: 0o777, link: `..\..\SECRET`},
 		}},
 	}
@@ -526,40 +530,40 @@ func TestAuditSymlinkEscapeVariants(t *testing.T) {
 			files, err := Extract(src, dest)
 			t.Logf("files=%v err=%v", files, err)
 			canaryIntact(t, outside)
-			// 无论成功失败，界外都不能多出东西
+			// Success or failure, nothing new may appear out of bounds
 			root := filepath.Dir(dest)
 			ents, _ := os.ReadDir(root)
 			for _, e := range ents {
 				if e.Name() != "SECRET" && e.Name() != "dest" {
-					t.Fatalf("界外多出了 %s", e.Name())
+					t.Fatalf("%s appeared out of bounds", e.Name())
 				}
 			}
 		})
 	}
 }
 
-// ---------- I. 硬链接 ----------
+// ---------- I. hard links ----------
 
 func TestAuditHardlinkVariants(t *testing.T) {
 	cases := []struct {
 		name    string
 		entries []advEntry
 	}{
-		{"指界外绝对路径", []advEntry{
+		{"absolute path out of bounds", []advEntry{
 			{name: "h", typ: tar.TypeLink, mode: 0o644, link: "/etc/passwd"},
 		}},
-		{"指界外相对路径", []advEntry{
+		{"relative path out of bounds", []advEntry{
 			{name: "h", typ: tar.TypeLink, mode: 0o644, link: "../SECRET"},
 		}},
-		{"指一个还没出现的成员", []advEntry{
+		{"a member that has not appeared yet", []advEntry{
 			{name: "h", typ: tar.TypeLink, mode: 0o644, link: "later"},
 			{name: "later", typ: tar.TypeReg, mode: 0o644, body: "x"},
 		}},
-		{"穿过包内符号链接指出去", []advEntry{
+		{"out through a symlink inside the package", []advEntry{
 			{name: "d", typ: tar.TypeSymlink, mode: 0o777, link: "."},
 			{name: "h", typ: tar.TypeLink, mode: 0o644, link: "d/../SECRET"},
 		}},
-		{"指一个包内符号链接", []advEntry{
+		{"at a symlink inside the package", []advEntry{
 			{name: "f", typ: tar.TypeReg, mode: 0o644, body: "x"},
 			{name: "s", typ: tar.TypeSymlink, mode: 0o777, link: "f"},
 			{name: "h", typ: tar.TypeLink, mode: 0o644, link: "s"},
@@ -576,7 +580,7 @@ func TestAuditHardlinkVariants(t *testing.T) {
 	}
 }
 
-// dest 里预先躺着一个指向界外的符号链接，包用硬链接去链它
+// dest already holds a symlink pointing out of bounds, and the archive hard-links to it
 func TestAuditHardlinkThroughPreexistingSymlink(t *testing.T) {
 	outside, dest := canary(t)
 	if err := os.Symlink(outside, filepath.Join(dest, "pre")); err != nil {
@@ -587,13 +591,13 @@ func TestAuditHardlinkThroughPreexistingSymlink(t *testing.T) {
 	})
 	_, err := Extract(src, dest)
 	if err == nil {
-		t.Fatalf("硬链接到界外的既有链接应该被拒")
+		t.Fatalf("a hard link to a pre-existing out-of-bounds link should be refused")
 	}
 	t.Logf("err=%v", err)
 	canaryIntact(t, outside)
 }
 
-// ---------- J. 超长路径 ----------
+// ---------- J. very long paths ----------
 
 func TestAuditVeryLongPath(t *testing.T) {
 	_, dest := canary(t)
@@ -602,8 +606,8 @@ func TestAuditVeryLongPath(t *testing.T) {
 		{name: deep, typ: tar.TypeReg, mode: 0o644, body: "x", format: tar.FormatPAX},
 	})
 	files, err := Extract(src, dest)
-	t.Logf("深度 900 -> files=%d err=%v", len(files), err)
-	// 只要不 panic、不写到界外就算过
+	t.Logf("depth 900 -> files=%d err=%v", len(files), err)
+	// Passing means: no panic, nothing written out of bounds
 }
 
 func TestAuditLongSingleComponent(t *testing.T) {
@@ -612,10 +616,10 @@ func TestAuditLongSingleComponent(t *testing.T) {
 		{name: strings.Repeat("x", 5000), typ: tar.TypeReg, mode: 0o644, body: "x", format: tar.FormatPAX},
 	})
 	files, err := Extract(src, dest)
-	t.Logf("单段 5000 字符 -> files=%v err=%v", files, err)
+	t.Logf("single 5000-char element -> files=%v err=%v", files, err)
 }
 
-// ---------- K. 非常规成员 ----------
+// ---------- K. irregular members ----------
 
 func TestAuditIrregularAndGlobalHeaders(t *testing.T) {
 	_, dest := canary(t)
@@ -627,13 +631,13 @@ func TestAuditIrregularAndGlobalHeaders(t *testing.T) {
 	files, err := Extract(src, dest)
 	t.Logf("files=%v err=%v", files, err)
 	if err != nil {
-		t.Fatalf("git archive 生成的 tar 都带 pax_global_header，不该整包失败：%v", err)
+		t.Fatalf("every tar git archive produces carries a pax_global_header; the archive must not fail wholesale: %v", err)
 	}
 }
 
 func TestAuditEmptyNameGlobalHeader(t *testing.T) {
 	_, dest := canary(t)
-	// 有些打包器写的全局头名字是空的
+	// Some packers write a global header with an empty name
 	var raw bytes.Buffer
 	tw := tar.NewWriter(&raw)
 	tw.WriteHeader(&tar.Header{Name: "", Typeflag: tar.TypeXGlobalHeader,
@@ -644,7 +648,7 @@ func TestAuditEmptyNameGlobalHeader(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "g.tar")
 	os.WriteFile(p, raw.Bytes(), 0o644)
 	files, err := Extract(p, dest)
-	t.Logf("空名全局头 -> files=%v err=%v", files, err)
+	t.Logf("empty-name global header -> files=%v err=%v", files, err)
 }
 
 func TestAuditGNUSparseFileIsHandled(t *testing.T) {
@@ -656,7 +660,7 @@ func TestAuditGNUSparseFileIsHandled(t *testing.T) {
 	t.Logf("GNUSparse -> files=%v err=%v", files, err)
 }
 
-// ---------- L. zip 的成员顺序把戏 ----------
+// ---------- L. zip member-ordering tricks ----------
 
 func TestAuditZipSymlinkThenFileSameName(t *testing.T) {
 	outside, dest := canary(t)
@@ -671,12 +675,12 @@ func TestAuditZipSymlinkThenFileSameName(t *testing.T) {
 	if err == nil {
 		fi, _ := os.Lstat(filepath.Join(dest, "a"))
 		if fi.Mode()&os.ModeSymlink != 0 {
-			t.Fatalf("同名的普通文件没能把符号链接换掉，a 还是个链接")
+			t.Fatalf("the regular file with the same name did not replace the symlink; a is still a link")
 		}
 	}
 }
 
-// 空目标 / 只有斜杠的链接目标
+// Empty targets, or targets that are nothing but slashes
 func TestAuditDegenerateLinkTargets(t *testing.T) {
 	for _, tgt := range []string{"", " ", "/", "//", ".", "./"} {
 		outside, dest := canary(t)

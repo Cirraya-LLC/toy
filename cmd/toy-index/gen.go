@@ -1,6 +1,7 @@
 package main
 
-// gen：读一个 owner/repo 列表，逐个产出内联条目，合并进索引 JSON。
+// gen: read a list of owner/repo lines, produce an inline entry for each, merge them
+// into the index JSON.
 
 import (
 	"context"
@@ -27,28 +28,28 @@ type genConfig struct {
 	update bool
 	probe  bool
 	prov   provider
-	host   host.Host // 只有 --probe 会用到：拼 release 下载地址
+	host   host.Host // only --probe uses this: building the release download URL
 }
 
-// genResult 是一个仓库的结局。三种：出了条目 / 有意跳过 / 失败。
+// genResult is how one repo ended up. Three ways: an entry, a deliberate skip, a failure.
 type genResult struct {
 	id      string
 	entry   index.Entry
 	pack    pack
-	skip    string // 非空 = 有意跳过（已在索引里、会降档……）
+	skip    string // non-empty = deliberately skipped (already in the index, would downgrade, ...)
 	err     error
 	written bool
 }
 
 func runGen(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("gen", flag.ContinueOnError)
-	fs.SetOutput(io.Discard) // 用法统一由 printUsage 打，不要 flag 包自己再排一版
+	fs.SetOutput(io.Discard) // printUsage owns the usage text; do not let the flag package lay out its own
 	repos := fs.String("repos", "", "")
 	out := fs.String("out", filepath.Join("index", "toy-index.json"), "")
 	update := fs.Bool("update", false, "")
 	probe := fs.Bool("probe", false, "")
 	token := fs.String("token", "", "")
-	api := fs.String("api", "", "") // 托管方 API 根，只给测试和自建实例用
+	api := fs.String("api", "", "") // host API root, for tests and self-hosted instances only
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || strings.TrimSpace(*repos) == "" {
 		return errUsage
 	}
@@ -99,21 +100,24 @@ func gen(ctx context.Context, cfg genConfig) error {
 	}
 	report(cfg, results, changed)
 
-	// 一个仓库失败不影响其它，但整批一个都没成的时候不该退 0 —— CI 上那会静默过去。
+	// One repo failing does not affect the others, but a whole batch producing nothing
+	// must not exit 0 -- in CI that would pass silently.
 	if changed == 0 && anyFailed(results) {
 		return errors.New("no entries produced (every line above says why)")
 	}
 	return nil
 }
 
-// genOne 处理一个仓库。任何失败都只落在这一条上（返回值里），不打断整批。
+// genOne handles one repo. Any failure lands on this one line (in the return value) and
+// never interrupts the batch.
 func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) genResult {
 	res := genResult{id: line}
 
 	r, err := ref.Parse(line)
-	// 形态校验借 ref 而不是自己再抄一份白名单：这两段最后会拼成
-	// ~/.toy/pkg/<host>/<owner>/<name>/，ref 已经在那儿拦了 ".." 和超长段，
-	// 而 index.validID 用的也是它 —— 抄一份的下场就是慢慢分叉。
+	// Shape validation borrows ref instead of keeping another allowlist here: these two
+	// segments end up joined into ~/.toy/pkg/<host>/<owner>/<name>/, ref already stops
+	// ".." and over-long segments there, and index.validID uses the same thing -- a second
+	// copy just drifts apart over time.
 	switch {
 	case err != nil:
 		res.err = fmt.Errorf("cannot parse: %w", err)
@@ -127,18 +131,20 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 	}
 	res.id = r.ID()
 
-	// 已经在索引里的先判掉，省一次 API 调用。
+	// Decide on entries already in the index first, saving an API call.
 	if old, ok := idx.Find(res.id); ok {
 		switch {
 		case old.Key != "" || old.Sig != "":
-			// 重新生成必然换掉 toyfile 原文，而签名签的就是那份原文 —— 覆盖等于
-			// 把一个「✓」悄悄弄没。规格 §5 说签名消失要停下来让人决定，那这里就
-			// 别替人决定。--update 也不放行。
+			// Regenerating necessarily replaces the toyfile source, and the signature signs
+			// exactly that source -- overwriting quietly makes a "✓" disappear. Spec §5
+			// says a vanished signature must stop and let a person decide, so do not decide
+			// for them here. --update does not unlock this either.
 			res.skip = "the entry in the index is signed; leaving it alone (regenerating would invalidate the signature)"
 			return res
 		case old.Toyfile == "":
-			// 指针条目 = 上游自己有 toy.toml，客户端装出来是 host 档。换成内联
-			// 就是 TrustHost → TrustIndexed 的降档（§5.1 第 6 条），不是刷新。
+			// A pointer entry means upstream ships its own toy.toml, so the client installs
+			// it at the host trust level. Switching to inline is a TrustHost -> TrustIndexed
+			// downgrade (§5.1 rule 6), not a refresh.
 			res.skip = "the entry in the index is a pointer (upstream ships its own toy.toml); inlining it would downgrade trust, so leaving it alone"
 			return res
 		case !cfg.update:
@@ -152,11 +158,12 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 		res.err = err
 		return res
 	}
-	// 客户端靠 `git ls-remote --tags` + semver 挑版本（规格 §2），所以 release 的
-	// tag 必须是 v?X.Y.Z。jqlang/jq 那种 `jq-1.8.2` 的 tag 一个都解析不出来 ——
-	// 条目照样生成得出来，而 `toy install` 第一步就死在「这些 tag 里没有 semver
-	// 版本」，报错里连"是因为 tag 的形状"都看不出来。
-	// 这和 unstableBinPath 是同一类判断：装不下去的条目不该进索引。
+	// The client picks versions with `git ls-remote --tags` + semver (spec §2), so the
+	// release tag has to look like v?X.Y.Z. A tag like jqlang/jq's `jq-1.8.2` parses to
+	// nothing -- the entry generates fine, and then `toy install` dies at step one with
+	// "no semver version among these tags", where nothing hints that the tag SHAPE is the
+	// problem. Same class of judgement as unstableBinPath: an entry nobody can install
+	// does not belong in the index.
 	if _, verr := semver.Parse(info.Tag); verr != nil {
 		res.err = fmt.Errorf("the latest release is tagged %q, which is not semver (it has to look like v1.2.3). "+
 			"The client picks versions with `git ls-remote --tags` + semver, so it would not recognise a "+
@@ -173,25 +180,30 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 	if cfg.probe {
 		switch hit, cands, err := probeBin(ctx, cfg.host, p); {
 		case err != nil:
-			// 探不到不算失败：条目照出，只是 [bin] 仍然是猜的，报告里会说。
+			// A failed probe is not a failure: the entry still comes out, [bin] is just
+			// still a guess, and the report says so.
 			p.notes = append(p.notes, "probe failed: "+err.Error())
 		case hit != "":
 			if why := unstableBinPath(hit, p.res.Version); why != "" {
-				// 探到的路径靠不住时【整条判失败】，不产出条目：一条今天能装、
-				// 上游一发新版就装不上的记录，和留着 [sha256] 是同一类错误。
-				// 报错里把探到的路径原样给出来，人要手写的时候答案就在眼前。
-				// 唯一那层顶层目录解压时已经被剥掉了，所以走到这里的是剥不掉的那种：
-				// 顶层不止一个条目，或者路径本身就带着版本号 / 平台名。
+				// When the probed path cannot be trusted, FAIL THE WHOLE ENTRY and produce
+				// nothing: a record that installs today and breaks the moment upstream cuts a
+				// release is the same class of mistake as leaving [sha256] in. The error
+				// quotes the probed path verbatim, so whoever writes the entry by hand has the
+				// answer right in front of them. A single wrapping top-level directory is
+				// already stripped on extract, so what reaches here is the kind that cannot be
+				// stripped: more than one top-level entry, or a path that itself spells out a
+				// version or a platform.
 				res.err = fmt.Errorf("the probed in-package path is %q: %s. "+
 					"Write this entry by hand (or get the author to add their own toy.toml)", hit, why)
 				return res
 			}
 			p.binPath, p.binProbed = hit, true
-			// 探到的那个文件的**基名**才是作者真正发出来的命令名。默认值来自
-			// 资产名前缀（ripgrep-15.2.0-….tar.gz → ripgrep），而包里那个文件
-			// 叫 rg —— 照默认值写就会往 PATH 上放一个全世界的文档里都没有的
-			// 名字（`ripgrep --version` 不存在），而 [bin] 右边又是对的，
-			// 所以装完能跑、只是没人叫得出它。探到了就以探到的为准。
+			// The BASENAME of the probed file is the command name the author actually ships.
+			// The default comes from the asset-name prefix (ripgrep-15.2.0-....tar.gz ->
+			// ripgrep) while the file inside the package is called rg -- taking the default
+			// would put a name on PATH that appears in no documentation anywhere (nobody has
+			// ever written `ripgrep --version`), while the right of [bin] is correct, so it
+			// installs and runs and simply nobody can name it. Once probed, the probe wins.
 			if base := path.Base(hit); base != p.binName && cleanName(base) {
 				p.notes = append(p.notes, fmt.Sprintf(
 					"command name taken from the probed file: %q (the asset-name prefix was %q)", base, p.binName))
@@ -233,8 +245,8 @@ func loadIndex(path string) (*index.Index, error) {
 		return nil, err
 	}
 	if skipped > 0 {
-		// Load 会把坏记录丢掉，而我们马上要把整份写回去 —— 不说一声就等于
-		// 悄悄删了别人的条目。
+		// Load drops bad records, and we are about to write the whole file back out --
+		// saying nothing would mean quietly deleting somebody else's entries.
 		ui.Warn("%s holds %d invalid records; they were dropped, and writing the file back removes them for good", path, skipped)
 	}
 	return idx, nil
@@ -265,11 +277,12 @@ func anyFailed(rs []genResult) bool {
 	return false
 }
 
-// report 打一份给人过目的报告。
+// report prints a summary for a human to read over.
 //
-// 表格先用 tabwriter 排进内存缓冲、再逐行交给 ui —— desc、资产名、错误里的
-// 服务器文本全是远端内容，直接 print 的话一串 "\r\x1b[32m✓" 能把上面的行盖掉
-// 重写（§14.4）。ui 会把控制字符转义成看得见的 \xNN。
+// The table is laid out with tabwriter into an in-memory buffer and then handed to ui a
+// line at a time -- descriptions, asset names and server text inside errors are all
+// remote content, and printing them directly lets a "\r\x1b[32m✓" overwrite the lines
+// above it (§14.4). ui escapes control characters into visible \xNN.
 func report(cfg genConfig, rs []genResult, changed int) {
 	var buf strings.Builder
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
@@ -300,13 +313,14 @@ func report(cfg genConfig, rs []genResult, changed int) {
 		}
 	}
 
-	// §14.9 第 2 条：[bin] 左边那些名字是这个功能里唯一还需要人过一眼的东西。
-	// reservedLinkNames 挡住了 git、PATH 遮蔽检查挡住了已存在的命令，但一个
-	// PATH 上还不存在的名字是能被占的。
+	// §14.9 rule 2: the names on the left of [bin] are the one thing in this feature that
+	// still needs a human to look. reservedLinkNames blocks git and the shadow check
+	// blocks commands that already exist, but a name not yet on PATH can be claimed.
 	//
-	// 这里【不】重抄一份保留名单：那份名单在 internal/store 里，抄第二份就多一处
-	// 会静默失效的地方（§14.1 的教训就是这个形状）。客户端安装时一定会拒，
-	// 这里只负责让人看见。
+	// This does NOT keep its own copy of the reserved list: that list lives in
+	// internal/store, and a second copy is one more place that can fail silently (the
+	// §14.1 lesson has exactly this shape). The client refuses at install time regardless;
+	// all this does is put the names in front of a person.
 	names := reportBinNames(rs)
 	if len(names) > 0 {
 		ui.Info("")
@@ -335,10 +349,12 @@ func report(cfg genConfig, rs []genResult, changed int) {
 	}
 }
 
-// reportBinNames 是报告最后那一列：这批条目会往 PATH 上放哪些命令名。
+// reportBinNames is that last column of the report: which command names this batch of
+// entries will put on PATH.
 //
-// 印的必须是 binName（真正会落到 PATH 上的那个），不是 name（包目录名）——
-// ripgrep 那种仓库上两者不一样。这一列是 §14.9 第 2 条留给人的唯一关口。
+// It must print binName (the one that actually lands on PATH), not name (the package
+// directory name) -- on a repo like ripgrep the two differ. This column is the only
+// checkpoint §14.9 rule 2 leaves for a person.
 func reportBinNames(rs []genResult) []string {
 	var names []string
 	for _, r := range rs {

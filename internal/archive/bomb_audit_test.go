@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// skipBomb 造一个 .tar.gz：里面只有一个"我们不认识的类型"的成员，
-// 头里声明自己有 size 字节。untar 的 default 分支 continue 之后，
-// Go 的 tar.Reader 会把这 size 个字节从 gzip 流里【解压出来丢掉】。
-// 一个字节都不落盘 —— 所以 MaxTotalBytes 从头到尾看不到它。
+// skipBomb builds a .tar.gz holding a single member of a type we do not recognise,
+// whose header declares size bytes of content. After untar's default branch continues
+// past it, Go's tar.Reader DECOMPRESSES AND DISCARDS those size bytes from the gzip
+// stream. Not one byte lands on disk, so MaxTotalBytes never sees any of it.
 func skipBomb(t *testing.T, size int64, typ byte) string {
 	t.Helper()
 	var raw bytes.Buffer
@@ -40,55 +40,55 @@ func skipBomb(t *testing.T, size int64, typ byte) string {
 	if err := os.WriteFile(p, gz.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("类型 %q 声明 %d 字节，压缩包只有 %d 字节（压缩比 %.0f:1）",
+	t.Logf("type %q declares %d bytes, the archive is only %d bytes (ratio %.0f:1)",
 		typ, size, gz.Len(), float64(size)/float64(gz.Len()))
 	return p
 }
 
-// 512 MiB 的"跳过"数据，看解压要花多久、盘上留下什么。
+// 512 MiB of "skipped" data: how long does extraction take, and what is left on disk?
 func TestAuditSkippedMemberBypassesByteLimit(t *testing.T) {
 	_, dest := canary(t)
 	const size = 512 << 20
-	src := skipBomb(t, size, 'Z') // 'Z' 不是任何已知类型 -> untar 走 default: continue
+	src := skipBomb(t, size, 'Z') // 'Z' matches no known type -> untar takes default: continue
 
 	fi, _ := os.Stat(src)
 	start := time.Now()
-	files, err := extractTo(src, dest, 1024) // 上限只给 1 KiB
+	files, err := extractTo(src, dest, 1024) // budget of just 1 KiB
 	el := time.Since(start)
-	t.Logf("下载体积 %d 字节 -> 解压耗时 %v，files=%v err=%v", fi.Size(), el, files, err)
+	t.Logf("download size %d bytes -> extraction took %v, files=%v err=%v", fi.Size(), el, files, err)
 
 	if err != nil {
-		t.Logf("被拒了，很好")
+		t.Logf("refused, good")
 		return
 	}
-	t.Errorf("上限只有 1 KiB，却把 %d MiB 从 gzip 流里解了出来，耗时 %v，"+
-		"而且返回成功 —— MaxTotalBytes 只数落盘的字节，数不到这里", size>>20, el)
+	t.Errorf("the limit was 1 KiB, yet %d MiB got decompressed out of the gzip stream in %v "+
+		"and the call returned success - MaxTotalBytes only counts bytes that land on disk", size>>20, el)
 }
 
-// 对照组：同样的字节数，但成员是普通文件 —— 这条路是有上限兜着的。
+// Control: the same byte count, but as a regular file - that path does have the limit behind it.
 func TestAuditRegularMemberIsBounded(t *testing.T) {
 	_, dest := canary(t)
 	src := skipBomb(t, 512<<20, '0')
 	start := time.Now()
 	_, err := extractTo(src, dest, 1024)
-	t.Logf("普通文件：耗时 %v err=%v", time.Since(start), err)
+	t.Logf("regular file: took %v err=%v", time.Since(start), err)
 	if err == nil {
-		t.Fatalf("普通文件超上限应该被拒")
+		t.Fatalf("a regular file over the limit should be refused")
 	}
 }
 
-// oldGNUSparseHdr 手搓一个 old-GNU sparse 头（typeflag 'S'）。
-// Go 的 reader 认它、会把稀疏段展开成完整内容（reader.go handleSparseFile），
-// 而且【保留】Typeflag == TypeGNUSparse 交给调用方。
+// oldGNUSparseHdr hand-rolls an old-GNU sparse header (typeflag 'S'). Go's reader
+// understands it and expands the sparse segments into the full content
+// (reader.go handleSparseFile), while KEEPING Typeflag == TypeGNUSparse for the caller.
 func oldGNUSparseHdr(name string, payload []byte) []byte {
 	b := rawHdr(name, 'S', "", int64(len(payload)), 0o755)
 	copy(b[257:265], "ustar  \x00") // GNU magic
-	// 386 起是 4 个稀疏项，每项 offset[12] + numbytes[12]
+	// from offset 386: 4 sparse entries, each offset[12] + numbytes[12]
 	copy(b[386:398], fmt.Sprintf("%011o\x00", 0))
 	copy(b[398:410], fmt.Sprintf("%011o\x00", len(payload)))
 	b[482] = 0                                               // isextended = 0
 	copy(b[483:495], fmt.Sprintf("%011o\x00", len(payload))) // realsize
-	// 重算 checksum
+	// recompute the checksum
 	for i := 148; i < 156; i++ {
 		b[i] = ' '
 	}
@@ -100,10 +100,10 @@ func oldGNUSparseHdr(name string, payload []byte) []byte {
 	return b
 }
 
-// GNU sparse（typeflag 'S'）是一个【有内容的普通文件】，只是内容按稀疏段编码。
-// untar 的 default 分支把它和设备文件、FIFO、socket 一起 continue 掉了 ——
-// 于是这个文件静默消失，Extract 却返回成功、也没有任何警告。
-// 复现方式：`tar --sparse -cf x.tar tool`（GNU tar 的 -S/--sparse）。
+// A GNU sparse file (typeflag 'S') is A REGULAR FILE WITH CONTENT, merely encoded as
+// sparse segments. untar's default branch continue'd it away alongside device nodes,
+// FIFOs and sockets - so the file vanished silently while Extract returned success with
+// no warning anywhere. Reproduce with `tar --sparse -cf x.tar tool` (GNU tar's -S).
 func TestAuditGNUSparseSilentlyDropsAFile(t *testing.T) {
 	_, dest := canary(t)
 	payload := []byte("this is the real payload of the tool binary")
@@ -115,10 +115,10 @@ func TestAuditGNUSparseSilentlyDropsAFile(t *testing.T) {
 	files, err := Extract(src, dest)
 	t.Logf("files=%v err=%v", files, err)
 	if err != nil {
-		t.Skipf("这个手搓头 Go 没认（%v），换别的方式复现", err)
+		t.Skipf("Go did not accept this hand-rolled header (%v); reproduce another way", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dest, "tool")); statErr != nil {
-		t.Errorf("Extract 返回成功、files=%v，但 tool 根本没落盘（%v）——"+
-			"装完是一条不存在的命令，而且没有任何地方说过", files, statErr)
+		t.Errorf("Extract returned success with files=%v, but tool never landed on disk (%v) - "+
+			"the install leaves a command that does not exist, and nothing anywhere says so", files, statErr)
 	}
 }

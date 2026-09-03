@@ -18,7 +18,7 @@ func insTestResolved(t *testing.T, s, tag string) *resolved {
 	t.Helper()
 	r, err := ref.Parse(s)
 	if err != nil {
-		t.Fatalf("ref.Parse(%q)：%v", s, err)
+		t.Fatalf("ref.Parse(%q): %v", s, err)
 	}
 	res := &resolved{Ref: r, Owner: r.Owner, Repo: r.Repo, Tag: tag, Trust: store.TrustHost}
 	if r.Kind == ref.KindHost {
@@ -29,7 +29,8 @@ func insTestResolved(t *testing.T, s, tag string) *resolved {
 	return res
 }
 
-// 升级判断错了就是装错版本，或者永远不升级。
+// Get the upgrade decision wrong and you either install the wrong version or
+// never upgrade at all.
 func TestInsIsNewer(t *testing.T) {
 	cases := []struct {
 		old, remote string
@@ -37,93 +38,102 @@ func TestInsIsNewer(t *testing.T) {
 	}{
 		{"v1.2.0", "v1.3.0", true},
 		{"v1.2.0", "v1.2.0", false},
-		{"v1.3.0", "v1.2.0", false}, // 远端更旧就别动，不然一次降级
+		{"v1.3.0", "v1.2.0", false}, // remote is older: leave it alone, or that is a downgrade
 		{"v1.2.0", "v1.2.1", true},
-		// 有一边不是 semver 就只能按「tag 变了」判断，不能当成 0.0.0
-		// —— 那会把 release-2024 一路"升级"成谁也没要的东西。
+		// If either side is not semver, all we can go on is "the tag changed".
+		// Treating it as 0.0.0 would "upgrade" release-2024 into something
+		// nobody asked for.
 		{"release-2024", "release-2025", true},
 		{"release-2024", "release-2024", false},
 	}
 	for _, c := range cases {
 		got := insIsNewer(store.Manifest{Tag: c.old}, &resolved{Tag: c.remote})
 		if got != c.want {
-			t.Errorf("insIsNewer(%q → %q) = %v，想要 %v", c.old, c.remote, got, c.want)
+			t.Errorf("insIsNewer(%q -> %q) = %v, want %v", c.old, c.remote, got, c.want)
 		}
 	}
 }
 
-// 铁律 6：钉住的是某个 ref@version 的哈希。id 里不带 tag 的话，正常升级
-// 会被报成「哈希变了」，而那句警告天天出现就没人再当回事。
+// Iron law 6: what gets pinned is the hash of one ref@version. Leave the tag
+// out of the id and every normal upgrade gets reported as "the hash changed" --
+// and a warning that fires every day is a warning nobody reads.
 func TestInsTrustIDCarriesTheTag(t *testing.T) {
 	res := insTestResolved(t, "github:Derrity/tinyserve", "v1.2.0")
 	if got, want := insPackageID(res), "github:Derrity/tinyserve"; got != want {
-		t.Fatalf("insPackageID = %q，想要 %q", got, want)
+		t.Fatalf("insPackageID = %q, want %q", got, want)
 	}
 	if got, want := insTrustID(res), "github:Derrity/tinyserve@v1.2.0"; got != want {
-		t.Fatalf("insTrustID = %q，想要 %q", got, want)
+		t.Fatalf("insTrustID = %q, want %q", got, want)
 	}
-	// 裸地址没有 tag，id 就是那个地址本身 —— 同一个地址内容变了必须拦下来。
+	// A bare URL has no tag, so the id is the URL itself -- if the content
+	// behind that URL changes we have to stop.
 	u := insTestResolved(t, "https://example.com/x/toy.toml", "")
 	if got := insTrustID(u); got != "https://example.com/x/toy.toml" {
-		t.Fatalf("裸地址的 trust id 是 %q", got)
+		t.Fatalf("trust id for a bare URL is %q", got)
 	}
 }
 
-// {tag} 是上游给的，展开之后才是真正拼进下载地址的那一串（铁律 7、8）。
+// {tag} comes from upstream, and it is the expanded form that actually gets
+// spliced into the download URL (iron laws 7 and 8).
 func TestInsSafeAsset(t *testing.T) {
 	if err := insSafeAsset("gitwip", "scripts/gitwip.sh"); err != nil {
-		t.Fatalf("正常的相对路径不该被拒：%v", err)
+		t.Fatalf("an ordinary relative path must not be rejected: %v", err)
 	}
 	for _, bad := range []string{"", "/etc/passwd", "../../x.sh", "a.sh?raw=1", "a.sh#frag"} {
 		if err := insSafeAsset("gitwip", bad); err == nil {
-			t.Errorf("%q 应该被拒", bad)
+			t.Errorf("%q should have been rejected", bad)
 		}
 	}
 }
 
-// 裸地址那条路没有托管方，资产只能相对 toy.toml 自己的地址解析。
+// The bare-URL path has no host behind it, so assets can only be resolved
+// relative to the toy.toml's own URL.
 func TestInsAssetURL(t *testing.T) {
 	u := insTestResolved(t, "https://example.com/tools/toy.toml", "")
 	got, err := insAssetURL(u, "tinyserve.tar.gz", false)
 	if err != nil || got != "https://example.com/tools/tinyserve.tar.gz" {
-		t.Fatalf("裸地址的资产地址 = %q（err=%v）", got, err)
+		t.Fatalf("asset URL for a bare URL = %q (err=%v)", got, err)
 	}
 
 	h := insTestResolved(t, "github:Derrity/tinyserve", "v1.2.0")
 	rel, err := insAssetURL(h, "tinyserve_1.2.0_linux_amd64.tar.gz", false)
 	if err != nil || !strings.Contains(rel, "/releases/download/v1.2.0/") {
-		t.Fatalf("release 地址 = %q（err=%v）", rel, err)
+		t.Fatalf("release URL = %q (err=%v)", rel, err)
 	}
-	// [script] 的值是仓库里的路径，走 raw 模板 —— 走 release 的话带斜杠的
-	// 路径会被转义成 %2F，取回来的是一个不存在的资产。
+	// A [script] value is a path inside the repo, so it goes through the raw
+	// template. Send it through the release template and the slashes get
+	// escaped to %2F, and what comes back is an asset that does not exist.
 	raw, err := insAssetURL(h, "scripts/gitwip.sh", true)
 	if err != nil || !strings.Contains(raw, "scripts/gitwip.sh") {
-		t.Fatalf("raw 地址 = %q（err=%v）", raw, err)
+		t.Fatalf("raw URL = %q (err=%v)", raw, err)
 	}
 }
 
-// 铁律 8：信任等级那一行必须说清楚信的是谁。
+// Iron law 8: the trust line has to say exactly who is being trusted.
 func TestInsTrustDetail(t *testing.T) {
 	h := insTestResolved(t, "github:Derrity/tinyserve", "v1.2.0")
 	if got, want := insTrustDetail(h), "github.com/Derrity"; got != want {
-		t.Fatalf("托管方那一档的说明 = %q，想要 %q", got, want)
+		t.Fatalf("host-tier detail = %q, want %q", got, want)
 	}
-	// 已签名那一档只能说「哪把钥匙、哪个索引登记的」。签名消息是
-	// id + source + toy.toml，里面没有任何东西把公钥和仓库 owner 绑起来，
-	// 所以 "Derrity (key …)" 这种写法是在替一把无关的钥匙认领一个名字。
+	// The signed tier can only say "which key, registered in which index".
+	// The signed message is id + source + toy.toml, and not one byte of it
+	// binds the public key to the repo owner -- so writing "Derrity (key ...)"
+	// is claiming a name on behalf of an unrelated key.
 	h.Trust, h.Signer, h.IndexName = store.TrustSigned, "a3f91b2c…", "default"
 	got := insTrustDetail(h)
 	if !strings.Contains(got, "a3f91b2c…") || !strings.Contains(got, "default") {
-		t.Fatalf("已签名那一档要说清楚是哪把钥匙、谁登记的，得到 %q", got)
+		t.Fatalf("the signed tier must name the key and who registered it, got %q", got)
 	}
 	if strings.HasPrefix(got, "Derrity") {
-		t.Fatalf("不能把仓库 owner 印在勾后面，那读起来就是「他签的」：%q", got)
+		t.Fatalf(`must not print the repo owner behind the checkmark; that reads as "Derrity signed this": %q`, got)
 	}
 }
 
-// TestInsTrustDowngradeNeedsForce 钉住「签名不能悄悄消失」：
-// 验签名本身拦不住这件事 —— 把 sig 从索引条目里删掉，客户端验都没得验，
-// 那个勾就没了，而没人会注意到少了一个勾（规格 §4 的 TOFU、铁律 8）。
+// TestInsTrustDowngradeNeedsForce nails down "a signature must not quietly
+// disappear": verifying signatures cannot catch this on its own. Delete the
+// sig from the index entry and there is nothing left to verify, the checkmark
+// is simply gone -- and nobody notices a missing checkmark (spec 4 on TOFU,
+// iron law 8).
 func TestInsTrustDowngradeNeedsForce(t *testing.T) {
 	signed := &store.Manifest{Name: "tinyserve", Trust: store.TrustSigned, Signer: "a3f9…"}
 	for _, c := range []struct {
@@ -132,100 +142,113 @@ func TestInsTrustDowngradeNeedsForce(t *testing.T) {
 		res  *resolved
 		want bool
 	}{
-		{"签名没了要拦", signed, &resolved{Trust: store.TrustHost}, true},
-		{"降到未验证更要拦", signed, &resolved{Trust: store.TrustUnverified}, true},
-		{"还是已签名就放行", signed, &resolved{Trust: store.TrustSigned}, false},
-		{"第一次装没得比", nil, &resolved{Trust: store.TrustHost}, false},
-		{"本来就没签过不算降级",
+		{"signature vanished: stop", signed, &resolved{Trust: store.TrustHost}, true},
+		{"dropping to unverified: stop harder", signed, &resolved{Trust: store.TrustUnverified}, true},
+		{"still signed: go ahead", signed, &resolved{Trust: store.TrustSigned}, false},
+		{"first install has nothing to compare against", nil, &resolved{Trust: store.TrustHost}, false},
+		{"never was signed, so this is not a downgrade",
 			&store.Manifest{Trust: store.TrustHost}, &resolved{Trust: store.TrustHost}, false},
 	} {
 		if got := insTrustDowngraded(c.old, c.res); got != c.want {
-			t.Errorf("%s：insTrustDowngraded = %v，想要 %v", c.name, got, c.want)
+			t.Errorf("%s: insTrustDowngraded = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
 
-// 铁律 8：命中的不是第一个候选，就是装了一个不是为这台机器构建的东西。
-// 这两种回退失败起来都不像回退的错 —— Rosetta 少装一次是「无法打开」，
-// glibc 二进制丢进 Alpine 是「文件不存在」，说明必须在安装那一刻给出来。
+// Iron law 8: if the match was not the first candidate, we installed something
+// that was not built for this machine. Both kinds of fallback fail in ways that
+// look nothing like a fallback -- missing Rosetta reads as "cannot be opened",
+// a glibc binary dropped into Alpine reads as "file not found" -- which is why
+// the note has to come out at install time.
 func TestInsFallbackNote(t *testing.T) {
 	cases := []struct {
 		name     string
 		cands    []string
 		matched  string
 		declared []string
-		want     []string // 都要出现；空表示这次不该有任何说明
+		want     []string // all must appear; empty means there must be no note at all
 	}{
-		{"命中第一个就不吭声", []string{"linux/amd64/gnu", "linux/amd64"}, "linux/amd64/gnu",
+		{"first candidate matched: stay quiet", []string{"linux/amd64/gnu", "linux/amd64"}, "linux/amd64/gnu",
 			[]string{"linux/amd64", "linux/amd64/gnu"}, nil},
-		// 这条是这个函数最要紧的一条，也是它以前唯一没盖住的一条：绝大多数项目
-		// 只发两段 key，而 linux 上首选候选永远是我们自己合成的 /gnu。判据写成
-		// 「没命中首选就报警」的话，每一次普通安装都会多一句假警告 —— 而一条每次
-		// 都响的警告会把下面那两条真的一起淹掉。
-		{"glibc 机器装只发两段 key 的包：那就是对的那个，不许吭声",
+		// This is the most important case in this function, and the one it used
+		// to be the only one not covering: the vast majority of projects ship
+		// two-segment keys only, and on linux the first candidate is always the
+		// /gnu one we synthesize ourselves. Make the rule "warn whenever the
+		// first candidate missed" and every ordinary install grows a bogus
+		// warning -- and a warning that fires every time drowns out the two
+		// real ones below.
+		{"two-segment-key package on a glibc box: that IS the right build, stay quiet",
 			[]string{"linux/amd64/gnu", "linux/amd64"}, "linux/amd64",
 			[]string{"linux/amd64", "linux/arm64"}, nil},
-		{"作者按 libc 分了档但没有 glibc 那一档，要说一声",
+		{"author split by libc but shipped no glibc build: say so",
 			[]string{"linux/amd64/gnu", "linux/amd64"}, "linux/amd64",
 			[]string{"linux/amd64", "linux/amd64/musl"},
 			[]string{"libc", "linux/amd64"}},
-		{"Apple Silicon 退回 Intel 要说 Rosetta",
+		{"Apple Silicon falling back to Intel: mention Rosetta",
 			[]string{"darwin/arm64", "darwin/amd64"}, "darwin/amd64",
 			[]string{"darwin/amd64"},
 			[]string{"Rosetta", "Intel"}},
-		// musl 反过来：裸 linux/amd64 几乎不可能是 musl 构建，所以作者有没有分档
-		// 都要说 —— 沉默的代价是一句「文件不存在」，而文件明明就在那儿。
-		{"musl 机器退回通用构建要说会像文件不存在（哪怕作者没分档）",
+		// musl the other way around: a bare linux/amd64 is almost never a musl
+		// build, so we say something whether or not the author split by libc --
+		// the price of silence is a "file is missing" for a file that is
+		// plainly right there.
+		{"musl box falling back to the generic build: warn it will look like a missing file (even with no split)",
 			[]string{"linux/amd64/musl", "linux/amd64"}, "linux/amd64",
 			[]string{"linux/amd64"},
 			[]string{"musl", "file is missing"}},
-		// glibc 机器兜底到 musl 那一档（候选链末位）。这条几乎总是好消息 ——
-		// 只发 musl 一份的项目（ripgrep / zoxide 的 x86-64）靠它才装得上 ——
-		// 但仍然要说：装的不是为这台机器构建的那个，而且万一那份 musl 构建是
-		// 动态链接的，它在这里就起不来。
-		{"glibc 机器只找到 musl 构建：要说它是静态链接所以能跑",
+		// glibc box bottoming out on the musl tier (last candidate in the
+		// chain). This is nearly always good news -- projects that ship musl
+		// only for x86-64 (ripgrep, zoxide) are installable because of it --
+		// but say it anyway: this is not the build made for this machine, and
+		// if that musl build happens to be dynamically linked it will not run
+		// here.
+		{"glibc box found only a musl build: say it works because it is static",
 			[]string{"linux/amd64/gnu", "linux/amd64", "linux/amd64/musl"}, "linux/amd64/musl",
 			[]string{"linux/amd64/musl"},
 			[]string{"musl", "statically linked", "linux/amd64"}},
-		{"arm64 上同理", []string{"linux/arm64/gnu", "linux/arm64", "linux/arm64/musl"}, "linux/arm64/musl",
+		{"same on arm64", []string{"linux/arm64/gnu", "linux/arm64", "linux/arm64/musl"}, "linux/arm64/musl",
 			[]string{"linux/arm64/musl"}, []string{"musl", "statically linked"}},
-		// 三段候选链上命中中间那个（裸 key）时判据不能变：作者没按 libc 分档，
-		// 通用构建就是对的那个，不许因为候选链变长了就开始报假警告。
-		{"候选链末位加了 musl 之后，命中裸 key 仍然不许吭声",
+		// Matching the middle (bare) key in a three-candidate chain must not
+		// change the rule: the author did not split by libc, so the generic
+		// build IS the right one. A longer candidate chain is no excuse to
+		// start emitting bogus warnings.
+		{"with musl appended to the chain, matching the bare key still stays quiet",
 			[]string{"linux/amd64/gnu", "linux/amd64", "linux/amd64/musl"}, "linux/amd64",
 			[]string{"linux/amd64", "linux/arm64"}, nil},
-		{"别的回退也要说一声",
+		{"other fallbacks get a note too",
 			[]string{"linux/armv7", "linux/arm"}, "linux/arm",
 			[]string{"linux/arm"},
 			[]string{"linux/armv7", "linux/arm"}},
-		{"没有候选就无从说起", nil, "linux/amd64", []string{"linux/amd64"}, nil},
+		{"no candidates, nothing to say", nil, "linux/amd64", []string{"linux/amd64"}, nil},
 	}
 	for _, c := range cases {
 		got := insFallbackNote(c.cands, c.matched, c.declared)
 		if len(c.want) == 0 {
 			if got != "" {
-				t.Errorf("%s：不该有说明，得到 %q", c.name, got)
+				t.Errorf("%s: there should be no note, got %q", c.name, got)
 			}
 			continue
 		}
 		for _, w := range c.want {
 			if !strings.Contains(got, w) {
-				t.Errorf("%s：说明里要有 %q，得到 %q", c.name, w, got)
+				t.Errorf("%s: the note must contain %q, got %q", c.name, w, got)
 			}
 		}
 	}
 }
 
-// 挑资产必须走候选顺序，不能只比一个精确的 GOOS/GOARCH。只比一个的话，
-// Alpine 上装任何一个「只发了通用 linux 构建」的包都会被判成
-// 「没有适配当前平台的构建」—— 而那个包在 Alpine 上很可能是装得上的。
+// Picking an asset has to walk the candidate order, not compare one exact
+// GOOS/GOARCH. Compare only one and installing any "generic linux build only"
+// package on Alpine gets judged "no build for this platform" -- when that
+// package very likely does install on Alpine.
 func TestInsItemsFallsBackThroughCandidates(t *testing.T) {
 	cands := platform.Candidates()
 	if len(cands) < 2 {
-		t.Skipf("这台机器只有一个候选（%v），没有回退可验", cands)
+		t.Skipf("this machine has only one candidate (%v), no fallback to exercise", cands)
 	}
-	// 挑一个【不等于】GOOS/GOARCH 的候选：只有这样，"只比一个精确 key" 的写法
-	// 才会失败而候选顺序会成功 —— 拿 GOOS/GOARCH 本身去测，两种写法都过。
+	// Pick a candidate that is NOT GOOS/GOARCH: only then does the "compare one
+	// exact key" implementation fail while the candidate order succeeds -- test
+	// with GOOS/GOARCH itself and both implementations pass.
 	only := ""
 	for _, c := range cands {
 		if c != runtime.GOOS+"/"+runtime.GOARCH {
@@ -234,7 +257,7 @@ func TestInsItemsFallsBackThroughCandidates(t *testing.T) {
 		}
 	}
 	if only == "" {
-		t.Skipf("这台机器的候选全等于 GOOS/GOARCH（%v），没有回退可验", cands)
+		t.Skipf("every candidate on this machine equals GOOS/GOARCH (%v), no fallback to exercise", cands)
 	}
 	tf, err := toyfile.Parse(fmt.Appendf(nil,
 		"name = \"probe\"\n[bin]\nprobe = \"probe\"\n[artifact]\n%q = \"probe_{version}_x.tar.gz\"\n", only))
@@ -245,9 +268,9 @@ func TestInsItemsFallsBackThroughCandidates(t *testing.T) {
 	res.Toyfile = tf
 	items, err := insItems(res)
 	if err != nil {
-		t.Fatalf("只声明了 %q 的包应该能靠候选顺序装上，得到：%v", only, err)
+		t.Fatalf("a package declaring only %q should install via the candidate order, got: %v", only, err)
 	}
 	if len(items) != 1 || items[0].asset != "probe_1.0.0_x.tar.gz" {
-		t.Fatalf("挑出来的资产不对：%+v", items)
+		t.Fatalf("wrong asset picked: %+v", items)
 	}
 }

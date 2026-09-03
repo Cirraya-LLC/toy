@@ -28,9 +28,10 @@ func TestAutParseRemote(t *testing.T) {
 		{remote: "git@github.com:Derrity/tinyserve.git", domain: "github.com", owner: "Derrity", repo: "tinyserve"},
 		{remote: "git@Codeberg.ORG:o/r", domain: "codeberg.org", owner: "o", repo: "r"},
 		{remote: "  https://github.com/o/r.git\n", domain: "github.com", owner: "o", repo: "r"},
-		// 本地路径的 origin 没有域名，推不出托管方 —— 必须报错而不是猜一个。
+		// A local-path origin has no domain, so there is no host to infer.
+		// Fail loudly instead of guessing one.
 		{remote: "/srv/git/tinyserve.git", wantErr: true},
-		// GitLab 子组是三层，而 ref 只有 owner/repo 一层。
+		// GitLab subgroups are three levels deep; a ref only has owner/repo.
 		{remote: "https://gitlab.com/group/sub/repo.git", wantErr: true},
 		{remote: "https://github.com/onlyowner", wantErr: true},
 		{remote: "", wantErr: true},
@@ -39,45 +40,47 @@ func TestAutParseRemote(t *testing.T) {
 		domain, owner, repo, err := autParseRemote(c.remote)
 		if c.wantErr {
 			if err == nil {
-				t.Errorf("autParseRemote(%q) 该报错，却给出 %s/%s/%s", c.remote, domain, owner, repo)
+				t.Errorf("autParseRemote(%q) should have failed, got %s/%s/%s", c.remote, domain, owner, repo)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("autParseRemote(%q) 报错了：%v", c.remote, err)
+			t.Errorf("autParseRemote(%q) failed: %v", c.remote, err)
 			continue
 		}
 		if domain != c.domain || owner != c.owner || repo != c.repo {
-			t.Errorf("autParseRemote(%q) = %s %s %s，想要 %s %s %s",
+			t.Errorf("autParseRemote(%q) = %s %s %s, want %s %s %s",
 				c.remote, domain, owner, repo, c.domain, c.owner, c.repo)
 		}
 	}
 }
 
-// TestAutSignMessageIsFrozen 把签名覆盖的字节钉死。改了它，所有已经发出去的
-// 签名会一起验不过，而用户看到的报错读起来像作者的私钥泄漏了。
+// TestAutSignMessageIsFrozen freezes the bytes a signature covers. Change them
+// and every signature already out in the wild stops verifying at once -- and
+// the error the user sees reads like the author's private key leaked.
 func TestAutSignMessageIsFrozen(t *testing.T) {
 	got := string(autSignMessage("Derrity/tinyserve", "github:Derrity/tinyserve", []byte("name = \"tinyserve\"\n")))
 	want := "Derrity/tinyserve\ngithub:Derrity/tinyserve\nname = \"tinyserve\"\n"
 	if got != want {
-		t.Fatalf("签名消息变了：\n拿到 %q\n想要 %q", got, want)
+		t.Fatalf("the signed message changed:\ngot  %q\nwant %q", got, want)
 	}
 }
 
 func TestAutHostName(t *testing.T) {
 	if got := autHostName("github.com", nil); got != "github" {
-		t.Errorf("github.com 应该反查成 github，拿到 %q", got)
+		t.Errorf("github.com should map back to github, got %q", got)
 	}
 	if got := autHostName("CODEBERG.org", nil); got != "codeberg" {
-		t.Errorf("域名比较该忽略大小写，拿到 %q", got)
+		t.Errorf("domain comparison must be case-insensitive, got %q", got)
 	}
-	// 用户在 config.toml 里配的自建实例，不用改代码就该认得。
+	// A self-hosted instance the user configured in config.toml must be
+	// recognized without touching any code.
 	mine := map[string]host.Host{"mygit": {Clone: "https://git.example.com/{owner}/{repo}"}}
 	if got := autHostName("git.example.com", mine); got != "mygit" {
-		t.Errorf("自建托管方该被认出来，拿到 %q", got)
+		t.Errorf("a self-hosted host should be recognized, got %q", got)
 	}
 	if got := autHostName("bitbucket.org", nil); got != "" {
-		t.Errorf("不认识的域名该返回空串让调用方去要 --source，拿到 %q", got)
+		t.Errorf("an unknown domain should return \"\" so the caller asks for --source, got %q", got)
 	}
 }
 
@@ -87,7 +90,8 @@ func TestAutMirrorHandler(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, sum), []byte("payload"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// 目录列表和任意路径都不该被暴露出去，所以特意放一个非 hash 名字的文件。
+	// Neither directory listings nor arbitrary paths may be exposed, so plant a
+	// file whose name is deliberately not a hash.
 	if err := os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("nope"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -96,11 +100,11 @@ func TestAutMirrorHandler(t *testing.T) {
 
 	body, code := autGet(t, srv.Client(), srv.URL+"/"+sum)
 	if code != http.StatusOK || body != "payload" {
-		t.Errorf("按 sha256 取文件 = %d %q，想要 200 \"payload\"", code, body)
+		t.Errorf("fetch by sha256 = %d %q, want 200 \"payload\"", code, body)
 	}
 	for _, path := range []string{"/", "/secret.txt", "/" + strings.ToUpper(sum), "/../../etc/passwd", "/" + sum + "x"} {
 		if _, code := autGet(t, srv.Client(), srv.URL+path); code != http.StatusNotFound {
-			t.Errorf("GET %s = %d，想要 404（只认 64 位小写 hex）", path, code)
+			t.Errorf("GET %s = %d, want 404 (only 64 lowercase hex chars are served)", path, code)
 		}
 	}
 	resp, err := srv.Client().Post(srv.URL+"/"+sum, "text/plain", strings.NewReader("x"))
@@ -109,7 +113,7 @@ func TestAutMirrorHandler(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("POST = %d，想要 405", resp.StatusCode)
+		t.Errorf("POST = %d, want 405", resp.StatusCode)
 	}
 }
 
@@ -117,7 +121,7 @@ func autGet(t *testing.T, c *http.Client, url string) (string, int) {
 	t.Helper()
 	resp, err := c.Get(url)
 	if err != nil {
-		t.Fatalf("GET %s：%v", url, err)
+		t.Fatalf("GET %s: %v", url, err)
 	}
 	defer resp.Body.Close()
 	b := make([]byte, 64)
@@ -128,18 +132,20 @@ func autGet(t *testing.T, c *http.Client, url string) (string, int) {
 func TestAutWildcard(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:8080", ":8080", "[::]:8080"} {
 		if !autWildcard(addr) {
-			t.Errorf("%q 是对全网监听，该提醒用户", addr)
+			t.Errorf("%q listens on every interface; the user must be warned", addr)
 		}
 	}
 	for _, addr := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
 		if autWildcard(addr) {
-			t.Errorf("%q 只听本机，不该报警", addr)
+			t.Errorf("%q is loopback only; no warning belongs here", addr)
 		}
 	}
 }
 
-// TestAutSignedEntryVerifies 走一遍真链路：签出来的东西必须能用条目里那把公钥验过，
-// 而且改一个字节的 toy.toml 就该验不过 —— 否则 publish 发出去的签名什么都没保护。
+// TestAutSignedEntryVerifies walks the real chain: what we sign must verify
+// against the public key in the entry, and flipping a single byte of the
+// toy.toml must break it -- otherwise the signature publish hands out protects
+// nothing at all.
 func TestAutSignedEntryVerifies(t *testing.T) {
 	kp, err := sign.Generate()
 	if err != nil {
@@ -151,23 +157,24 @@ func TestAutSignedEntryVerifies(t *testing.T) {
 	pub := hex.EncodeToString(kp.Public)
 
 	if err := sign.Verify(pub, autSignMessage(id, source, raw), sig); err != nil {
-		t.Fatalf("自己签的自己验不过：%v", err)
+		t.Fatalf("we cannot verify what we just signed ourselves: %v", err)
 	}
-	tampered := []byte("name = \"tinyserve\"\n# 偷偷加一行\n")
+	tampered := []byte("name = \"tinyserve\"\n# one line slipped in\n")
 	if err := sign.Verify(pub, autSignMessage(id, source, tampered), sig); err == nil {
-		t.Fatal("改过的 toy.toml 竟然验过了")
+		t.Fatal("a tampered toy.toml verified")
 	}
 	if err := sign.Verify(pub, autSignMessage("someone/else", source, raw), sig); err == nil {
-		t.Fatal("换了 id 竟然验过了 —— 签名必须把名字绑住")
+		t.Fatal("a swapped id verified -- the signature must bind the name")
 	}
 }
 
-// TestAutPublishedEntryLoadsIntoAnIndex 钉住那句「粘进索引不会让它坏掉」：
-// publish 打出来的条目要能被 index.Load 原样读回来，sig 也不能在路上丢掉
-// —— 客户端就是靠它决定敢不敢打「✓ 已签名」。
+// TestAutPublishedEntryLoadsIntoAnIndex nails down "pasting it into an index
+// does not break it": the entry publish prints must load back through
+// index.Load unchanged, and the sig must not get lost on the way -- that is
+// what the client uses to decide whether it dares print the signed checkmark.
 func TestAutPublishedEntryLoadsIntoAnIndex(t *testing.T) {
 	entry := index.Entry{
-		ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "小", Sig: "AAAA",
+		ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "tiny", Sig: "AAAA",
 	}
 	body, err := json.Marshal(entry)
 	if err != nil {
@@ -175,22 +182,23 @@ func TestAutPublishedEntryLoadsIntoAnIndex(t *testing.T) {
 	}
 	idx, skipped, err := index.Load([]byte(`{"version":1,"packages":[`+string(body)+`]}`), "test")
 	if err != nil || skipped != 0 || len(idx.Packages) != 1 {
-		t.Fatalf("粘进索引读不回来：err=%v skipped=%d packages=%d", err, skipped, len(idx.Packages))
+		t.Fatalf("pasted into an index it does not load back: err=%v skipped=%d packages=%d", err, skipped, len(idx.Packages))
 	}
 	got, ok := idx.Find("Derrity/tinyserve")
 	if !ok {
-		t.Fatal("条目进了索引却搜不到")
+		t.Fatal("the entry made it into the index but cannot be found")
 	}
 	if got.Sig != "AAAA" {
-		t.Fatalf("sig 在路上丢了：%q", got.Sig)
+		t.Fatalf("the sig was lost on the way: %q", got.Sig)
 	}
 }
 
-// autGitPath 必须跳过 toy 自己的 bin 目录。
+// autGitPath must skip toy's own bin directory.
 //
-// 裸 "git" 交给 exec 就是执行 PATH 上的第一个 git，而按 README / `toy doctor`
-// 的说法 ~/.toy/bin 就在 PATH 上 —— 一个装上来的包只要提供一条叫 git 的命令，
-// `toy publish` 就会执行它。铁律 1 的洞，不是不方便。
+// Handing bare "git" to exec runs the first git on PATH, and per the README and
+// `toy doctor` ~/.toy/bin IS on PATH -- so any installed package that provides
+// a command called git gets executed by `toy publish`. That is a hole straight
+// through iron law 1, not an inconvenience.
 func TestGitPathSkipsToyOwnBinDir(t *testing.T) {
 	planted, real := t.TempDir(), t.TempDir()
 	put := func(dir string) string {
@@ -202,31 +210,34 @@ func TestGitPathSkipsToyOwnBinDir(t *testing.T) {
 	}
 	fake, want := put(planted), put(real)
 
-	// toy 自己的 bin 排在最前面 —— 用户按文档就是这么加进 PATH 的。
+	// toy's own bin comes first -- that is exactly how the docs tell users to
+	// put it on PATH.
 	t.Setenv("PATH", planted+string(os.PathListSeparator)+real)
 	got, err := autGitPath(planted)
 	if err != nil {
-		t.Fatalf("PATH 上明明有一个真的 git，却报错了：%v", err)
+		t.Fatalf("there is a real git on PATH and it still failed: %v", err)
 	}
 	if got == fake {
-		t.Fatalf("挑中了 toy 自己 bin 目录里的 %s —— publish 会执行它（铁律 1）", fake)
+		t.Fatalf("picked %s out of toy's own bin directory -- publish would execute it (iron law 1)", fake)
 	}
 	if got != want {
-		t.Fatalf("挑中了 %s，想要 %s", got, want)
+		t.Fatalf("picked %s, want %s", got, want)
 	}
 
-	// 只剩那一个的时候必须拒绝，而且要指名道姓，用户才知道去卸谁。
+	// When that is the only one left we must refuse, and name the file, so the
+	// user knows what to uninstall.
 	t.Setenv("PATH", planted)
 	switch _, err := autGitPath(planted); {
 	case err == nil:
-		t.Fatal("PATH 上唯一的 git 来自一个装上来的包，autGitPath 还是把它交出去了")
+		t.Fatal("the only git on PATH came from an installed package and autGitPath handed it over anyway")
 	case !strings.Contains(err.Error(), fake):
-		t.Fatalf("拒是拒了，但没说清楚是哪个文件，用户无从下手：%v", err)
+		t.Fatalf("it refused, but without naming the file the user has nothing to act on: %v", err)
 	}
 }
 
-// PATH 里的相对项（"." 和那个到处都是的空项）指的是进程**当前所在的目录**。
-// 在一个别人写得进去的目录里跑 toy，不该等于把铁律 1 交出去。
+// Relative PATH entries ("." and the empty entry that turns up everywhere)
+// point at the process's CURRENT directory. Running toy inside a directory
+// somebody else can write to must not mean handing over iron law 1.
 func TestGitPathIgnoresRelativePathEntries(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
@@ -235,11 +246,12 @@ func TestGitPathIgnoresRelativePathEntries(t *testing.T) {
 	t.Chdir(dir)
 	t.Setenv("PATH", "."+string(os.PathListSeparator))
 	if got, err := autGitPath(""); err == nil {
-		t.Fatalf("PATH 上只有相对项，autGitPath 却把当前目录里的 %s 交出去了", got)
+		t.Fatalf("PATH holds only relative entries, yet autGitPath handed over %s from the current directory", got)
 	}
 }
 
-// 走完整条路：一个装上来的包占住了 git 这个名字，`toy publish` 不该执行它。
+// The whole path end to end: an installed package squats on the name git, and
+// `toy publish` must not execute it.
 func TestPublishDoesNotRunGitFromToyBin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TOY_HOME", home)
@@ -252,8 +264,8 @@ func TestPublishDoesNotRunGitFromToyBin(t *testing.T) {
 		[]byte("#!/bin/sh\n: > "+marker+"\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// 用户按 README / `toy doctor` 说的把 ~/.toy/bin 加进 PATH，
-	// 而这台机器上还没装真的 git。
+	// The user put ~/.toy/bin on PATH the way the README and `toy doctor` say
+	// to, and this machine has no real git installed yet.
 	t.Setenv("PATH", bin)
 
 	dir := t.TempDir()
@@ -264,13 +276,14 @@ func TestPublishDoesNotRunGitFromToyBin(t *testing.T) {
 
 	err := runPublish(t.Context(), []string{dir})
 	if _, serr := os.Stat(marker); serr == nil {
-		t.Fatalf("`toy publish` 执行了 ~/.toy/bin 里那个 git（%s 出现了）—— 铁律 1 破了", marker)
+		t.Fatalf("`toy publish` executed the git in ~/.toy/bin (%s showed up) -- iron law 1 is broken", marker)
 	}
 	if err == nil {
-		t.Fatal("PATH 上没有能用的 git，source 推不出来，publish 不该成功")
+		t.Fatal("there is no usable git on PATH, so source cannot be inferred and publish must not succeed")
 	}
-	// doctor 报的必须是同一个判断，不然它会指着那个包说「git 在：…」。
+	// doctor has to make the same judgement, or it will point at that package
+	// and report "git found at: ...".
 	if c := qryCheckGit(bin); c.ok {
-		t.Fatalf("`toy doctor` 把一个装上来的包当成了健康的 git：%q", c.title)
+		t.Fatalf("`toy doctor` called an installed package a healthy git: %q", c.title)
 	}
 }

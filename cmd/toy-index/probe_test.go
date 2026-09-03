@@ -16,7 +16,8 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/index"
 )
 
-// tarEntry 是造压缩包用的一个成员。mode 里的执行位是这几个测试的重点。
+// tarEntry is one member of a test archive. The execute bit in mode is the whole point of
+// these tests.
 type tarEntry struct {
 	name string
 	mode int64
@@ -47,7 +48,8 @@ func makeTarGz(t *testing.T, entries []tarEntry) []byte {
 	return buf.Bytes()
 }
 
-// releaseServer 假装成 release 的下载地址：按资产名给同一个包。
+// releaseServer pretends to be the release download URL: it hands back the same archive
+// for any asset name.
 func releaseServer(t *testing.T, tgz []byte) host.Host {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +75,8 @@ func probeGen(t *testing.T, tgz []byte, out string) ([]genResult, error) {
 	return []genResult{r}, r.err
 }
 
-// --probe 的全部意义：把 [bin] 右边从「猜的」变成「解开真包看出来的」。
+// The entire point of --probe: turn the right of [bin] from a guess into something read
+// out of a real archive.
 func TestProbeFindsTheRealBinPath(t *testing.T) {
 	tgz := makeTarGz(t, []tarEntry{
 		{"bin/tinyserve", 0o755},
@@ -82,27 +85,29 @@ func TestProbeFindsTheRealBinPath(t *testing.T) {
 	})
 	rs, err := probeGen(t, tgz, filepath.Join(t.TempDir(), "idx.json"))
 	if err != nil {
-		t.Fatalf("探测失败：%v", err)
+		t.Fatalf("probe failed: %v", err)
 	}
 	p := rs[0].pack
 	if !p.binProbed {
-		t.Fatal("报告里说 [bin] 是猜的，但明明探过了")
+		t.Fatal("the report says [bin] is a guess, but it was probed")
 	}
 	if p.binPath != "bin/tinyserve" {
-		t.Fatalf("[bin] = %q，包里那个可执行文件在 bin/tinyserve", p.binPath)
+		t.Fatalf("[bin] = %q, the executable in the archive is at bin/tinyserve", p.binPath)
 	}
 	if !strings.Contains(rs[0].entry.Toyfile, `tinyserve = "bin/tinyserve"`) {
-		t.Fatalf("探到的路径没写进 toyfile：\n%s", rs[0].entry.Toyfile)
+		t.Fatalf("the probed path did not make it into the toyfile:\n%s", rs[0].entry.Toyfile)
 	}
 }
 
-// cargo-dist 的形状：整棵树套在一层「版本号 + target triple」的目录里。
-// archive 现在会把那一层剥掉（唯一顶层条目且是目录），所以探到的路径是稳定的
-// `tinyserve` —— 这条以前是【整条判失败】，而 ripgrep / fd / bat / delta / eza
-// 全是这个形状，也就是说现代 Rust CLI 那一整块以前一个都收不了。
+// The cargo-dist shape: the whole tree wrapped in one "version + target triple" directory.
+// archive now strips that layer (a single top-level entry that is a directory), so the
+// probed path is the stable `tinyserve` -- this case used to FAIL THE WHOLE ENTRY, and
+// ripgrep / fd / bat / delta / eza all have this shape, meaning that entire block of
+// modern Rust CLIs could not be listed at all.
 //
-// 探到的路径必须和 install 那边实际会得到的布局一致：两边都走 archive.Extract，
-// 所以这里探到什么，装的人的 pkg 目录里就是什么。
+// The probed path has to match the layout install actually ends up with: both sides go
+// through archive.Extract, so whatever is probed here is what lands in the installer's
+// pkg directory.
 func TestProbeSeesThroughACargoDistTopLevelDir(t *testing.T) {
 	tgz := makeTarGz(t, []tarEntry{
 		{"tinyserve_1.2.3_linux_amd64/tinyserve", 0o755},
@@ -110,56 +115,60 @@ func TestProbeSeesThroughACargoDistTopLevelDir(t *testing.T) {
 	})
 	rs, err := probeGen(t, tgz, filepath.Join(t.TempDir(), "idx.json"))
 	if err != nil {
-		t.Fatalf("探测失败（那层目录该被剥掉）：%v", err)
+		t.Fatalf("probe failed (that directory layer should have been stripped): %v", err)
 	}
 	if p := rs[0].pack; p.binPath != "tinyserve" || !p.binProbed {
-		t.Fatalf("[bin] = %q（probed=%v），想要 tinyserve", p.binPath, p.binProbed)
+		t.Fatalf("[bin] = %q (probed=%v), want tinyserve", p.binPath, p.binProbed)
 	}
 	if !strings.Contains(rs[0].entry.Toyfile, `tinyserve = "tinyserve"`) {
-		t.Fatalf("探到的路径没写进 toyfile：\n%s", rs[0].entry.Toyfile)
+		t.Fatalf("the probed path did not make it into the toyfile:\n%s", rs[0].entry.Toyfile)
 	}
 }
 
-// 剥不掉的时候（顶层不止一个条目）那条守卫仍然要拦住：[bin] 右边是逐字用的、
-// 不展开 {version}，一条钉死在 1.2.3 上的路径今天能装、上游一发新版就装不上。
+// When the layer cannot be stripped (more than one top-level entry), that guard still has
+// to stop it: the right of [bin] is used verbatim and does not expand {version}, so a path
+// pinned to 1.2.3 installs today and breaks the moment upstream cuts a release.
 func TestProbeRefusesAVersionPinnedBinPath(t *testing.T) {
 	tgz := makeTarGz(t, []tarEntry{
 		{"tinyserve_1.2.3_linux_amd64/tinyserve", 0o755},
-		{"LICENSE", 0o644}, // 顶层第二个条目 → 不剥
+		{"LICENSE", 0o644}, // a second top-level entry -> nothing gets stripped
 	})
 	rs, err := probeGen(t, tgz, filepath.Join(t.TempDir(), "idx.json"))
 	if err == nil {
-		t.Fatal("应该失败：这个路径钉死在 1.2.3 上")
+		t.Fatal("should have failed: this path is pinned to 1.2.3")
 	}
 	msg := rs[0].err.Error()
-	// 报错里要把探到的真实路径给出来 —— 人要手写的时候答案就在眼前。
+	// The error must quote the real probed path -- whoever writes it by hand has the answer
+	// right in front of them.
 	if !strings.Contains(msg, "tinyserve_1.2.3_linux_amd64/tinyserve") {
-		t.Errorf("报错没给出探到的路径：%s", msg)
+		t.Errorf("the error does not give the probed path: %s", msg)
 	}
 	if !strings.Contains(msg, "version") {
-		t.Errorf("报错没说清是为什么：%s", msg)
+		t.Errorf("the error does not say why: %s", msg)
 	}
 }
 
-// 目录名里带平台的同理：一份 toy.toml 只有一行 [bin]，所有平台共用。
+// Same for a directory name carrying a platform: a toy.toml has one [bin] line, shared by
+// every platform.
 func TestUnstableBinPathCatchesPlatformDirs(t *testing.T) {
 	for _, tc := range []struct{ path, version, want string }{
 		{"tinyserve", "1.2.3", ""},
 		{"bin/tinyserve", "1.2.3", ""},
 		{"tinyserve_1.2.3_linux_amd64/tinyserve", "1.2.3", "version"},
 		{"tinyserve-linux-amd64/tinyserve", "", "platform name"},
-		// 版本号认不出来时（version 为空）不能拿空串去 Contains —— 那会命中一切。
+		// When the version cannot be recognised (version is empty) we must not Contains on
+		// an empty string -- that matches everything.
 		{"bin/tinyserve", "", ""},
 	} {
 		got := unstableBinPath(tc.path, tc.version)
 		if (tc.want == "") != (got == "") || (tc.want != "" && !strings.Contains(got, tc.want)) {
-			t.Errorf("unstableBinPath(%q, %q) = %q，想要含 %q", tc.path, tc.version, got, tc.want)
+			t.Errorf("unstableBinPath(%q, %q) = %q, want it to contain %q", tc.path, tc.version, got, tc.want)
 		}
 	}
 }
 
-// 定不下来就说出来，绝不瞎挑一个：挑错的症状是用户装完之后 PATH 上那个命令
-// 是个补全脚本，而报告里写着「已探测」。
+// If it cannot be settled, say so; NEVER guess one. Guessing wrong shows up as a user
+// whose new command on PATH is a completion script, while the report says "probed".
 func TestPickExecutableRefusesToGuess(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel string, mode os.FileMode) {
@@ -175,82 +184,87 @@ func TestPickExecutableRefusesToGuess(t *testing.T) {
 	write("README.md", 0o644)
 	files := []string{"tinyserve", "helper", "README.md"}
 
-	// 有一个正好叫这个命令名 → 用它。
+	// One of them is named exactly like the command -> use it.
 	if hit, cands := pickExecutable(dir, files, "tinyserve"); hit != "tinyserve" || cands != nil {
-		t.Errorf("同名的那个应该赢：hit=%q cands=%v", hit, cands)
+		t.Errorf("the same-named one should win: hit=%q cands=%v", hit, cands)
 	}
-	// 一个都不同名 → 交出候选，不挑。
+	// None matches the name -> hand over the candidates, do not pick.
 	hit, cands := pickExecutable(dir, files, "somethingelse")
 	if hit != "" {
-		t.Errorf("定不下来却挑了 %q", hit)
+		t.Errorf("undecidable, yet it picked %q", hit)
 	}
 	if len(cands) != 2 {
-		t.Errorf("候选应该是那两个可执行文件，得到 %v", cands)
+		t.Errorf("the candidates should be those two executables, got %v", cands)
 	}
-	// 只有一个可执行文件 → 就是它，名字对不上也认（作者给二进制起别的名字很常见）。
+	// Exactly one executable -> that is it, even if the name does not match (authors giving
+	// the binary a different name is common).
 	if hit, _ := pickExecutable(dir, []string{"helper", "README.md"}, "tinyserve"); hit != "helper" {
-		t.Errorf("只有一个可执行文件时应该直接用它，得到 %q", hit)
+		t.Errorf("with a single executable it should just use it, got %q", hit)
 	}
-	// 一个可执行的都没有。
+	// Not a single executable.
 	if hit, cands := pickExecutable(dir, []string{"README.md"}, "tinyserve"); hit != "" || cands != nil {
-		t.Errorf("没有可执行文件时不该给出任何东西：%q %v", hit, cands)
+		t.Errorf("with no executable it should hand back nothing: %q %v", hit, cands)
 	}
 }
 
-// 探不到不算失败：条目照出，只是 [bin] 仍然是猜的 —— 但报告里必须说。
+// A failed probe is not a failure: the entry still comes out, [bin] is just still a guess
+// -- but the report has to say so.
 func TestProbeFailureStillProducesAnEntryButSaysSo(t *testing.T) {
-	// 服务器只认 .tar.gz，这里给一个空包让解压失败。
+	// The server only serves .tar.gz, so hand it garbage and let extraction fail.
 	rs, err := probeGen(t, []byte("not a tarball"), filepath.Join(t.TempDir(), "idx.json"))
 	if err != nil {
-		t.Fatalf("探测失败不该让整条失败：%v", err)
+		t.Fatalf("a failed probe must not fail the whole entry: %v", err)
 	}
 	p := rs[0].pack
 	if p.binProbed {
-		t.Fatal("探测没成却说成探到了")
+		t.Fatal("the probe did not succeed, yet it claims it did")
 	}
 	if !strings.Contains(strings.Join(p.notes, "\n"), "probe failed") {
-		t.Fatalf("报告里没说探测失败：%v", p.notes)
+		t.Fatalf("the report does not mention the failed probe: %v", p.notes)
 	}
 }
 
 func TestProbePickPrefersLinuxAmd64(t *testing.T) {
 	art := map[string]string{"linux/arm64": "a", "linux/amd64": "b", "darwin/arm64": "c"}
 	if plat, tmpl := probePick(art); plat != "linux/amd64" || tmpl != "b" {
-		t.Errorf("挑了 %q/%q", plat, tmpl)
+		t.Errorf("picked %q/%q", plat, tmpl)
 	}
 	if plat, _ := probePick(map[string]string{"darwin/arm64": "c"}); plat != "" {
-		t.Errorf("没有 linux 构建时应该放弃探测，挑了 %q", plat)
+		t.Errorf("with no linux build it should give up on probing, picked %q", plat)
 	}
 }
 
-// 探到的那个文件的【基名】才是作者真正发出来的命令名。
+// The BASENAME of the probed file is the command name the author actually ships.
 //
-// 默认值来自资产名前缀，而那两者经常不是一回事：BurntSushi/ripgrep 的资产叫
-// ripgrep-15.2.0-….tar.gz，包里那个文件叫 rg。照默认值写出来的是
-// `[bin] ripgrep = "rg"` —— 装完能跑，只是 PATH 上那个名字全世界的文档里都没有
-// （没有人写过 `ripgrep --version`）。这个坏法状态码看不见、--probe 的报告里
-// 也说「已探测」，只有把两边都读一遍才发现。
+// The default comes from the asset-name prefix, and the two are often not the same thing:
+// BurntSushi/ripgrep's asset is called ripgrep-15.2.0-....tar.gz while the file inside is
+// called rg. Taking the default writes `[bin] ripgrep = "rg"` -- it installs and runs,
+// only the name on PATH appears in no documentation anywhere (nobody has ever written
+// `ripgrep --version`). This failure is invisible in status codes and --probe's report
+// says "probed" too; only reading both sides turns it up.
 func TestProbedBasenameWinsOverTheAssetNamePrefix(t *testing.T) {
 	tgz := makeTarGz(t, []tarEntry{
-		{"ts", 0o755}, // 包里的真名和资产名前缀 tinyserve 不一样
+		{"ts", 0o755}, // the real name inside differs from the asset-name prefix tinyserve
 		{"README.md", 0o644},
 	})
 	rs, err := probeGen(t, tgz, filepath.Join(t.TempDir(), "idx.json"))
 	if err != nil {
-		t.Fatalf("探测失败：%v", err)
+		t.Fatalf("probe failed: %v", err)
 	}
 	p := rs[0].pack
 	if p.binName != "ts" {
-		t.Fatalf("[bin] 左边 = %q，想要 ts（包里那个文件的基名）", p.binName)
+		t.Fatalf("left of [bin] = %q, want ts (the basename of the file in the archive)", p.binName)
 	}
-	// 包名/目录名仍然跟着仓库和资产名走 —— 改的只是往 PATH 上放的那个名字。
+	// The package/directory name still follows the repo and the asset name -- the only thing
+	// that changed is the name put on PATH.
 	if p.name != "tinyserve" {
-		t.Errorf("name = %q，不该跟着变（那是包目录名）", p.name)
+		t.Errorf("name = %q, it should not follow along (that is the package directory name)", p.name)
 	}
 	if !strings.Contains(rs[0].entry.Toyfile, `ts = "ts"`) {
-		t.Fatalf("toyfile 里的 [bin] 不对：\n%s", rs[0].entry.Toyfile)
+		t.Fatalf("the [bin] in the toyfile is wrong:\n%s", rs[0].entry.Toyfile)
 	}
-	// 改了名字必须在报告里说一声：§14.9 第 2 条留给人的那一眼看的就是这一列。
+	// Changing the name has to be said in the report: that column is the one look §14.9
+	// rule 2 leaves for a person.
 	var said bool
 	for _, n := range p.notes {
 		if strings.Contains(n, "ts") && strings.Contains(n, "tinyserve") {
@@ -258,24 +272,25 @@ func TestProbedBasenameWinsOverTheAssetNamePrefix(t *testing.T) {
 		}
 	}
 	if !said {
-		t.Errorf("换了命令名却没在 notes 里说：%v", p.notes)
+		t.Errorf("the command name changed but the notes do not say so: %v", p.notes)
 	}
 }
 
-// 反过来：基名和默认值一样时不要产出噪音。一条每次都响的说明等于没有说明。
+// The other direction: produce no noise when the basename matches the default. A note that
+// fires every time is no note at all.
 func TestProbedBasenameSaysNothingWhenItMatches(t *testing.T) {
 	tgz := makeTarGz(t, []tarEntry{{"bin/tinyserve", 0o755}})
 	rs, err := probeGen(t, tgz, filepath.Join(t.TempDir(), "idx.json"))
 	if err != nil {
-		t.Fatalf("探测失败：%v", err)
+		t.Fatalf("probe failed: %v", err)
 	}
 	p := rs[0].pack
 	if p.binName != "tinyserve" {
-		t.Fatalf("binName = %q，想要 tinyserve", p.binName)
+		t.Fatalf("binName = %q, want tinyserve", p.binName)
 	}
 	for _, n := range p.notes {
 		if strings.Contains(n, "command name taken from the probed file") {
-			t.Errorf("名字没变却报了一句：%s", n)
+			t.Errorf("the name did not change, yet it reported one: %s", n)
 		}
 	}
 }

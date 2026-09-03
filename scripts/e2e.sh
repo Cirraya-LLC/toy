@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# 端到端测试：完全离线，不碰网络，不碰真实的 ~/.toy。
+# End-to-end test: fully offline, never touches the network, never touches the real ~/.toy.
 #
-# 思路是造一个假的托管方：clone 模板指向本地 git 仓库（git ls-remote 认本地路径），
-# raw 和 release 模板指向 file:// —— 于是整条 install 链路（ls-remote 拿 tag →
-# 挑 semver → 取 toy.toml → 下载资产 → 验哈希 → 解压 → 软链）都能离线跑通。
+# The trick is a fake host: the clone template points at a local git repo (git ls-remote
+# accepts local paths) and the raw/release templates point at file:// — so the whole
+# install chain (ls-remote for tags -> pick semver -> fetch toy.toml -> download asset ->
+# verify checksum -> extract -> symlink) runs offline.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,46 +20,46 @@ ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=$((fail+1)); }
 check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
-# macOS 没有 sha256sum（只有 shasum），Linux 反过来常常没有 shasum。两边都认。
+# macOS has no sha256sum (only shasum); Linux often has no shasum. Accept either.
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
   else shasum -a 256 "$1" | cut -d' ' -f1
   fi
 }
 
-echo "== 构建 =="
+echo "== build =="
 ( cd "$ROOT" && go build -o "$TOY" ./cmd/toy )
-ok "toy 构建成功"
+ok "toy builds"
 
-echo "== 全新的 store：一个索引都没有 =="
-# 内置索引现在是空的（store.DefaultIndexURL）。没有索引是合法状态，不是故障：
-# search 要说清楚怎么加，doctor 不许为这件事打 ✗。用一个单独的 TOY_HOME 测，
-# 免得被下面那份写死的 config.toml 影响。
+echo "== fresh store: no index configured at all =="
+# The built-in index is empty now (store.DefaultIndexURL). Having no index is a valid
+# state, not a failure: search must say how to add one, and doctor must not print a ✗
+# for it. Use a separate TOY_HOME so the config.toml written further down can't skew it.
 FRESH="$WORK/fresh"
-check "全新 store 的 search 说「还没配索引」而不是「没有匹配」" \
+check "search on a fresh store says 'no index configured', not 'no matches'" \
       "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'No index is configured'"
-check "search 给出了 toy index add 的示例（含 file://）" \
+check "search shows a toy index add example (with file://)" \
       "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'toy index add' && \
        TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'file://'"
-check "search 提醒 github: 那条路不需要索引" \
+check "search points out that github: needs no index" \
       "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'toy install github:owner/repo'"
-check "写出来的默认 config.toml 里没有内置索引" \
+check "the default config.toml it writes carries no built-in index" \
       "! grep -q '^\[\[index\]\]' '$FRESH/config.toml'"
-# doctor 仍会因为 PATH 没配而失败，所以只断言「没配索引」这一条不是 ✗。
-# doctor 的退出码本来就是 1（PATH 没配），而 set -o pipefail 会让整条管道跟着失败 ——
-# 那不是这里要断言的东西，所以先落成文件再 grep。
+# doctor still fails on an unconfigured PATH, so only assert that "no index" isn't a ✗.
+# doctor's exit code is 1 anyway (PATH), and set -o pipefail would fail the whole
+# pipeline over it — which is not what's being asserted here. Write to a file, then grep.
 TOY_HOME="$FRESH" "$TOY" doctor >"$WORK/doctor-fresh.log" 2>&1 || true
-check "doctor 对「没配索引」不打 ✗" \
+check "doctor does not print ✗ for 'no index configured'" \
       "grep 'no index configured' '$WORK/doctor-fresh.log' | grep -q '✓'"
-check "doctor 里没有任何一行 ✗ 是在说索引" \
+check "no ✗ line in doctor is about the index" \
       "! grep '^✗' '$WORK/doctor-fresh.log' | grep -qi index"
 
-echo "== 造一个假的上游仓库 =="
+echo "== build a fake upstream repo =="
 UP="$WORK/upstream"
 mkdir -p "$UP/dist"
 cat > "$UP/toy.toml" <<'EOF'
 name    = "hello"
-desc    = "端到端测试用的样本工具"
+desc    = "sample tool for the end-to-end test"
 license = "MIT"
 
 [bin]
@@ -71,21 +72,21 @@ hello = "hello"
 "darwin/arm64" = "hello_{version}_darwin_arm64.tar.gz"
 EOF
 
-# 造 release 资产：一个 tar.gz，里面一个可执行文件
+# Build the release asset: one tar.gz holding one executable.
 BUILD="$WORK/build"; mkdir -p "$BUILD"
 printf '#!/bin/sh\necho "hello from toy e2e"\n' > "$BUILD/hello"
 chmod +x "$BUILD/hello"
 GOOS_="$(go env GOOS)"; GOARCH_="$(go env GOARCH)"
 ASSET="hello_1.2.0_${GOOS_}_${GOARCH_}.tar.gz"
 tar -C "$BUILD" -czf "$UP/dist/$ASSET" hello
-ok "造出 release 资产 $ASSET"
+ok "built release asset $ASSET"
 
 ( cd "$UP" && git init -q && git add -A \
   && git -c user.email=t@e.st -c user.name=t commit -q -m init \
   && git tag v1.0.0 && git tag v1.2.0 && git tag release-junk && git tag v2.0.0-rc.1 )
-ok "上游仓库有 4 个 tag（含一个非 semver 和一个预发布）"
+ok "upstream has 4 tags (one non-semver, one prerelease)"
 
-echo "== 配一个指向本地的托管方 =="
+echo "== point a host at the local repo =="
 mkdir -p "$TOY_HOME"
 cat > "$TOY_HOME/config.toml" <<EOF
 [[index]]
@@ -98,46 +99,51 @@ clone   = "$UP"
 release = "file://$UP/dist/{asset}"
 web     = "file://$UP"
 EOF
-ok "写好 config.toml"
+ok "wrote config.toml"
 
-echo "== 装 =="
+echo "== install =="
 if "$TOY" install local:test/hello 2>&1 | tee "$WORK/install.log"; then
-  ok "install 退出码 0"
+  ok "install exits 0"
 else
-  bad "install 失败"; cat "$WORK/install.log"
+  bad "install failed"; cat "$WORK/install.log"
 fi
 
-check "选中了最高的正式版 v1.2.0（不是 v2.0.0-rc.1，也没被 release-junk 干扰）" \
+check "picked the highest stable release v1.2.0 (not v2.0.0-rc.1, undisturbed by release-junk)" \
       "grep -q '1\.2\.0' '$WORK/install.log'"
-check "软链建在 \$TOY_HOME/bin 下"          "test -L '$TOY_HOME/bin/hello'"
-check "装好的命令真的能跑"                    "hello | grep -q 'hello from toy e2e'"
-check "写了安装清单"                          "ls '$TOY_HOME/installed'/*/*/*.toml >/dev/null 2>&1 || ls -R '$TOY_HOME/installed' | grep -q toml"
-check "缓存文件名就是 sha256（内容寻址）"      "ls '$TOY_HOME/cache' | grep -qE '^[0-9a-f]{64}'"
-check "打印了信任等级"                        "grep -qE 'unsigned|✓ signed|sha256 pinned' '$WORK/install.log'"
-# 上面那个 toy.toml 只写了两段 key（绝大多数项目都是这样）。linux 上首选候选永远是
-# 我们自己合成的 linux/amd64/gnu，所以「没命中首选就报回退」会让每一次普通安装都
-# 多一句假警告 —— 而一条每次都响的警告会把真的 musl / Rosetta 警告一起淹掉。
-check "只发两段 key 的包不报假回退"            "! grep -q '^warning:' '$WORK/install.log'"
+check "symlink lands under \$TOY_HOME/bin"    "test -L '$TOY_HOME/bin/hello'"
+check "the installed command actually runs"   "hello | grep -q 'hello from toy e2e'"
+check "an install manifest was written"       "ls '$TOY_HOME/installed'/*/*/*.toml >/dev/null 2>&1 || ls -R '$TOY_HOME/installed' | grep -q toml"
+check "cache filename is the sha256 (content-addressed)" "ls '$TOY_HOME/cache' | grep -qE '^[0-9a-f]{64}'"
+check "trust level was printed"               "grep -qE 'unsigned|✓ signed|sha256 pinned' '$WORK/install.log'"
+# The toy.toml above declares only two-segment keys, which is what almost every project
+# does. On linux the first candidate is always the linux/amd64/gnu key we synthesize
+# ourselves, so "warn whenever the first candidate misses" would add a bogus warning to
+# every ordinary install — and a warning that fires every time drowns out the real musl
+# and Rosetta ones.
+check "a package with only two-segment keys raises no bogus fallback warning" \
+      "! grep -q '^warning:' '$WORK/install.log'"
 
 echo "== list / info =="
-# 规格 §9：给人看的输出走 stderr，stdout 留给机器可读的那份（--json）。
-# 所以这里要 2>&1 —— 上面那条 install 的检查本来就是这么写的。
-check "list 列得出来"                         "'$TOY' list 2>&1 | grep -q hello"
-check "info 跑得通"                           "'$TOY' info local:test/hello"
-# list 和 uninstall 都认已装的那个短名字，info 以前只认 ref —— 同一个字符串在同一个
-# CLI 里有两种含义，而用户是从 list 里抄的那个名字。装过的包 info 也得认。
-check "info 认 list 里印出来的那个短名字"        "'$TOY' info hello 2>&1 | grep -q hello"
-check "真的写坏的 ref 仍然报解析错误"             "! '$TOY' info 'not a ref!!' 2>&1 | grep -q '^name '"
+# Spec §9: human-facing output goes to stderr, stdout is reserved for the machine-readable
+# form (--json). Hence the 2>&1 here — the install check above already does the same.
+check "list shows it"                         "'$TOY' list 2>&1 | grep -q hello"
+check "info works"                            "'$TOY' info local:test/hello"
+# list and uninstall both accept the installed short name; info used to accept only a ref
+# — the same string meaning two different things in one CLI, while the user is copying
+# that name straight out of list. info must accept it too for installed packages.
+check "info accepts the short name that list printed" "'$TOY' info hello 2>&1 | grep -q hello"
+check "a genuinely malformed ref still reports a parse error" "! '$TOY' info 'not a ref!!' 2>&1 | grep -q '^name '"
 
-echo "== 走镜像要如实说 =="
-# 原始地址挂掉、字节从镜像拿到时必须打印出来（铁律 8）。镜像只在 toy.toml 写了
-# [sha256] 时才会被用到 —— 没有 hash 就没法验证镜像给的是不是那个东西。
+echo "== a mirror must be disclosed =="
+# When the original URL is down and the bytes came from a mirror, say so (iron law 8).
+# Mirrors are only reachable when toy.toml declares [sha256] — without a hash there is no
+# way to verify that the mirror handed back the right thing.
 MIRROR="$WORK/mirror"; mkdir -p "$MIRROR"
 SUM="$(sha256_of "$UP/dist/$ASSET")"
 cp "$UP/dist/$ASSET" "$MIRROR/$SUM"
 cat > "$UP/toy.toml" <<EOF
 name    = "mirrored"
-desc    = "验证镜像回退"
+desc    = "exercises the mirror fallback"
 license = "MIT"
 
 [bin]
@@ -150,9 +156,11 @@ mirrored = "hello"
 "$GOOS_/$GOARCH_" = "$SUM"
 EOF
 ( cd "$UP" && git add -A && git -c user.email=t@e.st -c user.name=t commit -q -m mirrored )
-# release 模板指向一个不存在的目录 → 原始地址必然失败，只剩镜像那条路。
-# mirrors 必须写在任何表头【之前】：TOML 里 [[index]] 之后的裸键值属于那张表，
-# 写在下面的话它会变成索引条目的一个字段，然后被静默忽略（镜像等于没配）。
+# Point the release template at a directory that does not exist -> the original URL is
+# guaranteed to fail and only the mirror path is left.
+# mirrors must be written BEFORE any table header: in TOML a bare key after [[index]]
+# belongs to that table, so putting it below turns it into a field of the index entry,
+# which is then silently ignored (i.e. no mirror configured at all).
 cat > "$TOY_HOME/config.toml" <<EOF
 mirrors = ["file://$MIRROR"]
 
@@ -168,11 +176,11 @@ web     = "file://$UP"
 EOF
 rm -f "$TOY_HOME/cache/"*
 "$TOY" install local:test/mirrored >"$WORK/mirror.log" 2>&1 || true
-check "从镜像装成功了"                        "test -L '$TOY_HOME/bin/mirrored'"
-check "说明了这份字节来自镜像"                 "grep -q 'came from the mirror' '$WORK/mirror.log'"
-check "说明里带着那个镜像地址"                 "grep -q '$MIRROR' '$WORK/mirror.log'"
+check "installed from the mirror"             "test -L '$TOY_HOME/bin/mirrored'"
+check "said the bytes came from a mirror"     "grep -q 'came from the mirror' '$WORK/mirror.log'"
+check "named the mirror it used"              "grep -q '$MIRROR' '$WORK/mirror.log'"
 "$TOY" uninstall mirrored >/dev/null 2>&1 || true
-# 复原成原来那份 config，后面的用例还要用。
+# Restore the original config; the cases below still need it.
 cat > "$TOY_HOME/config.toml" <<EOF
 [[index]]
 name = "local"
@@ -185,10 +193,11 @@ release = "file://$UP/dist/{asset}"
 web     = "file://$UP"
 EOF
 
-echo "== cargo-dist 的形状：唯一那层顶层目录要被剥掉 =="
-# 那个目录名同时含版本号和 target triple，而 [bin] 是单个字符串、不按平台变、
-# 也不展开 {version} —— 表达不了。不剥的话 ripgrep / fd / bat / delta / eza
-# 这一整块（现代 CLI 工具里最大的一块）一个都收不了。
+echo "== cargo-dist shape: the single top-level directory gets stripped =="
+# That directory name carries both the version and the target triple, while [bin] is a
+# single string that does not vary by platform and does not expand {version} — it simply
+# cannot express it. Without stripping, ripgrep / fd / bat / delta / eza — the largest
+# single block of modern CLI tools — are all unpackageable.
 NEST="$WORK/nest"; mkdir -p "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/doc"
 printf '#!/bin/sh\necho "nested ok"\n' > "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/tinytool"
 chmod +x "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/tinytool"
@@ -196,7 +205,7 @@ echo man > "$NEST/tinytool-3.1.0-${GOOS_}_${GOARCH_}/doc/tinytool.1"
 tar -C "$NEST" -czf "$UP/dist/tinytool_1.2.0_${GOOS_}_${GOARCH_}.tar.gz" "tinytool-3.1.0-${GOOS_}_${GOARCH_}"
 cat > "$UP/toy.toml" <<EOF
 name = "tinytool"
-desc = "整棵树套在一层目录里"
+desc = "whole tree wrapped in one directory"
 license = "MIT"
 [bin]
 tinytool = "tinytool"
@@ -205,21 +214,21 @@ tinytool = "tinytool"
 EOF
 ( cd "$UP" && git add -A && git -c user.email=t@e.st -c user.name=t commit -q -m nest )
 if "$TOY" install local:test/tinytool >"$WORK/nest.log" 2>&1; then
-  ok "[bin] 写成剥完之后的 \"tinytool\" 就能装上"
+  ok "[bin] written as the post-strip \"tinytool\" installs fine"
 else
-  bad "套一层目录的包装不上"; cat "$WORK/nest.log"
+  bad "a package wrapped in one directory failed to install"; cat "$WORK/nest.log"
 fi
-check "装出来的命令真的能跑"                  "tinytool | grep -q 'nested ok'"
+check "the installed command actually runs"   "tinytool | grep -q 'nested ok'"
 PKGDIR="$(dirname "$(readlink "$TOY_HOME/bin/tinytool")")"
-check "包目录顶层直接就是 tinytool，那层目录没了" \
+check "package dir has tinytool at the top; the wrapper directory is gone" \
       "test -f '$PKGDIR/tinytool' && test ! -e '$PKGDIR/tinytool-3.1.0-${GOOS_}_${GOARCH_}'"
-check "目录里别的东西一个没丢（剥的是层，不是内容）" "test -f '$PKGDIR/doc/tinytool.1'"
+check "nothing else was lost (a layer is stripped, not content)" "test -f '$PKGDIR/doc/tinytool.1'"
 "$TOY" uninstall tinytool >/dev/null 2>&1 || true
 
-echo "== 铁律：不许遮蔽 PATH 上已有的命令 =="
+echo "== iron law: never shadow a command already on PATH =="
 cat > "$UP/toy.toml" <<'EOF'
 name = "evil"
-desc = "试图遮蔽 ls"
+desc = "tries to shadow ls"
 license = "MIT"
 [bin]
 ls = "hello"
@@ -231,16 +240,16 @@ ls = "hello"
 EOF
 ( cd "$UP" && git add -A && git -c user.email=t@e.st -c user.name=t commit -q -m evil && git tag -f v1.2.0 -m x >/dev/null 2>&1 || true )
 if "$TOY" install local:test/evil >"$WORK/evil.log" 2>&1; then
-  bad "遮蔽 ls 的包竟然装上了（铁律 5 被破坏）"
+  bad "a package shadowing ls got installed (iron law 5 broken)"
 else
-  ok "拒绝了会遮蔽 ls 的包"
+  ok "refused the package that would shadow ls"
 fi
-check "拒绝的理由说得清楚"                    "grep -q 'shadow' '$WORK/evil.log'"
+check "the refusal explains itself"           "grep -q 'shadow' '$WORK/evil.log'"
 
-echo "== 铁律：sha256 对不上必须拒绝 =="
+echo "== iron law: a checksum mismatch must be refused =="
 cat > "$UP/toy.toml" <<'EOF'
 name = "badsum"
-desc = "哈希故意写错"
+desc = "checksum deliberately wrong"
 license = "MIT"
 [bin]
 badsum = "hello"
@@ -257,19 +266,21 @@ badsum = "hello"
 EOF
 ( cd "$UP" && git add -A && git -c user.email=t@e.st -c user.name=t commit -q -m badsum )
 if "$TOY" install local:test/badsum >"$WORK/bad.log" 2>&1; then
-  bad "哈希对不上竟然装上了（铁律 4 被破坏）"
+  bad "a checksum mismatch got installed (iron law 4 broken)"
 else
-  ok "拒绝了哈希对不上的包"
+  ok "refused the package whose checksum did not match"
 fi
-# 光看退出码不够：任何一处先报错（资产名拼错、tag 没找着）都能让它非零，
-# 那样这条断言就在为一件没发生的事发绿灯。必须是【因为哈希】被拒的。
-check "拒绝的理由确实是 sha256 对不上"          "grep -q 'sha256' '$WORK/bad.log'"
-check "报错里把期望值和实际值都摆出来了"          "grep -q '1111111111111111111111111111111111111111111111111111111111111111' '$WORK/bad.log' && grep -qE 'expected .*got' '$WORK/bad.log'"
-check "哈希不对时什么都没装上"                   "! test -e '$TOY_HOME/bin/badsum'"
+# The exit code alone is not enough: any earlier error (wrong asset name, no tag found)
+# also makes it non-zero, and then this assertion is a green light for something that
+# never happened. It has to be refused BECAUSE of the checksum.
+check "the refusal really is a sha256 mismatch" "grep -q 'sha256' '$WORK/bad.log'"
+check "the error shows both the expected and the actual value" "grep -q '1111111111111111111111111111111111111111111111111111111111111111' '$WORK/bad.log' && grep -qE 'expected .*got' '$WORK/bad.log'"
+check "nothing was installed on a checksum mismatch" "! test -e '$TOY_HOME/bin/badsum'"
 
-echo "== toy init：从 dist 的文件名反推 toy.toml，然后真的装它 =="
-# 这条命令的价值全在「作者不用手写 [artifact]」，所以验收标准是整条链路：
-# init 生成的文件必须能被 install 原样吃下去，不是"看起来像那么回事"。
+echo "== toy init: infer toy.toml from dist filenames, then actually install it =="
+# This command's whole value is "the author never hand-writes [artifact]", so the
+# acceptance criterion is the full chain: what init generates must be swallowed by
+# install verbatim, not merely look plausible.
 UP2="$WORK/upstream2"
 mkdir -p "$UP2/dist"
 printf '#!/bin/sh\necho "gadget lives"\n' > "$BUILD/gadget"
@@ -279,16 +290,16 @@ for P in linux_x86_64 linux_arm64 darwin_x86_64 darwin_arm64 windows_x86_64; do
 done
 echo notanasset > "$UP2/dist/checksums.txt"
 ( cd "$UP2" && "$TOY" init --name gadget >"$WORK/init.log" 2>&1 )
-check "init 退出码 0 并写出了 toy.toml"        "test -f '$UP2/toy.toml'"
-check "版本号被换成了 {version} 占位符"          "grep -q 'gadget_{version}_linux_x86_64.tar.gz' '$UP2/toy.toml'"
-check "toy.toml 里没有留下写死的版本号"          "! grep -q '2\.1\.0' '$UP2/toy.toml'"
-check "x86_64 被认成了 amd64"                  "grep -q '\"linux/amd64\"' '$UP2/toy.toml'"
-check "aarch64/arm64 也认出来了"                "grep -q '\"darwin/arm64\"' '$UP2/toy.toml'"
-check "算出了 [sha256]（铁律 4：从 TOFU 升到强制校验）" \
+check "init exits 0 and wrote a toy.toml"     "test -f '$UP2/toy.toml'"
+check "the version was replaced by the {version} placeholder" "grep -q 'gadget_{version}_linux_x86_64.tar.gz' '$UP2/toy.toml'"
+check "no hard-coded version was left in toy.toml" "! grep -q '2\.1\.0' '$UP2/toy.toml'"
+check "x86_64 was recognized as amd64"        "grep -q '\"linux/amd64\"' '$UP2/toy.toml'"
+check "aarch64/arm64 was recognized too"      "grep -q '\"darwin/arm64\"' '$UP2/toy.toml'"
+check "[sha256] was computed (iron law 4: TOFU upgraded to enforced verification)" \
       "grep -q '^\[sha256\]' '$UP2/toy.toml' && grep -qE '^\"linux/amd64\" = \"[0-9a-f]{64}\"' '$UP2/toy.toml'"
-check "Windows 被跳过且说明了原因"               "! grep -q 'windows' '$UP2/toy.toml' && grep -q 'Windows' '$WORK/init.log'"
-check "checksums.txt 这种非资产没进 [artifact]"  "! grep -q 'checksums' '$UP2/toy.toml'"
-check "明说了哪些地方是猜的"                     "grep -q 'were guessed' '$WORK/init.log'"
+check "Windows was skipped and the reason was stated" "! grep -q 'windows' '$UP2/toy.toml' && grep -q 'Windows' '$WORK/init.log'"
+check "non-assets like checksums.txt stayed out of [artifact]" "! grep -q 'checksums' '$UP2/toy.toml'"
+check "it says out loud which parts were guessed" "grep -q 'were guessed' '$WORK/init.log'"
 ( cd "$UP2" && git init -q && git add -A \
   && git -c user.email=t@e.st -c user.name=t commit -q -m init && git tag v2.1.0 )
 cat > "$TOY_HOME/config.toml" <<EOF
@@ -303,16 +314,16 @@ release = "file://$UP2/dist/{asset}"
 web     = "file://$UP2"
 EOF
 if "$TOY" install local:test/gadget >"$WORK/gadget.log" 2>&1; then
-  ok "init 生成的 toy.toml 能被 install 原样装上"
+  ok "the toy.toml init generated installs verbatim"
 else
-  bad "init 生成的 toy.toml 装不上"; cat "$WORK/gadget.log"
+  bad "the toy.toml init generated does not install"; cat "$WORK/gadget.log"
 fi
-check "装出来的命令真的能跑"                    "gadget | grep -q 'gadget lives'"
-check "已存在 toy.toml 时不覆盖"                "( cd '$UP2' && ! '$TOY' init --name gadget )"
-check "--force 才覆盖"                          "( cd '$UP2' && '$TOY' init --force --name gadget )"
-check "一个都认不出来时报错而不是写空壳"          "( cd '$WORK' && mkdir -p emptydist/dist && touch emptydist/dist/README && cd emptydist && ! '$TOY' init && ! test -f toy.toml )"
+check "the installed command actually runs"   "gadget | grep -q 'gadget lives'"
+check "an existing toy.toml is not overwritten" "( cd '$UP2' && ! '$TOY' init --name gadget )"
+check "--force does overwrite it"             "( cd '$UP2' && '$TOY' init --force --name gadget )"
+check "recognizing nothing is an error, not an empty stub" "( cd '$WORK' && mkdir -p emptydist/dist && touch emptydist/dist/README && cd emptydist && ! '$TOY' init && ! test -f toy.toml )"
 "$TOY" uninstall gadget >/dev/null 2>&1 || true
-# 复原 config，后面的用例还指着 $UP。
+# Restore the config; the remaining cases still point at $UP.
 cat > "$TOY_HOME/config.toml" <<EOF
 [[index]]
 name = "local"
@@ -325,24 +336,26 @@ release = "file://$UP/dist/{asset}"
 web     = "file://$UP"
 EOF
 
-echo "== 卸载 =="
+echo "== uninstall =="
 "$TOY" uninstall hello >/dev/null 2>&1 || true
-check "软链没了"                              "! test -e '$TOY_HOME/bin/hello'"
-check "缓存留着（内容寻址，同时是镜像目录）"    "ls '$TOY_HOME/cache' | grep -qE '^[0-9a-f]{64}'"
+check "the symlink is gone"                   "! test -e '$TOY_HOME/bin/hello'"
+check "the cache stays (content-addressed, and it doubles as a mirror dir)" "ls '$TOY_HOME/cache' | grep -qE '^[0-9a-f]{64}'"
 
 echo "== doctor / keygen / serve =="
-check "doctor 跑得通"                         "'$TOY' doctor"
-# 平台是【中性信息】不是检查项：musl 机器既不对也不错，给它一个红叉会让人去修一件没坏的事。
-# 先落成文件再 grep：`doctor | grep -q` 里 grep 一命中就退出，doctor 吃到 SIGPIPE，
-# set -o pipefail 会把整条管道判失败 —— 那和这里要断言的东西没有半点关系。
+check "doctor runs"                           "'$TOY' doctor"
+# The platform is NEUTRAL INFORMATION, not a check: a musl box is neither right nor
+# wrong, and a red ✗ would send someone off to fix something that isn't broken.
+# Write to a file, then grep: with `doctor | grep -q` the grep exits on first match,
+# doctor takes SIGPIPE, and set -o pipefail fails the pipeline — which has nothing at
+# all to do with what is being asserted here.
 "$TOY" doctor >"$WORK/doctor.log" 2>&1 || true
-check "doctor 打印了当前平台"                   "grep -q '^platform ' '$WORK/doctor.log'"
-check "doctor 打印了候选顺序"                   "grep -q 'tried in this order' '$WORK/doctor.log'"
-check "平台那几行不带 ✓/✗"                     "! grep -E '^[✓✗].*(tried in this order|platform )' '$WORK/doctor.log'"
-check "keygen 生成了密钥"                     "'$TOY' keygen && test -f '$TOY_HOME/keys/key.sec'"
-check "私钥权限是 0600"                       "test \"\$(stat -c %a '$TOY_HOME/keys/key.sec' 2>/dev/null || stat -f %Lp '$TOY_HOME/keys/key.sec')\" = 600"
-check "keygen 不覆盖已有密钥"                 "! '$TOY' keygen"
+check "doctor prints the current platform"    "grep -q '^platform ' '$WORK/doctor.log'"
+check "doctor prints the candidate order"     "grep -q 'tried in this order' '$WORK/doctor.log'"
+check "the platform lines carry no ✓/✗"       "! grep -E '^[✓✗].*(tried in this order|platform )' '$WORK/doctor.log'"
+check "keygen generates a key pair"           "'$TOY' keygen && test -f '$TOY_HOME/keys/key.sec'"
+check "the secret key is mode 0600"           "test \"\$(stat -c %a '$TOY_HOME/keys/key.sec' 2>/dev/null || stat -f %Lp '$TOY_HOME/keys/key.sec')\" = 600"
+check "keygen refuses to overwrite an existing key" "! '$TOY' keygen"
 
 echo
-printf '通过 %d，失败 %d\n' "$pass" "$fail"
+printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

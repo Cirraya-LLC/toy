@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// 独立复核：PAX path 记录里的穿越到底会不会被拒。
+// Independent double-check: is a traversal smuggled in a PAX path record really refused?
 func TestProbePAXTraversal(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -31,12 +31,12 @@ func TestProbePAXTraversal(t *testing.T) {
 
 	files, err := Extract(src, dest)
 	t.Logf("files=%v err=%v", files, err)
-	// 真正的判据：destDir 外面有没有多出文件
+	// The real test: did anything appear outside destDir?
 	if _, serr := os.Stat(filepath.Join(root, "SECRET")); serr == nil {
-		t.Fatal("写到 destDir 外面去了")
+		t.Fatal("wrote outside destDir")
 	}
-	// 再看 tar reader 到底把 Name 解成了什么
+	// And what did the tar reader actually resolve Name to?
 	tr := tar.NewReader(bytes.NewReader(buf.Bytes()))
 	h, _ := tr.Next()
-	t.Logf("reader 看到的 Name=%q", h.Name)
+	t.Logf("Name as the reader sees it = %q", h.Name)
 }

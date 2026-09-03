@@ -11,8 +11,9 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/host"
 )
 
-// newStore 开一个临时 store，并把 PATH 清空 —— 遮蔽检查读的是真实 PATH，
-// 不隔离的话测试结果取决于跑测试的机器上装了什么。
+// newStore opens a temporary store and clears PATH. The shadow check reads the
+// real PATH, so without isolating it the results depend on what happens to be
+// installed on the machine running the tests.
 func newStore(t *testing.T) *Store {
 	t.Helper()
 	t.Setenv("PATH", "")
@@ -23,7 +24,7 @@ func newStore(t *testing.T) *Store {
 	return s
 }
 
-// mkexec 造一个可执行文件，返回它的路径。
+// mkexec creates an executable file and returns its path.
 func mkexec(t *testing.T, dir, name string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -36,12 +37,12 @@ func mkexec(t *testing.T, dir, name string) string {
 func TestOpenCreatesLayout(t *testing.T) {
 	tests := []struct {
 		name    string
-		root    func(t *testing.T) string // 返回传给 Open 的 root
+		root    func(t *testing.T) string // returns the root passed to Open
 		toyHome string
-		wantEnv bool // 期望落在 TOY_HOME 上
+		wantEnv bool // expect it to land on TOY_HOME
 	}{
-		{name: "显式 root", root: func(t *testing.T) string { return t.TempDir() }},
-		{name: "root 为空时用 TOY_HOME", root: func(t *testing.T) string { return "" }, toyHome: "x", wantEnv: true},
+		{name: "explicit root", root: func(t *testing.T) string { return t.TempDir() }},
+		{name: "empty root falls back to TOY_HOME", root: func(t *testing.T) string { return "" }, toyHome: "x", wantEnv: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,7 +57,7 @@ func TestOpenCreatesLayout(t *testing.T) {
 				t.Fatalf("Open: %v", err)
 			}
 			if tc.wantEnv && s.Root != filepath.Join(base, tc.toyHome) {
-				t.Fatalf("Root = %q，想要 TOY_HOME 指的那个", s.Root)
+				t.Fatalf("Root = %q, want the one TOY_HOME points at", s.Root)
 			}
 			for _, d := range []string{
 				s.BinDir(), s.CacheDir(), s.KeysDir(), s.KnownDir(), s.IndexDir(),
@@ -64,18 +65,18 @@ func TestOpenCreatesLayout(t *testing.T) {
 			} {
 				fi, err := os.Stat(d)
 				if err != nil {
-					t.Errorf("目录没建出来 %s: %v", d, err)
+					t.Errorf("directory was not created %s: %v", d, err)
 					continue
 				}
 				if !fi.IsDir() {
-					t.Errorf("%s 不是目录", d)
+					t.Errorf("%s is not a directory", d)
 				}
 			}
 		})
 	}
 }
 
-// 私钥放 keys/，别人不该读得到。
+// Private keys live in keys/. Nobody else gets to read them.
 func TestOpenKeysDirIsPrivate(t *testing.T) {
 	s := newStore(t)
 	fi, err := os.Stat(s.KeysDir())
@@ -83,7 +84,7 @@ func TestOpenKeysDirIsPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if perm := fi.Mode().Perm(); perm != 0o700 {
-		t.Fatalf("keys/ 权限 = %o，想要 700（里面是私钥）", perm)
+		t.Fatalf("keys/ mode = %o, want 700 (private keys live in there)", perm)
 	}
 }
 
@@ -93,7 +94,7 @@ func TestOpenIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Open(dir); err != nil {
-		t.Fatalf("第二次 Open 应该也成功：%v", err)
+		t.Fatalf("the second Open should succeed too: %v", err)
 	}
 }
 
@@ -104,7 +105,7 @@ func TestOpenRelativeRootBecomesAbsolute(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !filepath.IsAbs(s.Root) {
-		t.Fatalf("Root = %q，应该是绝对路径", s.Root)
+		t.Fatalf("Root = %q, should be absolute", s.Root)
 	}
 }
 
@@ -115,22 +116,22 @@ func TestPkgDirIsAlwaysInsideRoot(t *testing.T) {
 		name                      string
 		host, owner, pkg, version string
 	}{
-		{"正常", "github", "Derrity", "tinyserve", "1.2.3"},
-		{"路径穿越", "..", "..", "..", ".."},
-		{"带斜杠", "gh/x", "a/../..", "n", "v/../.."},
-		{"空段", "", "", "", ""},
-		{"绝对路径", "/etc", "/etc", "passwd", "/"},
+		{"ordinary", "github", "Derrity", "tinyserve", "1.2.3"},
+		{"path traversal", "..", "..", "..", ".."},
+		{"slashes", "gh/x", "a/../..", "n", "v/../.."},
+		{"empty segments", "", "", "", ""},
+		{"absolute paths", "/etc", "/etc", "passwd", "/"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := s.PkgDir(tc.host, tc.owner, tc.pkg, tc.version)
 			rel, err := filepath.Rel(pkgRoot, got)
 			if err != nil || strings.HasPrefix(rel, "..") {
-				t.Fatalf("PkgDir = %q 跑到 %q 外面去了", got, pkgRoot)
+				t.Fatalf("PkgDir = %q escaped %q", got, pkgRoot)
 			}
-			// 四段结构不能被压扁
+			// The four-segment structure must not get flattened.
 			if n := len(strings.Split(rel, string(os.PathSeparator))); n != 4 {
-				t.Fatalf("PkgDir 相对路径 %q 有 %d 段，想要 4 段", rel, n)
+				t.Fatalf("PkgDir relative path %q has %d segments, want 4", rel, n)
 			}
 		})
 	}
@@ -139,21 +140,22 @@ func TestPkgDirIsAlwaysInsideRoot(t *testing.T) {
 func TestConfigRoundTrip(t *testing.T) {
 	s := newStore(t)
 
-	// 全新的 store 读出来就是内置默认（索引条数由 DefaultIndexURL 决定，见 DefaultConfig）。
+	// A brand-new store reads back as the built-in defaults. How many indexes that
+	// is depends on DefaultIndexURL; see DefaultConfig.
 	got, err := s.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	if fresh := DefaultConfig(); len(got.Indexes) != len(fresh.Indexes) {
-		t.Fatalf("全新 store 应该读出内置默认 %+v，拿到 %+v", fresh.Indexes, got.Indexes)
+		t.Fatalf("a fresh store should read back the built-in defaults %+v, got %+v", fresh.Indexes, got.Indexes)
 	}
 
 	want := Config{
 		Indexes: []IndexRef{
 			{Name: "default", URL: "https://example.com/index.json"},
-			{Name: "本地", URL: "file:///tmp/idx.json"},
+			{Name: "local", URL: "file:///tmp/idx.json"},
 		},
-		Mirrors: []string{"https://m1.example.com", "https://m2.example.com/带#号和\"引号\""},
+		Mirrors: []string{"https://m1.example.com", "https://m2.example.com/with#hash-and\"quotes\""},
 		Hosts: map[string]host.Host{
 			"mygit": {
 				Name:    "mygit",
@@ -172,17 +174,18 @@ func TestConfigRoundTrip(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	if len(got.Indexes) != 2 || got.Indexes[0] != want.Indexes[0] || got.Indexes[1] != want.Indexes[1] {
-		t.Errorf("Indexes = %+v，想要 %+v", got.Indexes, want.Indexes)
+		t.Errorf("Indexes = %+v, want %+v", got.Indexes, want.Indexes)
 	}
 	if strings.Join(got.Mirrors, "|") != strings.Join(want.Mirrors, "|") {
-		t.Errorf("Mirrors = %q，想要 %q", got.Mirrors, want.Mirrors)
+		t.Errorf("Mirrors = %q, want %q", got.Mirrors, want.Mirrors)
 	}
 	if got.Hosts["mygit"] != want.Hosts["mygit"] {
-		t.Errorf("Hosts[mygit] = %+v，想要 %+v", got.Hosts["mygit"], want.Hosts["mygit"])
+		t.Errorf("Hosts[mygit] = %+v, want %+v", got.Hosts["mygit"], want.Hosts["mygit"])
 	}
 }
 
-// 用户 `toy index rm` 删光索引之后，不能又被默认值填回来。
+// After the user clears every index with `toy index rm`, the defaults must not
+// refill the list.
 func TestLoadConfigKeepsAnEmptyIndexList(t *testing.T) {
 	s := newStore(t)
 	if err := s.SaveConfig(Config{Indexes: nil, Mirrors: []string{}}); err != nil {
@@ -193,7 +196,7 @@ func TestLoadConfigKeepsAnEmptyIndexList(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got.Indexes) != 0 {
-		t.Fatalf("Indexes = %+v，用户删光了就该是空的", got.Indexes)
+		t.Fatalf("Indexes = %+v, should be empty once the user removed them all", got.Indexes)
 	}
 }
 
@@ -203,7 +206,7 @@ func TestLoadConfigRejectsGarbage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.LoadConfig(); err == nil {
-		t.Fatal("坏掉的 config.toml 应该报错，而不是静默变成空配置")
+		t.Fatal("a corrupt config.toml must error out, not silently become an empty config")
 	}
 }
 
@@ -215,7 +218,7 @@ func sampleManifest(id, name string) Manifest {
 		Source: "https://github.com/Derrity/" + name + "/releases/download/v1.2.3/x.tar.gz",
 		PkgDir: "/root/.toy/pkg/github/Derrity/" + name + "/1.2.3",
 		Links:  []string{"/root/.toy/bin/" + name},
-		// 中文备注和引号都要能原样存回来
+		// Non-ASCII text and quotes have to round-trip byte for byte.
 		InstalledAt: "2026-08-31T12:00:00Z",
 	}
 }
@@ -223,7 +226,7 @@ func sampleManifest(id, name string) Manifest {
 func TestManifestRoundTrip(t *testing.T) {
 	s := newStore(t)
 	want := sampleManifest("github:Derrity/tinyserve", "tinyserve")
-	want.Signer = `a3f9"中文"\反斜杠`
+	want.Signer = `a3f9"naïve unicode"\backslash`
 	want.Links = append(want.Links, "/root/.toy/bin/ts")
 
 	if err := s.SaveManifest(want); err != nil {
@@ -238,10 +241,10 @@ func TestManifestRoundTrip(t *testing.T) {
 		got.Repo != want.Repo || got.Trust != want.Trust || got.Signer != want.Signer ||
 		got.SHA256 != want.SHA256 || got.Source != want.Source || got.PkgDir != want.PkgDir ||
 		got.InstalledAt != want.InstalledAt {
-		t.Fatalf("清单没原样存回来：\n got = %+v\nwant = %+v", got, want)
+		t.Fatalf("the manifest did not round-trip:\n got = %+v\nwant = %+v", got, want)
 	}
 	if strings.Join(got.Links, "|") != strings.Join(want.Links, "|") {
-		t.Fatalf("Links = %q，想要 %q", got.Links, want.Links)
+		t.Fatalf("Links = %q, want %q", got.Links, want.Links)
 	}
 }
 
@@ -249,7 +252,7 @@ func TestLoadManifestNotInstalled(t *testing.T) {
 	s := newStore(t)
 	_, err := s.LoadManifest("github:nobody/nothing")
 	if !errors.Is(err, ErrNotInstalled) {
-		t.Fatalf("err = %v，想要 ErrNotInstalled", err)
+		t.Fatalf("err = %v, want ErrNotInstalled", err)
 	}
 }
 
@@ -261,7 +264,7 @@ func TestManifestPathStaysInInstalledDir(t *testing.T) {
 		"../../../etc/passwd",
 		"..",
 		"https://evil.example.com/a/b/toy.toml",
-		strings.Repeat("长", 200),
+		strings.Repeat("é", 200),
 	}
 	seen := map[string]string{}
 	for _, id := range ids {
@@ -270,35 +273,35 @@ func TestManifestPathStaysInInstalledDir(t *testing.T) {
 			t.Fatalf("manifestPath(%q): %v", id, err)
 		}
 		if filepath.Dir(p) != installed {
-			t.Errorf("manifestPath(%q) = %q，跑出 %q 了", id, p, installed)
+			t.Errorf("manifestPath(%q) = %q, escaped %q", id, p, installed)
 		}
 		if prev, dup := seen[p]; dup {
-			t.Errorf("%q 和 %q 撞到同一个文件 %q", id, prev, p)
+			t.Errorf("%q and %q collide on the same file %q", id, prev, p)
 		}
 		seen[p] = id
 	}
 }
 
-// 转义是多对一的，靠 hash 后缀区分。
+// The escaping is many-to-one; the hash suffix is what keeps them apart.
 func TestManifestPathDistinguishesIDsThatEscapeAlike(t *testing.T) {
 	s := newStore(t)
 	a, _ := s.manifestPath("github:a/b")
 	b, _ := s.manifestPath("github/a:b")
 	if a == b {
-		t.Fatalf("两个不同的 id 落到同一个清单文件 %q —— hash 后缀没起作用", a)
+		t.Fatalf("two different ids landed in the same manifest file %q — the hash suffix did nothing", a)
 	}
 	if !strings.HasPrefix(filepath.Base(a), "github_a_b-") {
-		t.Fatalf("文件名 %q 不像转义后的样子", filepath.Base(a))
+		t.Fatalf("filename %q does not look escaped", filepath.Base(a))
 	}
 }
 
 func TestManifestPathRejectsEmptyID(t *testing.T) {
 	s := newStore(t)
 	if _, err := s.manifestPath("   "); err == nil {
-		t.Fatal("空 id 应该报错")
+		t.Fatal("an empty id must error out")
 	}
 	if err := s.SaveManifest(Manifest{}); err == nil {
-		t.Fatal("SaveManifest 空 id 应该报错")
+		t.Fatal("SaveManifest must reject an empty id")
 	}
 }
 
@@ -310,7 +313,7 @@ func TestListAndRemoveManifests(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 非 .toml 的东西不能被当成清单
+	// Anything that is not a .toml must not be mistaken for a manifest.
 	if err := os.WriteFile(filepath.Join(s.Root, dirInstalled, "README"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -323,19 +326,19 @@ func TestListAndRemoveManifests(t *testing.T) {
 	for _, m := range got {
 		ids = append(ids, m.ID)
 	}
-	want := []string{"github:a/alpha", "github:z/zed", "gitlab:m/mid"} // 按 id 排序
+	want := []string{"github:a/alpha", "github:z/zed", "gitlab:m/mid"} // sorted by id
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
-		t.Fatalf("ListManifests = %v，想要 %v（按 id 排序）", ids, want)
+		t.Fatalf("ListManifests = %v, want %v (sorted by id)", ids, want)
 	}
 
 	if err := s.RemoveManifest("github:z/zed"); err != nil {
 		t.Fatalf("RemoveManifest: %v", err)
 	}
 	if err := s.RemoveManifest("github:z/zed"); !errors.Is(err, ErrNotInstalled) {
-		t.Fatalf("重复 Remove err = %v，想要 ErrNotInstalled", err)
+		t.Fatalf("repeated Remove err = %v, want ErrNotInstalled", err)
 	}
 	if got, _ := s.ListManifests(); len(got) != 2 {
-		t.Fatalf("删完还剩 %d 条，想要 2 条", len(got))
+		t.Fatalf("%d manifests left after the delete, want 2", len(got))
 	}
 }
 
@@ -343,22 +346,23 @@ func TestListManifestsEmptyStore(t *testing.T) {
 	s := newStore(t)
 	got, err := s.ListManifests()
 	if err != nil || len(got) != 0 {
-		t.Fatalf("空 store：got = %v, err = %v", got, err)
+		t.Fatalf("empty store: got = %v, err = %v", got, err)
 	}
 }
 
-// 坏掉的清单要吵，不能被跳过 —— 跳过等于那个包再也卸不掉。
+// A corrupt manifest has to be loud, never skipped: skipping it means that
+// package can never be uninstalled.
 func TestListManifestsRefusesToSkipACorruptOne(t *testing.T) {
 	s := newStore(t)
 	if err := s.SaveManifest(sampleManifest("github:a/b", "b")); err != nil {
 		t.Fatal(err)
 	}
 	bad := filepath.Join(s.Root, dirInstalled, "broken.toml")
-	if err := os.WriteFile(bad, []byte(`name = "没有右引号`), 0o644); err != nil {
+	if err := os.WriteFile(bad, []byte(`name = "no closing quote`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ListManifests(); err == nil {
-		t.Fatal("坏清单应该让 ListManifests 报错")
+		t.Fatal("a corrupt manifest must make ListManifests fail")
 	}
 }
 
@@ -366,7 +370,7 @@ func TestFindByName(t *testing.T) {
 	s := newStore(t)
 	ts := sampleManifest("github:Derrity/tinyserve", "tinyserve")
 	ts.Links = []string{"/x/bin/tinyserve", "/x/bin/ts"}
-	other := sampleManifest("gitlab:someone/tinyserve", "tinyserve") // 同名不同 host
+	other := sampleManifest("gitlab:someone/tinyserve", "tinyserve") // same name, different host
 	solo := sampleManifest("github:me/solo", "solo")
 	for _, m := range []Manifest{ts, other, solo} {
 		if err := s.SaveManifest(m); err != nil {
@@ -379,17 +383,17 @@ func TestFindByName(t *testing.T) {
 		query    string
 		wantID   string
 		wantErr  error
-		wantList []string // 歧义时错误里必须提到的候选
+		wantList []string // candidates the ambiguity error must name
 	}{
-		{name: "按包名唯一命中", query: "solo", wantID: "github:me/solo"},
-		{name: "按仓库名唯一命中", query: "solo", wantID: "github:me/solo"},
-		{name: "写全 id 直接命中", query: "github:Derrity/tinyserve", wantID: "github:Derrity/tinyserve"},
-		{name: "写全另一个 id", query: "gitlab:someone/tinyserve", wantID: "gitlab:someone/tinyserve"},
-		{name: "按软链名命中", query: "ts", wantID: "github:Derrity/tinyserve"},
-		{name: "没装过", query: "nope", wantErr: ErrNotInstalled},
-		{name: "空名字", query: "  ", wantErr: nil},
+		{name: "unique hit by package name", query: "solo", wantID: "github:me/solo"},
+		{name: "unique hit by repo name", query: "solo", wantID: "github:me/solo"},
+		{name: "full id hits directly", query: "github:Derrity/tinyserve", wantID: "github:Derrity/tinyserve"},
+		{name: "the other full id", query: "gitlab:someone/tinyserve", wantID: "gitlab:someone/tinyserve"},
+		{name: "hit by symlink name", query: "ts", wantID: "github:Derrity/tinyserve"},
+		{name: "not installed", query: "nope", wantErr: ErrNotInstalled},
+		{name: "empty name", query: "  ", wantErr: nil},
 		{
-			name:     "歧义要列候选",
+			name:     "ambiguity must list the candidates",
 			query:    "tinyserve",
 			wantList: []string{"github:Derrity/tinyserve", "gitlab:someone/tinyserve"},
 		},
@@ -400,27 +404,27 @@ func TestFindByName(t *testing.T) {
 			switch {
 			case tc.wantList != nil:
 				if err == nil {
-					t.Fatalf("想要歧义报错，拿到 %+v", got)
+					t.Fatalf("want an ambiguity error, got %+v", got)
 				}
 				for _, id := range tc.wantList {
 					if !strings.Contains(err.Error(), id) {
-						t.Errorf("错误里没提到候选 %q：%v", id, err)
+						t.Errorf("the error does not name candidate %q: %v", id, err)
 					}
 				}
 			case tc.wantErr != nil:
 				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("err = %v，想要 %v", err, tc.wantErr)
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
 				}
 			case tc.wantID != "":
 				if err != nil {
 					t.Fatalf("FindByName(%q): %v", tc.query, err)
 				}
 				if got.ID != tc.wantID {
-					t.Fatalf("ID = %q，想要 %q", got.ID, tc.wantID)
+					t.Fatalf("ID = %q, want %q", got.ID, tc.wantID)
 				}
 			default:
 				if err == nil {
-					t.Fatal("想要报错")
+					t.Fatal("want an error")
 				}
 			}
 		})
@@ -436,18 +440,19 @@ func TestLinkHappyPath(t *testing.T) {
 		t.Fatalf("Link: %v", err)
 	}
 	if got != filepath.Join(s.BinDir(), "tinyserve") {
-		t.Fatalf("链接路径 = %q", got)
+		t.Fatalf("link path = %q", got)
 	}
 	dest, err := os.Readlink(got)
 	if err != nil {
-		t.Fatalf("不是软链：%v", err)
+		t.Fatalf("not a symlink: %v", err)
 	}
 	if dest != target {
-		t.Fatalf("指向 %q，想要 %q", dest, target)
+		t.Fatalf("points at %q, want %q", dest, target)
 	}
 }
 
-// 铁律 5：PATH 上已有同名程序就不能装，除非 --force。
+// Iron law 5: a program of the same name already on PATH blocks the install,
+// unless --force.
 func TestLinkRefusesToShadowPATH(t *testing.T) {
 	s := newStore(t)
 	sysDir := t.TempDir()
@@ -457,43 +462,47 @@ func TestLinkRefusesToShadowPATH(t *testing.T) {
 
 	_, err := s.Link("sudo", target, false)
 	if !errors.Is(err, ErrShadow) {
-		t.Fatalf("err = %v，想要 ErrShadow", err)
+		t.Fatalf("err = %v, want ErrShadow", err)
 	}
-	// 错误文本必须点名被遮蔽的那个程序的完整路径，否则用户没法判断该不该 --force
+	// The error must name the full path of the program being shadowed; without it
+	// the user cannot judge whether --force is the right call.
 	if !strings.Contains(err.Error(), sudo) {
-		t.Fatalf("错误里没说被遮蔽的是哪个程序（想要 %q）：%v", sudo, err)
+		t.Fatalf("the error does not say which program gets shadowed (want %q): %v", sudo, err)
 	}
 	if _, statErr := os.Lstat(filepath.Join(s.BinDir(), "sudo")); statErr == nil {
-		t.Fatal("被拒之后不该留下任何链接")
+		t.Fatal("a rejected Link must not leave any symlink behind")
 	}
 
-	// --force 才放行
+	// Only --force gets through.
 	got, err := s.Link("sudo", target, true)
 	if err != nil {
-		t.Fatalf("force 应该放行：%v", err)
+		t.Fatalf("force should be allowed through: %v", err)
 	}
 	if dest, _ := os.Readlink(got); dest != target {
-		t.Fatalf("force 之后指向 %q，想要 %q", dest, target)
+		t.Fatalf("after force it points at %q, want %q", dest, target)
 	}
 }
 
-// BinDir 自己在 PATH 上时，LookPath 找到的是我们自己的链接 —— 那不叫遮蔽。
+// When BinDir itself is on PATH, LookPath finds our own symlink. That is not
+// shadowing.
 func TestLinkOurOwnBinDirIsNotShadow(t *testing.T) {
 	s := newStore(t)
 	t.Setenv("PATH", s.BinDir())
 	target := mkexec(t, t.TempDir(), "tinyserve")
 
 	if _, err := s.Link("tinyserve", target, false); err != nil {
-		t.Fatalf("第一次 Link: %v", err)
+		t.Fatalf("first Link: %v", err)
 	}
-	// 现在 bin/tinyserve 既在 PATH 上又在 BinDir 里：应该报「已存在」而不是「遮蔽」
+	// bin/tinyserve is now both on PATH and inside BinDir: that should report
+	// "already exists", not "shadowing".
 	_, err := s.Link("tinyserve", target, false)
 	if !errors.Is(err, ErrLinkExists) {
-		t.Fatalf("err = %v，想要 ErrLinkExists（自己的链接不算遮蔽）", err)
+		t.Fatalf("err = %v, want ErrLinkExists (our own symlink is not shadowing)", err)
 	}
 }
 
-// PATH 项写的是 BinDir 的软链或相对路径时，也不该被当成遮蔽。
+// A PATH entry written as a symlink to BinDir, or as a relative path, must not
+// count as shadowing either.
 func TestLinkPATHEntryViaSymlinkIsNotShadow(t *testing.T) {
 	s := newStore(t)
 	alias := filepath.Join(t.TempDir(), "alias")
@@ -507,7 +516,7 @@ func TestLinkPATHEntryViaSymlinkIsNotShadow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.Link("tinyserve", target, false); !errors.Is(err, ErrLinkExists) {
-		t.Fatalf("err = %v，想要 ErrLinkExists —— 经软链看到的还是自己的 BinDir", err)
+		t.Fatalf("err = %v, want ErrLinkExists — through the symlink it is still our own BinDir", err)
 	}
 }
 
@@ -522,35 +531,36 @@ func TestLinkExistsAndForceReplaces(t *testing.T) {
 	}
 	_, err := s.Link("tool", fresh, false)
 	if !errors.Is(err, ErrLinkExists) {
-		t.Fatalf("err = %v，想要 ErrLinkExists", err)
+		t.Fatalf("err = %v, want ErrLinkExists", err)
 	}
 	if dest, _ := os.Readlink(filepath.Join(s.BinDir(), "tool")); dest != old {
-		t.Fatal("被拒之后旧链接必须原样留着")
+		t.Fatal("after a rejection the old symlink must stay exactly as it was")
 	}
 
 	link, err := s.Link("tool", fresh, true)
 	if err != nil {
-		t.Fatalf("force 替换: %v", err)
+		t.Fatalf("force replace: %v", err)
 	}
 	if dest, _ := os.Readlink(link); dest != fresh {
-		t.Fatalf("指向 %q，想要新的 %q", dest, fresh)
+		t.Fatalf("points at %q, want the new %q", dest, fresh)
 	}
-	// 原子替换：不能留下临时文件
+	// Atomic replace: no temp file may be left behind.
 	entries, _ := os.ReadDir(s.BinDir())
 	if len(entries) != 1 {
 		var names []string
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		t.Fatalf("bin/ 里有 %v，想要只剩 tool（临时名没清干净）", names)
+		t.Fatalf("bin/ holds %v, want only tool (the temp name was not cleaned up)", names)
 	}
 }
 
-// force 替换一个普通文件（不是软链）也要能成 —— rename 会直接顶掉。
+// Force-replacing a regular file (not a symlink) has to work too: rename just
+// takes over.
 func TestLinkForceReplacesARegularFile(t *testing.T) {
 	s := newStore(t)
 	stale := filepath.Join(s.BinDir(), "tool")
-	if err := os.WriteFile(stale, []byte("旧的"), 0o755); err != nil {
+	if err := os.WriteFile(stale, []byte("stale"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	target := mkexec(t, t.TempDir(), "v1")
@@ -558,7 +568,7 @@ func TestLinkForceReplacesARegularFile(t *testing.T) {
 		t.Fatalf("force: %v", err)
 	}
 	if dest, _ := os.Readlink(stale); dest != target {
-		t.Fatalf("指向 %q，想要 %q", dest, target)
+		t.Fatalf("points at %q, want %q", dest, target)
 	}
 }
 
@@ -569,27 +579,27 @@ func TestLinkRejectsBadInput(t *testing.T) {
 	tests := []struct {
 		name, link, target string
 	}{
-		{"空名字", "", good},
-		{"带斜杠", "../evil", good},
-		{"带斜杠2", "a/b", good},
-		{"点", ".", good},
-		{"点点", "..", good},
-		{"目标不存在", "tool", filepath.Join(t.TempDir(), "没有这个文件")},
+		{"empty name", "", good},
+		{"slash", "../evil", good},
+		{"slash again", "a/b", good},
+		{"dot", ".", good},
+		{"dot dot", "..", good},
+		{"target does not exist", "tool", filepath.Join(t.TempDir(), "no-such-file")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := s.Link(tc.link, tc.target, false); err == nil {
-				t.Fatalf("Link(%q, %q) 应该报错", tc.link, tc.target)
+				t.Fatalf("Link(%q, %q) must error out", tc.link, tc.target)
 			}
-			// force 也不能放行结构性错误
+			// force must not waive a structural error either.
 			if _, err := s.Link(tc.link, tc.target, true); err == nil {
-				t.Fatalf("Link(%q, %q, force) 也应该报错", tc.link, tc.target)
+				t.Fatalf("Link(%q, %q, force) must error out too", tc.link, tc.target)
 			}
 		})
 	}
 }
 
-// 相对目标会相对 bin/ 解析，必须存成绝对路径。
+// A relative target resolves against bin/, so it has to be stored absolute.
 func TestLinkStoresAnAbsoluteTarget(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -603,10 +613,10 @@ func TestLinkStoresAnAbsoluteTarget(t *testing.T) {
 	}
 	dest, _ := os.Readlink(link)
 	if !filepath.IsAbs(dest) {
-		t.Fatalf("目标 = %q，应该是绝对路径", dest)
+		t.Fatalf("target = %q, should be absolute", dest)
 	}
 	if _, err := os.Stat(link); err != nil {
-		t.Fatalf("链接是断的：%v", err)
+		t.Fatalf("the symlink is dangling: %v", err)
 	}
 }
 
@@ -621,29 +631,29 @@ func TestUnlink(t *testing.T) {
 		t.Fatalf("Unlink: %v", err)
 	}
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
-		t.Fatal("链接没删掉")
+		t.Fatal("the symlink was not deleted")
 	}
-	// 可重入：uninstall 半路挂掉再跑一次不能报错
+	// Re-runnable: an uninstall that died halfway must not fail on the retry.
 	if err := s.Unlink(link); err != nil {
-		t.Fatalf("重复 Unlink 应该是空操作：%v", err)
+		t.Fatalf("a repeated Unlink should be a no-op: %v", err)
 	}
-	// 目标本身不能被删
+	// The target itself must not be deleted.
 	if _, err := os.Stat(target); err != nil {
-		t.Fatalf("Unlink 不该动链接指向的文件：%v", err)
+		t.Fatalf("Unlink must not touch the file the symlink points at: %v", err)
 	}
 }
 
-// 坏掉的清单不能变成「删 /usr/bin/sudo」的授权。
+// A corrupt manifest must not become authorization to "delete /usr/bin/sudo".
 func TestUnlinkRefusesOutsideBinDir(t *testing.T) {
 	s := newStore(t)
 	outside := mkexec(t, t.TempDir(), "sudo")
 	for _, p := range []string{outside, filepath.Join(s.BinDir(), "sub", "x"), s.Root} {
 		if err := s.Unlink(p); err == nil {
-			t.Errorf("Unlink(%q) 应该被拒", p)
+			t.Errorf("Unlink(%q) must be refused", p)
 		}
 	}
 	if _, err := os.Stat(outside); err != nil {
-		t.Fatalf("被拒的文件不能被删掉：%v", err)
+		t.Fatalf("a refused path must not get deleted: %v", err)
 	}
 }
 
@@ -661,26 +671,26 @@ func TestInPath(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"不在", other, false},
-		{"空 PATH", "", false},
-		{"精确匹配", s.BinDir(), true},
-		{"混在中间", other + ":" + s.BinDir() + ":/usr/bin", true},
-		{"末尾带斜杠", s.BinDir() + string(os.PathSeparator), true},
-		{"路径里有 ..", filepath.Join(s.BinDir(), "..", dirBin), true},
-		{"经过符号链接", alias, true},
-		{"空项当成当前目录", ":" + other, false},
+		{"not present", other, false},
+		{"empty PATH", "", false},
+		{"exact match", s.BinDir(), true},
+		{"somewhere in the middle", other + ":" + s.BinDir() + ":/usr/bin", true},
+		{"trailing slash", s.BinDir() + string(os.PathSeparator), true},
+		{".. in the path", filepath.Join(s.BinDir(), "..", dirBin), true},
+		{"through a symlink", alias, true},
+		{"empty entry means the current directory", ":" + other, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("PATH", tc.path)
 			if got := s.InPath(); got != tc.want {
-				t.Fatalf("InPath() = %v，想要 %v（PATH=%q）", got, tc.want, tc.path)
+				t.Fatalf("InPath() = %v, want %v (PATH=%q)", got, tc.want, tc.path)
 			}
 		})
 	}
 }
 
-// PATH 里的相对项要按当前目录解析。
+// A relative entry in PATH resolves against the current directory.
 func TestInPathHandlesRelativeEntries(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("PATH", "")
@@ -691,44 +701,47 @@ func TestInPathHandlesRelativeEntries(t *testing.T) {
 	t.Chdir(base)
 	t.Setenv("PATH", filepath.Join("toy", dirBin))
 	if !s.InPath() {
-		t.Fatal("PATH 里的相对项没被当成 BinDir")
+		t.Fatal("the relative PATH entry was not recognized as BinDir")
 	}
 	t.Setenv("PATH", ".")
 	if s.InPath() {
-		t.Fatal("当前目录不是 BinDir，不该算在 PATH 里")
+		t.Fatal("the current directory is not BinDir, so it must not count as on PATH")
 	}
 }
 
 func TestDefaultConfig(t *testing.T) {
 	c := DefaultConfig()
-	// 默认配置里的索引条数由 DefaultIndexURL 一个常量决定：空串（现在这样）
-	// 就一个都不预置，填了地址就预置那一个。这条断言钉住的是「不许出现一条
-	// 名字或地址是空的索引」—— 一个 url 为空的条目会让每次 search 都警告一次。
+	// One constant, DefaultIndexURL, decides how many indexes the default config
+	// carries: empty (as it is now) means none preconfigured, a filled-in address
+	// means exactly that one. What this assertion pins down is that NO INDEX WITH
+	// AN EMPTY NAME OR ADDRESS may appear — an entry with an empty url would make
+	// every search print a warning.
 	if DefaultIndexURL == "" {
 		if len(c.Indexes) != 0 {
-			t.Fatalf("DefaultIndexURL 是空的，不该预置任何索引，拿到 %+v", c.Indexes)
+			t.Fatalf("DefaultIndexURL is empty, so no index may be preconfigured, got %+v", c.Indexes)
 		}
 	} else {
 		if len(c.Indexes) != 1 {
-			t.Fatalf("想要一个内置索引，拿到 %d 个", len(c.Indexes))
+			t.Fatalf("want one built-in index, got %d", len(c.Indexes))
 		}
 		if c.Indexes[0].Name == "" || c.Indexes[0].URL == "" {
-			t.Fatalf("内置索引 %+v 少东西", c.Indexes[0])
+			t.Fatalf("the built-in index %+v is missing something", c.Indexes[0])
 		}
 	}
 	if len(c.Mirrors) != 0 {
-		t.Fatalf("镜像列表默认应该是空的，拿到 %v", c.Mirrors)
+		t.Fatalf("the mirror list should default to empty, got %v", c.Mirrors)
 	}
 	if c.Hosts == nil {
-		t.Fatal("Hosts 应该是可以直接写的空 map")
+		t.Fatal("Hosts should be an empty map that is writable straight away")
 	}
-	c.Hosts["x"] = host.Host{} // 不该 panic
+	c.Hosts["x"] = host.Host{} // must not panic
 }
 
-// 铁律 5 的漏洞：exec.LookPath 在相对 PATH 项里找到东西时，会连同 exec.ErrDot
-// 一起返回。只判 err == nil 的话，PATH 里随便一个相对项（"." 或者最常见的那个
-// 空项，`export PATH=:$PATH` 就会写出来）就把整条 PATH 的遮蔽检查静默关掉，
-// 于是 `[bin] sudo = "payload"` 装得上去。
+// The hole in iron law 5: when exec.LookPath finds something inside a relative
+// PATH entry, it returns it together with exec.ErrDot. Check only err == nil and
+// any relative entry in PATH — "." or, far more common, the empty entry that
+// `export PATH=:$PATH` writes — silently switches off the shadow check for the
+// whole of PATH, and `[bin] sudo = "payload"` installs.
 func TestLinkShadowSurvivesARelativePATHEntry(t *testing.T) {
 	base := t.TempDir()
 	sysDir := filepath.Join(base, "sys")
@@ -739,9 +752,9 @@ func TestLinkShadowSurvivesARelativePATHEntry(t *testing.T) {
 	t.Chdir(base)
 
 	pathVals := map[string]string{
-		"相对项":        "sys",
-		"空项就是当前目录":   string(os.PathListSeparator) + sysDir,
-		"相对项排在绝对项前面": "sys" + string(os.PathListSeparator) + sysDir,
+		"relative entry":                    "sys",
+		"empty entry means current dir":     string(os.PathListSeparator) + sysDir,
+		"relative entry before an absolute": "sys" + string(os.PathListSeparator) + sysDir,
 	}
 	for name, pathVal := range pathVals {
 		t.Run(name, func(t *testing.T) {
@@ -750,25 +763,27 @@ func TestLinkShadowSurvivesARelativePATHEntry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if name == "空项就是当前目录" {
-				// 当前目录里也放一个 sudo，这样空项才真的命中。
+			if name == "empty entry means current dir" {
+				// Put a sudo in the current directory too, so the empty entry
+				// really does hit something.
 				mkexec(t, base, "sudo")
 			}
 			t.Setenv("PATH", pathVal)
 			target := mkexec(t, t.TempDir(), "payload")
 
 			if _, err := s.Link("sudo", target, false); !errors.Is(err, ErrShadow) {
-				t.Fatalf("PATH=%q：err = %v，想要 ErrShadow（PATH 上确实有 %s）", pathVal, err, sudo)
+				t.Fatalf("PATH=%q: err = %v, want ErrShadow (%s really is on PATH)", pathVal, err, sudo)
 			}
 			if _, statErr := os.Lstat(filepath.Join(s.BinDir(), "sudo")); statErr == nil {
-				t.Fatal("被拒之后不该留下链接")
+				t.Fatal("a rejected Link must not leave a symlink behind")
 			}
 		})
 	}
 }
 
-// 两个不同的包不能落到同一个安装目录：装后一个会盖掉前一个的文件，
-// 卸后一个会把前一个的可执行文件一起删掉。
+// Two different packages must never land in the same install directory:
+// installing the second overwrites the first's files, and uninstalling the
+// second deletes the first's executable along with it.
 func TestPkgDirNeverCollides(t *testing.T) {
 	s := newStore(t)
 	long := strings.Repeat("x", 200)
@@ -783,8 +798,9 @@ func TestPkgDirNeverCollides(t *testing.T) {
 		{"github", "", "n", "1"},
 		{"github", "Derrity", "tinyserve", "1.2.3"},
 		{"github", "Derrity", "tinyserve", "1.2.3+build"},
-		// 只差大小写的这几组在 macOS 默认的 APFS 上是同一个目录名，
-		// 所以它们必须靠 hash 后缀分开，而不是靠文件系统区分大小写。
+		// These groups differ only in case, which on the default APFS on macOS is
+		// the same directory name. They have to be kept apart by the hash suffix,
+		// not by relying on the filesystem being case-sensitive.
 		{"github", "derrity", "tinyserve", "1.2.3"},
 		{"github", "DERRITY", "tinyserve", "1.2.3"},
 		{"github", "derrity", "TinySERVE", "1.2.3"},
@@ -795,23 +811,25 @@ func TestPkgDirNeverCollides(t *testing.T) {
 	for _, sg := range segs {
 		p := s.PkgDir(sg[0], sg[1], sg[2], sg[3])
 		if prev, dup := seen[p]; dup {
-			t.Errorf("%v 和 %v 撞到同一个目录 %q", sg, prev, p)
+			t.Errorf("%v and %v collide on the same directory %q", sg, prev, p)
 		}
 		seen[p] = sg
 	}
-	// 小写的段不能被 hash 后缀搞得没法读
+	// A lowercase segment must not be made unreadable by a hash suffix.
 	want := filepath.Join(s.Root, dirPkg, "github", "derrity", "tinyserve", "1.2.3")
 	if got := s.PkgDir("github", "derrity", "tinyserve", "1.2.3"); got != want {
-		t.Errorf("普通路径 = %q，想要 %q", got, want)
+		t.Errorf("ordinary path = %q, want %q", got, want)
 	}
-	// 带大写的段小写化之后仍然要认得出来，只是多一段 hash。
+	// A segment with uppercase still has to be recognizable after folding, just
+	// with a hash appended.
 	if got := s.PkgDir("github", "Derrity", "tinyserve", "1.2.3"); !strings.Contains(got, "/derrity-") {
-		t.Errorf("大写的 owner 应该折成 derrity-<hash>，实际 %q", got)
+		t.Errorf("an uppercase owner should fold to derrity-<hash>, got %q", got)
 	}
 }
 
-// 清单文件名同理：APFS 上只差大小写的两个 id 会写进同一个文件，
-// 后装的那个包会把先装的清单整份盖掉，于是先装的既卸不掉也升不了。
+// Manifest filenames, same story: on APFS two ids differing only in case write
+// to the same file, the package installed second overwrites the first's manifest
+// wholesale, and the first can then neither be uninstalled nor updated.
 func TestManifestPathNeverCollidesOnCaseInsensitiveFS(t *testing.T) {
 	s := newStore(t)
 	ids := []string{
@@ -827,16 +845,17 @@ func TestManifestPathNeverCollidesOnCaseInsensitiveFS(t *testing.T) {
 		if err != nil {
 			t.Fatalf("manifestPath(%q): %v", id, err)
 		}
-		fold := strings.ToLower(p) // 大小写不敏感的文件系统就是这么比的
+		fold := strings.ToLower(p) // this is how a case-insensitive filesystem compares
 		if prev, dup := seen[fold]; dup {
-			t.Errorf("%q 和 %q 撞到同一个清单文件 %q", id, prev, p)
+			t.Errorf("%q and %q collide on the same manifest file %q", id, prev, p)
 		}
 		seen[fold] = id
 	}
 }
 
-// 装一次就把密码写进 ~/.toy/installed/*.toml 的包管理器不能叫安全边界：
-// 清单长期躺在磁盘上、还会被打印出来，凭据不能跟着落进去。
+// A package manager that writes your password into ~/.toy/installed/*.toml on one
+// install does not get to call itself a security boundary: manifests sit on disk
+// long-term and get printed, so credentials must not ride along.
 func TestManifestSourceDropsTheCredentials(t *testing.T) {
 	s := newStore(t)
 	m := sampleManifest("https://example.com/toy.toml", "toy")
@@ -853,7 +872,7 @@ func TestManifestSourceDropsTheCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "hunter2") {
-		t.Fatalf("密码落到磁盘上了：\n%s", raw)
+		t.Fatalf("the password reached the disk:\n%s", raw)
 	}
 	got, err := s.LoadManifest(m.ID)
 	if err != nil {
@@ -861,23 +880,24 @@ func TestManifestSourceDropsTheCredentials(t *testing.T) {
 	}
 	want := "https://alice:xxxxx@example.com/toy_1.0_linux_amd64.tar.gz"
 	if got.Source != want {
-		t.Fatalf("source = %q，想要 %q", got.Source, want)
+		t.Fatalf("source = %q, want %q", got.Source, want)
 	}
 }
 
-// redactURL 只该动带密码的 URL，别的一律原样 —— 它也会被用在
-// 「实际下载成功的那个地址」上，改坏了就是对用户说谎。
+// redactURL must only touch URLs that carry a password, everything else comes
+// back untouched. It also runs on "the address the download actually succeeded
+// from", so mangling that is lying to the user.
 func TestRedactURLLeavesEverythingElseAlone(t *testing.T) {
 	for _, s := range []string{
 		"",
 		"https://example.com/toy.toml",
-		"https://alice@example.com/toy.toml", // 只有用户名，没有密码
+		"https://alice@example.com/toy.toml", // username only, no password
 		"file:///tmp/toy.toml",
 		"github:Derrity/tinyserve",
-		"不是 URL 的一句话 @ ://",
+		"not a URL at all @ ://",
 	} {
 		if got := redactURL(s); got != s {
-			t.Errorf("redactURL(%q) = %q，应该原样返回", s, got)
+			t.Errorf("redactURL(%q) = %q, should come back untouched", s, got)
 		}
 	}
 	const in = "https://u:p@example.com/x"
@@ -886,8 +906,9 @@ func TestRedactURLLeavesEverythingElseAlone(t *testing.T) {
 	}
 }
 
-// keys/ 里是私钥。MkdirAll 对已存在的目录是空操作，所以一个之前建松了的
-// keys/ 会一直松着 —— Open 必须收紧它。
+// keys/ holds private keys. MkdirAll is a no-op on a directory that already
+// exists, so a keys/ created loose once stays loose forever. Open has to tighten
+// it.
 func TestOpenTightensALoosePreexistingKeysDir(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, dirKeys), 0o755); err != nil {
@@ -905,23 +926,25 @@ func TestOpenTightensALoosePreexistingKeysDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
-		t.Fatalf("keys/ 权限 = %o，Open 没把已存在的目录收紧", perm)
+		t.Fatalf("keys/ mode = %o, Open did not tighten the pre-existing directory", perm)
 	}
 }
 
-// 链到目录上会造出一个「存在但跑不了」的命令，和断链是同一种坏法。
+// Linking to a directory produces a command that exists but cannot run, which
+// is broken the same way a dangling link is.
 func TestLinkRejectsADirectoryTarget(t *testing.T) {
 	s := newStore(t)
 	dir := t.TempDir()
 	for _, force := range []bool{false, true} {
 		if _, err := s.Link("tool", dir, force); err == nil {
-			t.Fatalf("force=%v：把命令链到目录 %s 上应该被拒", force, dir)
+			t.Fatalf("force=%v: linking a command at directory %s must be refused", force, dir)
 		}
 	}
 }
 
-// 首尾空白和控制字符的命令名在 shell 里根本敲不出来，而 "sudo " 长得像 sudo
-// 却逃得过遮蔽检查（LookPath("sudo ") 什么都找不到）。
+// Command names with leading/trailing whitespace or control characters cannot be
+// typed in a shell at all, and "sudo " looks like sudo while slipping past the
+// shadow check (LookPath("sudo ") finds nothing).
 func TestLinkRejectsUntypableNames(t *testing.T) {
 	s := newStore(t)
 	sysDir := t.TempDir()
@@ -932,27 +955,28 @@ func TestLinkRejectsUntypableNames(t *testing.T) {
 	for _, name := range []string{"sudo ", " sudo", "   ", "a\nb", "a\tb", "a\x00b", "a\x7fb"} {
 		t.Run(strconv.Quote(name), func(t *testing.T) {
 			if _, err := s.Link(name, target, false); err == nil {
-				t.Fatalf("Link(%q) 应该被拒", name)
+				t.Fatalf("Link(%q) must be refused", name)
 			}
 			if _, err := s.Link(name, target, true); err == nil {
-				t.Fatalf("Link(%q, force) 也应该被拒 —— 这是结构性错误，不是安全裁决", name)
+				t.Fatalf("Link(%q, force) must be refused too — this is a structural error, not a security verdict", name)
 			}
 		})
 	}
 	entries, _ := os.ReadDir(s.BinDir())
 	if len(entries) != 0 {
-		t.Fatalf("bin/ 里冒出了 %d 个东西", len(entries))
+		t.Fatalf("%d things showed up in bin/", len(entries))
 	}
 }
 
-// 清单和 config 的值一路来自 toy.toml / 索引，里面塞一整段 TOML 不能把
-// 别的字段改掉 —— 尤其是 trust（铁律 8：信任等级必须如实）。
+// Values in manifests and config come all the way from toy.toml and the index, so
+// stuffing a whole TOML section into one of them must not rewrite another field —
+// least of all trust (iron law 8: the trust level must be honest).
 func TestDiskFormatResistsTOMLInjection(t *testing.T) {
 	s := newStore(t)
 
 	m := sampleManifest("github:a/b", "b")
 	m.Trust = TrustUnverified
-	m.Signer = "x\"\ntrust = \"" + TrustSigned + "\"\nsigner = \"伪造的作者\"\n\"y"
+	m.Signer = "x\"\ntrust = \"" + TrustSigned + "\"\nsigner = \"forged author\"\n\"y"
 	m.Source = "u\"\n[[index]]\nname = \"boom\"\n\"v"
 	if err := s.SaveManifest(m); err != nil {
 		t.Fatal(err)
@@ -962,10 +986,10 @@ func TestDiskFormatResistsTOMLInjection(t *testing.T) {
 		t.Fatalf("LoadManifest: %v", err)
 	}
 	if got.Trust != TrustUnverified {
-		t.Fatalf("注入成功了：trust = %q，想要 %q", got.Trust, TrustUnverified)
+		t.Fatalf("the injection worked: trust = %q, want %q", got.Trust, TrustUnverified)
 	}
 	if got.Signer != m.Signer || got.Source != m.Source {
-		t.Fatalf("值没原样存回来：\n signer = %q\n source = %q", got.Signer, got.Source)
+		t.Fatalf("the values did not round-trip:\n signer = %q\n source = %q", got.Signer, got.Source)
 	}
 
 	evil := "e]\n[hosts.pwned]\nraw = \"https://attacker.example.com/{owner}\"\n["
@@ -979,18 +1003,19 @@ func TestDiskFormatResistsTOMLInjection(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	if _, bad := back.Hosts["pwned"]; bad {
-		t.Fatal("注入成功了：冒出一个 pwned 托管方")
+		t.Fatal("the injection worked: a pwned host appeared")
 	}
 	if len(back.Hosts) != 1 || back.Hosts[evil].Raw != "r" {
 		t.Fatalf("hosts = %+v", back.Hosts)
 	}
 }
 
-// 旧版手写编码器写出来的文件（没有 [hosts] 父表头、没有缩进）必须照常读得回来 ——
-// 换成 BurntSushi 不需要任何迁移。
+// Files written by the old hand-rolled encoder (no [hosts] parent header, no
+// indentation) must still read back fine: switching to BurntSushi needs no
+// migration at all.
 func TestReadsTheOldHandWrittenFormat(t *testing.T) {
 	s := newStore(t)
-	old := `# toy 的配置：索引列表、镜像列表、托管方覆盖。规格 §6。
+	old := `# toy config: indexes, mirrors, and git host overrides. Spec §6.
 
 mirrors = ["https://m.example.com"]
 
@@ -1022,7 +1047,7 @@ web = "https://g/{owner}/{repo}"
 		t.Fatalf("hosts = %+v", c.Hosts)
 	}
 
-	oldManifest := `# toy 安装清单，自动生成。
+	oldManifest := `# toy install manifest, generated.
 
 id = "github:a/b"
 name = "b"

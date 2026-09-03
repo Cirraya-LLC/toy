@@ -1,20 +1,22 @@
 package main
 
-// toy init：从 ./dist 里的文件名反推一份 toy.toml。
+// toy init: work a toy.toml backwards out of the file names in ./dist.
 //
-// 作者路径的第一步是"手写 [artifact] 的映射"，而各家资产命名习惯乱得很
-// （x86_64 vs amd64、darwin vs macos vs apple-darwin、.tar.gz vs .zip），
-// 抄错一个词的下场是别人装的时候一句「没有适配当前平台的构建」。
-// 这条命令把它变成"跑一下然后改两个字"。
+// The first step on the author path is "hand-write the [artifact] mapping", and
+// asset naming conventions are all over the place (x86_64 vs amd64, darwin vs macos
+// vs apple-darwin, .tar.gz vs .zip). Get one word wrong and what somebody else sees
+// on install is "no build matches this platform". This command turns that into "run
+// it, then fix a word or two".
 //
-// 两件事故意不做：
+// Two things it deliberately does not do:
 //
-//   - 不联网、不碰任何托管方的 API（规格 §2）。dist 目录就是 goreleaser 的输出布局，
-//     文件名里该有的信息全都有。
-//   - 不跑 `git describe`。版本号是从文件名里认出来的 —— 文件名里没有版本的话，
-//     也就没有东西需要替换成 {version}，git 一点忙都帮不上。而"按名字 exec git"
-//     要连带把 §14.1 那套「跳过 ~/.toy/bin」的防御再抄一份到 cmd/toy 里，
-//     多一份就多一处会静默失效的地方，换不来任何东西。
+//   - It goes nowhere online and touches no host's API (spec §2). The dist directory
+//     is goreleaser's output layout, and everything needed is already in the names.
+//   - It does not run `git describe`. The version is recognized from the file names —
+//     and if the names carry no version, there is nothing to replace with {version}
+//     and git could not help anyway. Meanwhile "exec git by name" would drag another
+//     copy of the §14.1 "skip ~/.toy/bin" defense into cmd/toy, and a second copy is
+//     a second place that can silently stop working, bought for nothing.
 
 import (
 	"context"
@@ -34,19 +36,20 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
-// iniMaxListed 是报错时最多列几个看到的文件名 —— 一个塞了两百个文件的 dist
-// 不该把终端刷满。
+// iniMaxListed caps how many of the file names it saw an error message lists — a
+// dist with two hundred files in it should not flood the terminal.
 const iniMaxListed = 12
 
-// iniAsset 是 dist 里认出来的一个资产。
+// iniAsset is one asset recognized in dist.
 type iniAsset struct {
-	file string // 原文件名
-	key  string // toy.toml 里 [artifact] 的 key
-	tmpl string // 把版本号换成 {version} 之后的资产名
+	file string // the file name as it is
+	key  string // the [artifact] key in toy.toml
+	tmpl string // the asset name with the version replaced by {version}
 	sum  string // sha256
 }
 
-// ctx 用不上：这条命令不联网，也不 exec 任何东西（见文件头）。
+// ctx goes unused: this command goes nowhere online and execs nothing (see the top
+// of the file).
 func runInit(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	dist := fs.String("dist", "", "directory holding the release assets (defaults to dist/ under the project directory)")
@@ -74,9 +77,10 @@ func runInit(_ context.Context, args []string) error {
 		return err
 	}
 
-	// 推断本身在 internal/assetname 里 —— 批量索引生成器（cmd/toy-index）用的是
-	// 同一个函数。两份实现必然漂移，而漂移的症状是索引里生成的条目和作者自己跑
-	// toy init 得到的不一样，且没有任何地方会说。
+	// The inference itself lives in internal/assetname — the bulk index generator
+	// (cmd/toy-index) calls the same function. Two implementations would drift, and
+	// the symptom of that drift is that an entry generated for the index differs
+	// from what the author gets running toy init, with nothing anywhere saying so.
 	res := assetname.Infer(files, *version)
 	skipped := iniSkipLines(res.Skipped)
 	if len(res.Assets) == 0 {
@@ -87,8 +91,10 @@ func runInit(_ context.Context, args []string) error {
 		assets[i] = iniAsset{file: a.File, key: a.Platform, tmpl: a.Template}
 	}
 
-	// 文件就在本地，算一遍哈希几乎不要钱，而这把包从"首次安装 TOFU 钉住"
-	// 升到"强制校验"（铁律 4）—— 少这一步就等于让每个装它的人都当一次小白鼠。
+	// The files are right here locally, so hashing them costs next to nothing, and it
+	// lifts the package from "pinned by TOFU on first install" to "checksum enforced"
+	// (iron law 4). Skipping this step makes a guinea pig out of everyone who
+	// installs it.
 	for i := range assets {
 		sum, err := iniSum(filepath.Join(distDir, assets[i].file))
 		if err != nil {
@@ -102,8 +108,9 @@ func runInit(_ context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// 自己生成的东西也要过一遍真正的解析器：文件名里的怪字符（引号、方括号、
-	// 中文）都能把 toml 写歪，而写歪的 toy.toml 是作者下一个小时的谜题。
+	// Run our own output through the real parser too: odd characters in a file name
+	// (quotes, square brackets, non-ASCII) can all bend the toml out of shape, and a
+	// bent toy.toml is the author's next hour of puzzling.
 	if _, err := toyfile.Parse(data); err != nil {
 		return fmt.Errorf("the toy.toml generated from the file names in %s does not parse: %w. "+
 			"Most likely a name contains characters toml cannot take — pass --name with a clean one and try again", distDir, err)
@@ -126,8 +133,9 @@ func runInit(_ context.Context, args []string) error {
 	return nil
 }
 
-// iniListFiles 列出 dist 顶层的普通文件。子目录不进 —— goreleaser 把打好的包
-// 放在顶层，子目录里是没打包的裸构建产物，收进来会和顶层的包重复。
+// iniListFiles lists the regular files at the top level of dist. Subdirectories are
+// left out: goreleaser puts the packaged archives at the top level, while the
+// subdirectories hold the unpackaged raw build output, which would duplicate them.
 func iniListFiles(distDir string) ([]string, error) {
 	entries, err := os.ReadDir(distDir)
 	if err != nil {
@@ -146,7 +154,7 @@ func iniListFiles(distDir string) ([]string, error) {
 	return out, nil
 }
 
-// iniSkipLines 把跳过说明拼成给人看的一行。
+// iniSkipLines turns the skip reasons into one human-readable line each.
 func iniSkipLines(skipped []assetname.Asset) []string {
 	out := make([]string, len(skipped))
 	for i, a := range skipped {
@@ -155,8 +163,9 @@ func iniSkipLines(skipped []assetname.Asset) []string {
 	return out
 }
 
-// iniName 定工具名：--name > 项目目录名 > 资产名的公共前缀。
-// 第二个返回值说的是"这个名字是猜出来的"，作者得核对。
+// iniName settles the tool name: --name, then the project directory name, then the
+// common prefix of the asset names. The second return value means "this name was
+// guessed" and the author has to check it.
 func iniName(flagName, dir, prefix string) (name string, guessed bool) {
 	if n := strings.TrimSpace(flagName); n != "" {
 		return n, false
@@ -169,13 +178,15 @@ func iniName(flagName, dir, prefix string) (name string, guessed bool) {
 	return prefix, true
 }
 
-// iniRender 拼出 toy.toml。手写而不是用 toml 编码器：这个文件是给人改的，
-// 注释和字段顺序才是它的主要内容，而编码器一条注释都写不出来。
+// iniRender builds the toy.toml. Written by hand rather than through a toml encoder:
+// this file exists to be edited by a person, its comments and field order are most of
+// what it contains, and an encoder cannot write a single comment.
 func iniRender(name string, assets []iniAsset) ([]byte, error) {
 	var b strings.Builder
 	q := func(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
-	// toml 的裸键只能是 [A-Za-z0-9_-]，别的一律加引号。平台 key 带斜杠，必须引；
-	// 工具名通常不用 —— 给一个本来就干净的名字套引号只会让人以为那是必须的。
+	// A bare toml key can only be [A-Za-z0-9_-]; everything else gets quoted. Platform
+	// keys contain slashes and always need it. Tool names usually do not — quoting a
+	// name that was already clean just leaves people thinking the quotes are required.
 	key := func(s string) string {
 		if s != "" && strings.IndexFunc(s, func(r rune) bool {
 			return !(r == '-' || r == '_' || (r >= '0' && r <= '9') ||
@@ -219,8 +230,8 @@ func iniRender(name string, assets []iniAsset) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// iniReport 明说它猜了什么、要作者去核对哪几处。
-// 一个不说自己猜过的生成器，作者就会把猜出来的东西当成事实提交上去。
+// iniReport states plainly what it guessed and which parts the author has to check.
+// A generator that does not admit to guessing gets its guesses committed as fact.
 func iniReport(name string, assets []iniAsset, skipped []string, guessedName bool, prefix string) {
 	ui.Info("")
 	ui.Info("Recognized %d platform(s):", len(assets))
@@ -238,8 +249,10 @@ func iniReport(name string, assets []iniAsset, skipped []string, guessedName boo
 		"(`tar tzf` shows you which case you have)")
 	if guessedName {
 		hint := ""
-		// 目录名和资产名前缀对不上时，后者多半才是真名（仓库目录常被改名、
-		// clone 成别的名字，而资产名是构建脚本自己写出来的）。直接把命令给出来。
+		// When the directory name and the asset name prefix disagree, the latter is
+		// usually the real name (repository directories get renamed and cloned under
+		// other names, while asset names are written by the build itself). Just hand
+		// over the command.
 		if p := prefix; p != "" && p != name {
 			hint = "; the asset names suggest " + p + ": `toy init --force --name " + p + "`"
 		}
@@ -247,15 +260,17 @@ func iniReport(name string, assets []iniAsset, skipped []string, guessedName boo
 	}
 	ui.Info("    desc / license — left empty, fill them in")
 	if len(assets) > 0 && !strings.Contains(assets[0].tmpl, "{version}") {
-		// 没有 {version} 的映射每发一版都要手改，那正是这条命令要消灭的事。
+		// A mapping without {version} has to be hand-edited on every release, which
+		// is precisely what this command exists to abolish.
 		ui.Warn("No version was recognized in the asset names, so there is no {version} placeholder — " +
 			"which means every release makes you come back and edit this file. Pass --version with the " +
 			"version of this batch and run it again")
 	}
 }
 
-// iniNothingRecognized 在一个都没认出来时报错。绝不写一个空壳 toy.toml ——
-// 那会变成一个"看起来生成好了、实际谁也装不了"的文件。
+// iniNothingRecognized errors out when nothing at all was recognized. It NEVER writes
+// an empty shell of a toy.toml — that would be a file that looks generated and
+// installs for nobody.
 func iniNothingRecognized(distDir string, files, skipped []string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "no file name in %s says which os/arch it is for, so [artifact] cannot be written", distDir)
@@ -265,10 +280,11 @@ func iniNothingRecognized(distDir string, files, skipped []string) error {
 	default:
 		fmt.Fprintf(&b, ". What it saw: %s", strings.Join(iniHead(files, iniMaxListed), ", "))
 	}
-	// 这里**不能**用 \n 分行：它最后是经 ui.Error 打出去的，而 ui 会把控制字符
-	// （\n 也在内）转义成看得见的 \xNN —— 那是防有人用外来文本伪造一行
-	// 「✓ 已签名」的护栏，不能为了排版把它松掉。所以全篇拿标点断句，和这个项目
-	// 里其它报错一样是一长句。
+	// \n MUST NOT be used to break lines here: this ends up going through ui.Error,
+	// and ui escapes control characters (\n among them) into visible \xNN — that is
+	// the guardrail against foreign text forging a "✓ signed" line, and it does not
+	// get relaxed for the sake of layout. So this is punctuated rather than broken,
+	// one long sentence like every other error in this project.
 	for _, s := range skipped {
 		b.WriteString("; skipped " + s)
 	}
@@ -288,7 +304,8 @@ func iniHead(s []string, n int) []string {
 	return append(slices.Clone(s[:n]), fmt.Sprintf("… (%d more)", len(s)-n))
 }
 
-// iniSum 算一个文件的 sha256。
+// iniSum computes the sha256 of one file.
+
 func iniSum(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

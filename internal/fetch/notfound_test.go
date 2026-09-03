@@ -10,39 +10,42 @@ import (
 	"testing"
 )
 
-// 404 必须能被【按类型】认出来，而 500 无论原因短语写了什么都不许被认成 404。
+// A 404 must be recognisable BY TYPE, and a 500 must never be read as a 404 no matter what
+// its reason phrase says.
 //
-// 为什么这条测试值得存在：上层拿"上游确实没有 toy.toml"当一个安全决策
-// （没有就退到索引条目内联的那份打包说明，见 cmd/toy 的规则 3）。resp.Status
-// 里的原因短语是服务器原样发来的，所以只要那个判断是按错误文本做的，
-// 一台上游回一句 `HTTP/1.1 500 HTTP 404 Not Found` 就能让一次服务端故障
-// 把用户从作者的声明切到索引的声明，而且没有任何地方会说。
+// Why this test earns its place: a layer above turns "upstream really has no toy.toml" into
+// a security decision (no toy.toml means fall back to the packaging instructions inlined in
+// the index entry, see rule 3 in cmd/toy). The reason phrase in resp.Status is whatever the
+// server chose to send, so the moment that decision is made on error text, one upstream
+// answering `HTTP/1.1 500 HTTP 404 Not Found` can flip a user from the author's declaration
+// to the index's declaration on a server-side glitch -- and nothing anywhere would say so.
 func TestNotFoundIsTypedNotTextual(t *testing.T) {
 	for _, c := range []struct {
 		name       string
 		statusLine string
 		wantNotEx  bool
 	}{
-		{"真的 404", "HTTP/1.1 404 Not Found", true},
-		{"500 不算", "HTTP/1.1 500 Internal Server Error", false},
-		{"原因短语里写着 HTTP 404 的 500 也不算", "HTTP/1.1 500 HTTP 404 Not Found", false},
-		{"原因短语里写着 404 的 403 也不算", "HTTP/1.1 403 404 Not Found", false},
+		{"a real 404", "HTTP/1.1 404 Not Found", true},
+		{"a 500 does not count", "HTTP/1.1 500 Internal Server Error", false},
+		{"nor does a 500 whose reason phrase says HTTP 404", "HTTP/1.1 500 HTTP 404 Not Found", false},
+		{"nor does a 403 whose reason phrase says 404", "HTTP/1.1 403 404 Not Found", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			url := serveStatus(t, c.statusLine)
 			_, err := GetBytes(context.Background(), url, Options{Name: "toy.toml"})
 			if err == nil {
-				t.Fatal("这些状态码都不是 200，应该报错")
+				t.Fatal("none of these status codes is 200, so this should error")
 			}
 			if got := errors.Is(err, fs.ErrNotExist); got != c.wantNotEx {
-				t.Fatalf("errors.Is(err, fs.ErrNotExist) = %v，想要 %v；err = %v", got, c.wantNotEx, err)
+				t.Fatalf("errors.Is(err, fs.ErrNotExist) = %v, wanted %v; err = %v", got, c.wantNotEx, err)
 			}
 		})
 	}
 }
 
-// serveStatus 起一个只会回一条指定状态行的服务器。用裸 listener 是因为
-// net/http 的服务端只写它自己那套标准原因短语，写不出上面要试的那几条。
+// serveStatus starts a server that answers with one fixed status line. It uses a raw
+// listener because net/http's server only ever writes its own standard reason phrases,
+// and it cannot produce the ones we need to test above.
 func serveStatus(t *testing.T, statusLine string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

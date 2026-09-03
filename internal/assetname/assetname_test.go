@@ -5,36 +5,42 @@ import (
 	"testing"
 )
 
-// 文件名反推是这个包的全部内容。认错一个词的下场是别人装的时候
-// 一句「没有适配当前平台的构建」—— 而作者永远不会知道是哪一行错了。
+// Inferring from filenames is all this package does. Get one word wrong and
+// somebody trying to install sees "no build for your platform" — and the author
+// will never find out which line was to blame.
 func TestClassify(t *testing.T) {
 	cases := []struct {
 		file, platform, goos string
 	}{
-		// —— goreleaser 默认命名 ——
+		// -- goreleaser's default naming --
 		{"gadget_1.4.2_linux_amd64.tar.gz", "linux/amd64", "linux"},
-		// x86_64 会被 '_' 切成两段，靠相邻二元组捞回来。goreleaser 的默认命名就是它。
+		// '_' tears x86_64 in half; the adjacent pair puts it back. This is
+		// goreleaser's default naming.
 		{"gadget_1.4.2_linux_x86_64.tar.gz", "linux/amd64", "linux"},
 		{"gadget-1.4.2-linux-x64.tar.gz", "linux/amd64", "linux"},
 		{"gadget_1.4.2_darwin_arm64.zip", "darwin/arm64", "darwin"},
 		{"gadget_1.4.2_macos_aarch64.tar.gz", "darwin/arm64", "darwin"},
 		{"gadget-osx-x86_64.tar.gz", "darwin/amd64", "darwin"},
 		{"gadget-1.0.0-apple-arm64.tar.gz", "darwin/arm64", "darwin"},
-		// musl / gnu 变成第三段，正是 platform.Candidates 头一个要找的那个 key。
+		// musl / gnu become the third segment, which is exactly the first key
+		// platform.Candidates looks for.
 		{"gadget_1.4.2_linux_amd64_musl.tar.gz", "linux/amd64/musl", "linux"},
 		{"gadget_1.4.2_linux_x86_64_gnu.tar.gz", "linux/amd64/gnu", "linux"},
-		// arm 代次本身就够具体了，再挂 libc 没有意义。
+		// The arm generation is specific enough on its own; hanging a libc off
+		// it means nothing.
 		{"gadget_1.4.2_linux_armv7.tar.gz", "linux/armv7", "linux"},
 		{"gadget_1.4.2_linux_armhf.tar.gz", "linux/armv7", "linux"},
 		{"gadget_1.4.2_linux_armv6.tar.gz", "linux/armv6", "linux"},
 		{"gadget_1.4.2_linux_i386.tar.gz", "linux/386", "linux"},
-		// 裸 arm：GOARCH=arm 且没设 goarm 时 goreleaser 产出的就是它，而
-		// linux/arm 正是 platform.go 给 armv6/armv7 兜底的候选（规格 §3.1）。
+		// Bare arm: what goreleaser produces with GOARCH=arm and no goarm set,
+		// and linux/arm is the fallback candidate platform.go offers armv6/armv7
+		// (spec §3.1).
 		{"tool_1.2.3_linux_arm.tar.gz", "linux/arm", "linux"},
 		{"tool-1.2.3-linux-arm.tar.gz", "linux/arm", "linux"},
 
-		// —— Rust 的 target triple（我们要收录的工具很多是 Rust 写的）——
-		// unknown / pc 这些多余的段本来就不认，所以不用特判。
+		// -- Rust target triples (plenty of the tools we want to index are Rust) --
+		// The extra segments (unknown / pc) are simply not recognized, so no
+		// special case is needed.
 		{"tool-1.0.0-x86_64-unknown-linux-gnu.tar.gz", "linux/amd64/gnu", "linux"},
 		{"tool-1.0.0-x86_64-unknown-linux-musl.tar.gz", "linux/amd64/musl", "linux"},
 		{"tool-1.0.0-aarch64-unknown-linux-gnu.tar.gz", "linux/arm64/gnu", "linux"},
@@ -43,32 +49,33 @@ func TestClassify(t *testing.T) {
 		{"tool-1.0.0-armv7-unknown-linux-gnueabihf.tar.gz", "linux/armv7", "linux"},
 		{"tool-1.0.0-i686-pc-windows-msvc.zip", "", "windows"},
 
-		// —— cargo-dist：资产名里常常没有版本号 ——
+		// -- cargo-dist: asset names often carry no version at all --
 		{"tool-x86_64-unknown-linux-gnu.tar.xz", "linux/amd64/gnu", "linux"},
 		{"tool-aarch64-apple-darwin.tar.xz", "darwin/arm64", "darwin"},
 
-		// 规格 §11：Windows 认得出来，但不能进 [artifact]。
+		// Spec §11: Windows is recognized, but it must not enter [artifact].
 		{"gadget_1.4.2_windows_amd64.zip", "", "windows"},
 		{"gadget_1.4.2_win_x86_64.zip", "", "windows"},
-		// 认不出来的一律跳过，不许瞎猜。
+		// Anything unrecognized gets skipped. No guessing.
 		{"checksums.txt", "", ""},
 		{"artifacts.json", "", ""},
-		{"gadget_1.4.2_linux.tar.gz", "", "linux"}, // 只有 os 没有 arch
-		{"gadget_amd64.tar.gz", "", ""},            // 只有 arch 没有 os
+		{"gadget_1.4.2_linux.tar.gz", "", "linux"}, // os but no arch
+		{"gadget_amd64.tar.gz", "", ""},            // arch but no os
 	}
 	for _, c := range cases {
 		key, goos := detect(c.file)
 		if key != c.platform || goos != c.goos {
-			t.Errorf("detect(%q) = (%q,%q)，想要 (%q,%q)", c.file, key, goos, c.platform, c.goos)
+			t.Errorf("detect(%q) = (%q,%q), want (%q,%q)", c.file, key, goos, c.platform, c.goos)
 		}
 		if got := Classify(c.file); got.Platform != c.platform {
-			t.Errorf("Classify(%q).Platform = %q，想要 %q", c.file, got.Platform, c.platform)
+			t.Errorf("Classify(%q).Platform = %q, want %q", c.file, got.Platform, c.platform)
 		}
 	}
 }
 
-// Skip 是给人看的，而「值不值得说」和「跳没跳过」是两件事：
-// Windows 和认不出的资产要出声，checksums.txt 这种不许出声（否则把真的那条淹掉）。
+// Skip is written for humans, and "worth mentioning" is a separate question
+// from "was it skipped": Windows and unrecognized assets have to speak up,
+// checksums.txt and friends must stay quiet (or they drown out the real line).
 func TestClassifySkipReasons(t *testing.T) {
 	cases := []struct {
 		file    string
@@ -77,11 +84,13 @@ func TestClassifySkipReasons(t *testing.T) {
 	}{
 		{"gadget_1.0.0_linux_amd64.tar.gz", "", false},
 		{"gadget_1.0.0_windows_amd64.zip", SkipWindows, true},
-		// freebsd 认得出来，只是 toy 不支持它 —— 那和"认不出是哪个平台的"
-		// 不是一回事：后者那句话是在请作者补一行 [artifact]，而补了也装不上。
+		// freebsd is recognized, toy just does not support it — which is not the
+		// same as "cannot tell which platform this is": that message asks the
+		// author to add an [artifact] line, and adding one still would not
+		// install.
 		{"tool_1.2.3_freebsd_riscv64.tar.gz", SkipForeignOS("freebsd"), true},
 		{"tool-1.2.3-x86_64-unknown-illumos.tar.gz", SkipForeignOS("illumos"), true},
-		{"tool_1.2.3_dragonfly_amd64.tar.gz", SkipUnrecognized, true}, // 没进表的还是"认不出"
+		{"tool_1.2.3_dragonfly_amd64.tar.gz", SkipUnrecognized, true}, // not in the table, so still "unrecognized"
 		{"tool_1.2.3_solaris_amd64.tar.gz", SkipForeignOS("solaris"), true},
 		{"checksums.txt", SkipNotAnAsset, false},
 		{"LICENSE", SkipNotAnAsset, false},
@@ -90,7 +99,7 @@ func TestClassifySkipReasons(t *testing.T) {
 	for _, c := range cases {
 		got := Classify(c.file)
 		if got.Skip != c.skip || got.Notable != c.notable {
-			t.Errorf("Classify(%q) = (skip %q, notable %v)，想要 (%q, %v)",
+			t.Errorf("Classify(%q) = (skip %q, notable %v), want (%q, %v)",
 				c.file, got.Skip, got.Notable, c.skip, c.notable)
 		}
 	}
@@ -99,20 +108,21 @@ func TestClassifySkipReasons(t *testing.T) {
 func TestClassifyVersion(t *testing.T) {
 	cases := map[string]string{
 		"gadget_1.4.2_linux_amd64.tar.gz":      "1.4.2",
-		"gadget_v1.4.2_linux_amd64.tar.gz":     "1.4.2", // v 不算版本串的一部分
+		"gadget_v1.4.2_linux_amd64.tar.gz":     "1.4.2", // the v is not part of the version string
 		"gadget-1.0.0-rc.1-linux-amd64.tar.gz": "1.0.0-rc.1",
-		"tool-x86_64-unknown-linux-gnu.tar.xz": "", // cargo-dist 常常不带版本
-		"gadget-2024.09-linux-amd64.tar.gz":    "", // 两段式不认，认了会换错东西
+		"tool-x86_64-unknown-linux-gnu.tar.xz": "", // cargo-dist often ships no version
+		"gadget-2024.09-linux-amd64.tar.gz":    "", // two-component versions are not matched; matching them would replace the wrong thing
 	}
 	for f, want := range cases {
 		if got := Classify(f).Version; got != want {
-			t.Errorf("Classify(%q).Version = %q，想要 %q", f, got, want)
+			t.Errorf("Classify(%q).Version = %q, want %q", f, got, want)
 		}
 	}
 }
 
-// 版本号不换成 {version}，作者每次发版都要回来改这个文件 ——
-// 而「打个 tag 就是发新版」是这个产品的卖点。
+// Without turning the version into {version}, the author has to come back and
+// edit this file on every release — and "push a tag, that's the release" is this
+// product's selling point.
 func TestInferReplacesTheVersion(t *testing.T) {
 	res := Infer([]string{
 		"gadget_1.4.2_linux_amd64.tar.gz",
@@ -120,89 +130,94 @@ func TestInferReplacesTheVersion(t *testing.T) {
 		"checksums.txt",
 	}, "")
 	if len(res.Assets) != 2 || len(res.Artifact) != 2 {
-		t.Fatalf("认出 %d 个，想要 2：%+v", len(res.Assets), res.Assets)
+		t.Fatalf("recognized %d, want 2: %+v", len(res.Assets), res.Assets)
 	}
 	if res.Version != "1.4.2" {
-		t.Fatalf("版本 = %q，想要 1.4.2", res.Version)
+		t.Fatalf("version = %q, want 1.4.2", res.Version)
 	}
 	for _, a := range res.Assets {
 		if strings.Contains(a.Template, "1.4.2") {
-			t.Errorf("%q 里还留着写死的版本号：%q", a.File, a.Template)
+			t.Errorf("%q still has the version hard-coded: %q", a.File, a.Template)
 		}
 		if !strings.Contains(a.Template, "{version}") {
-			t.Errorf("%q 没有 {version} 占位符：%q", a.File, a.Template)
+			t.Errorf("%q has no {version} placeholder: %q", a.File, a.Template)
 		}
 		if res.Artifact[a.Platform] != a.Template {
-			t.Errorf("Artifact[%q] = %q，和 Assets 对不上", a.Platform, res.Artifact[a.Platform])
+			t.Errorf("Artifact[%q] = %q, does not match Assets", a.Platform, res.Artifact[a.Platform])
 		}
 	}
 }
 
-// 资产名里带 v 前缀时，{version} 不带 v（规格 §3），所以只该替换裸版本号，
-// 让 v 留在模板里 —— 换掉 "v1.4.2" 会生成一个每次都少个 v 的地址。
+// When the asset name carries a v prefix, {version} does not (spec §3), so only
+// the bare version may be replaced and the v has to stay in the template —
+// replacing "v1.4.2" would generate a URL missing a v every single time.
 func TestInferKeepsTheVPrefixInTheTemplate(t *testing.T) {
 	res := Infer([]string{"gadget_v1.4.2_linux_amd64.tar.gz"}, "")
 	if len(res.Assets) != 1 {
-		t.Fatalf("认出 %d 个，想要 1", len(res.Assets))
+		t.Fatalf("recognized %d, want 1", len(res.Assets))
 	}
 	if got, want := res.Assets[0].Template, "gadget_v{version}_linux_amd64.tar.gz"; got != want {
-		t.Fatalf("模板 = %q，想要 %q", got, want)
+		t.Fatalf("template = %q, want %q", got, want)
 	}
 }
 
-// forceVersion 说了算：文件名里认不出三段式版本（2024.09 这种）时它是唯一的出路。
-// 前面的 v 要被削掉，不然替换永远匹配不上。
+// forceVersion wins: it is the only way out when the filenames carry no
+// three-component version (things like 2024.09). A leading v has to be trimmed,
+// or the substitution never matches anything.
 func TestInferHonoursTheGivenVersion(t *testing.T) {
 	for _, given := range []string{"2024.09", "v2024.09", " v2024.09 "} {
 		res := Infer([]string{"gadget-2024.09-linux-amd64.tar.gz"}, given)
 		if got, want := res.Assets[0].Template, "gadget-{version}-linux-amd64.tar.gz"; got != want {
-			t.Fatalf("--version %q：模板 = %q，想要 %q", given, got, want)
+			t.Fatalf("--version %q: template = %q, want %q", given, got, want)
 		}
 	}
 }
 
-// 同一个平台发了 .tar.gz 和 .zip 两份很常见。静默丢一个会让作者以为
-// 自己发的那个格式生效了，所以必须说出来。
+// Shipping both a .tar.gz and a .zip for one platform is common. Dropping one
+// silently would let the author believe the format they shipped is the one in
+// use, so it has to be said out loud.
 func TestInferReportsDuplicatePlatforms(t *testing.T) {
 	res := Infer([]string{
 		"gadget_1.0.0_linux_amd64.tar.gz",
 		"gadget_1.0.0_linux_amd64.zip",
 	}, "")
 	if len(res.Assets) != 1 {
-		t.Fatalf("同一个平台应该只留一行，得到 %d", len(res.Assets))
+		t.Fatalf("one platform should keep one line, got %d", len(res.Assets))
 	}
 	if len(res.Skipped) != 1 || !strings.Contains(res.Skipped[0].Skip, "linux/amd64") {
-		t.Fatalf("重复的那个要说明，得到 %+v", res.Skipped)
+		t.Fatalf("the duplicate has to be explained, got %+v", res.Skipped)
 	}
 	if res.Skipped[0].File != "gadget_1.0.0_linux_amd64.zip" {
-		t.Fatalf("被丢掉的应该是排后面那个，得到 %q", res.Skipped[0].File)
+		t.Fatalf("the dropped one should be the later in sort order, got %q", res.Skipped[0].File)
 	}
 }
 
-// 规格 §11：不做 Windows。但静默跳过等于让作者以为 Windows 用户装得上。
+// Spec §11: no Windows. But skipping it silently lets the author believe
+// Windows users can install.
 func TestInferSaysWhyWindowsIsSkipped(t *testing.T) {
 	res := Infer([]string{"gadget_1.0.0_windows_amd64.zip"}, "")
 	if len(res.Assets) != 0 {
-		t.Fatalf("Windows 不能进 [artifact]，得到 %+v", res.Assets)
+		t.Fatalf("Windows must not enter [artifact], got %+v", res.Assets)
 	}
 	if len(res.Skipped) != 1 || !strings.Contains(res.Skipped[0].Skip, "Windows") {
-		t.Fatalf("要说明是因为 Windows，得到 %+v", res.Skipped)
+		t.Fatalf("the reason has to say Windows, got %+v", res.Skipped)
 	}
 }
 
-// 认不出来的【资产】必须出声。静默丢掉的症状很恶心：数字看着对，
-// 少的那个平台要等用户来报。但 checksums.txt / LICENSE 这些本来就不是资产，
-// 为它们报警会把真的那条淹掉。
+// An unrecognized ASSET has to speak up. The symptom of dropping one silently
+// is nasty: the counts look right, and the missing platform waits for a user to
+// report it. But checksums.txt / LICENSE were never assets, and warning about
+// them drowns out the real line.
 func TestInferReportsUnrecognizedAssetsButNotStrayFiles(t *testing.T) {
 	res := Infer([]string{
 		"tool_1.2.3_linux_amd64.tar.gz",
-		"tool_1.2.3_freebsd_riscv64.tar.gz", // 像资产，认不出 → 要出声
-		"checksums.txt",                     // 不是资产 → 不许出声
+		"tool_1.2.3_freebsd_riscv64.tar.gz", // looks like an asset, unrecognized -> speak up
+		"checksums.txt",                     // not an asset -> stay quiet
 		"LICENSE",
 		"README.md",
 	}, "")
 	if len(res.Assets) != 1 {
-		t.Fatalf("认出的资产数 = %d，想要 1：%+v", len(res.Assets), res.Assets)
+		t.Fatalf("recognized %d assets, want 1: %+v", len(res.Assets), res.Assets)
 	}
 	var mentions int
 	for _, s := range res.Skipped {
@@ -211,12 +226,12 @@ func TestInferReportsUnrecognizedAssetsButNotStrayFiles(t *testing.T) {
 		}
 		for _, quiet := range []string{"checksums.txt", "LICENSE", "README.md"} {
 			if s.File == quiet {
-				t.Errorf("不该为非资产 %s 出声：%+v", quiet, s)
+				t.Errorf("should not speak up about non-asset %s: %+v", quiet, s)
 			}
 		}
 	}
 	if mentions != 1 {
-		t.Errorf("认不出的资产应该被报一次，实际 %d 次：%+v", mentions, res.Skipped)
+		t.Errorf("an unrecognized asset should be reported once, got %d times: %+v", mentions, res.Skipped)
 	}
 }
 
@@ -229,19 +244,21 @@ func TestInferName(t *testing.T) {
 		{[]string{"my-tool-1.0.0-linux-amd64.tar.gz", "my-tool-1.0.0-darwin-arm64.tar.gz"}, "my-tool"},
 		{[]string{"solo_1.0.0_linux_amd64.tar.gz"}, "solo"},
 		{[]string{"a_1.0.0_linux_amd64.tar.gz", "b_1.0.0_linux_arm64.tar.gz"}, ""},
-		// cargo-dist 风格：没有版本号，公共前缀削到分隔符为止。
+		// cargo-dist style: no version, so the common prefix is trimmed back to
+		// the separator.
 		{[]string{"ripgrep-x86_64-unknown-linux-gnu.tar.xz", "ripgrep-aarch64-apple-darwin.tar.xz"}, "ripgrep"},
 		{nil, ""},
 	}
 	for _, c := range cases {
 		if got := Infer(c.in, "").Name; got != c.want {
-			t.Errorf("Infer(%v).Name = %q，想要 %q", c.in, got, c.want)
+			t.Errorf("Infer(%v).Name = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
 
-// 认出来的资产按平台 key 排序：同一批文件名每次都要跑出同样的 toy.toml，
-// 否则 init 每跑一次就是一个无意义的 diff。
+// Recognized assets are sorted by platform key: the same filenames have to
+// produce the same toy.toml every time, or every init run is a meaningless
+// diff.
 func TestInferSortsByPlatform(t *testing.T) {
 	res := Infer([]string{
 		"g_1.0.0_linux_amd64.tar.gz",
@@ -254,6 +271,6 @@ func TestInferSortsByPlatform(t *testing.T) {
 	}
 	want := []string{"darwin/arm64", "linux/amd64", "linux/arm64"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("顺序 = %v，想要 %v", got, want)
+		t.Fatalf("order = %v, want %v", got, want)
 	}
 }

@@ -33,20 +33,20 @@ func TestSignVerify(t *testing.T) {
 		pubHex  string
 		msg     []byte
 		sig     string
-		wantErr error // ErrBadSignature 或 nil；其它错误只断言"非 nil"
+		wantErr error // ErrBadSignature or nil; other errors are only asserted "non-nil"
 		wantAny bool
 	}{
-		{name: "正常验签", pubHex: pubHex, msg: msg, sig: sig},
-		{name: "公钥前后有空白也认", pubHex: " " + pubHex + "\n", msg: msg, sig: sig},
-		{name: "签名前后有空白也认", pubHex: pubHex, msg: msg, sig: sig + "\n"},
-		{name: "空消息", pubHex: pubHex, msg: nil, sig: Sign(kp.Private, nil)},
-		{name: "消息被改", pubHex: pubHex, msg: []byte("name = \"tinyserve!\""), sig: sig, wantErr: ErrBadSignature},
-		{name: "换了一把公钥", pubHex: hex.EncodeToString(other.Public), msg: msg, sig: sig, wantErr: ErrBadSignature},
-		{name: "签名被改", pubHex: pubHex, msg: msg, sig: Sign(other.Private, msg), wantErr: ErrBadSignature},
-		{name: "公钥不是 hex", pubHex: "zzzz", msg: msg, sig: sig, wantAny: true},
-		{name: "公钥长度不对", pubHex: "a3f9", msg: msg, sig: sig, wantAny: true},
-		{name: "签名不是 base64", pubHex: pubHex, msg: msg, sig: "!!!not base64!!!", wantAny: true},
-		{name: "签名长度不对", pubHex: pubHex, msg: msg, sig: "YWJj", wantErr: ErrBadSignature},
+		{name: "valid signature", pubHex: pubHex, msg: msg, sig: sig},
+		{name: "public key with surrounding whitespace", pubHex: " " + pubHex + "\n", msg: msg, sig: sig},
+		{name: "signature with surrounding whitespace", pubHex: pubHex, msg: msg, sig: sig + "\n"},
+		{name: "empty message", pubHex: pubHex, msg: nil, sig: Sign(kp.Private, nil)},
+		{name: "message tampered with", pubHex: pubHex, msg: []byte("name = \"tinyserve!\""), sig: sig, wantErr: ErrBadSignature},
+		{name: "different public key", pubHex: hex.EncodeToString(other.Public), msg: msg, sig: sig, wantErr: ErrBadSignature},
+		{name: "signature tampered with", pubHex: pubHex, msg: msg, sig: Sign(other.Private, msg), wantErr: ErrBadSignature},
+		{name: "public key is not hex", pubHex: "zzzz", msg: msg, sig: sig, wantAny: true},
+		{name: "public key has the wrong length", pubHex: "a3f9", msg: msg, sig: sig, wantAny: true},
+		{name: "signature is not base64", pubHex: pubHex, msg: msg, sig: "!!!not base64!!!", wantAny: true},
+		{name: "signature has the wrong length", pubHex: pubHex, msg: msg, sig: "YWJj", wantErr: ErrBadSignature},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,31 +54,31 @@ func TestSignVerify(t *testing.T) {
 			switch {
 			case tc.wantAny:
 				if err == nil {
-					t.Fatal("想要一个错误，却通过了")
+					t.Fatal("wanted an error, but it passed")
 				}
 			case tc.wantErr != nil:
 				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("想要 %v，得到 %v", tc.wantErr, err)
+					t.Fatalf("want %v, got %v", tc.wantErr, err)
 				}
 			default:
 				if err != nil {
-					t.Fatalf("应该验签通过，却得到 %v", err)
+					t.Fatalf("should have verified, got %v", err)
 				}
 			}
 		})
 	}
 }
 
-// 消息就是原始字节，不再自己套一层 hash —— 这条被 Verify 和标准库直接验签
-// 结果一致钉住。
+// The message is the raw bytes with no extra hash layer -- pinned by Verify and a
+// direct standard-library verification agreeing.
 func TestSignsRawMessageNotAHashOfIt(t *testing.T) {
 	kp := mustGenerate(t)
-	msg := []byte("原始字节")
+	msg := []byte("raw bytes")
 	if err := Verify(hex.EncodeToString(kp.Public), msg, Sign(kp.Private, msg)); err != nil {
-		t.Fatalf("自签自验失败: %v", err)
+		t.Fatalf("sign/verify round trip failed: %v", err)
 	}
 	if !ed25519.Verify(kp.Public, msg, ed25519.Sign(kp.Private, msg)) {
-		t.Fatal("标准库对同一条原始消息验不过，说明 Sign 多加了一层")
+		t.Fatal("the standard library rejects the same raw message, so Sign added a layer")
 	}
 }
 
@@ -88,29 +88,30 @@ func TestFingerprint(t *testing.T) {
 
 	fp := Fingerprint(kp.Public)
 	if !strings.HasSuffix(fp, "…") {
-		t.Fatalf("指纹要带省略号好在界面上显示，得到 %q", fp)
+		t.Fatalf("the fingerprint needs an ellipsis so it displays well, got %q", fp)
 	}
 	if got, want := strings.TrimSuffix(fp, "…"), full[:fingerprintHexLen]; got != want {
-		t.Fatalf("指纹前缀 = %q，想要 %q", got, want)
+		t.Fatalf("fingerprint prefix = %q, want %q", got, want)
 	}
 	if Fingerprint(nil) == "" {
-		t.Fatal("没有公钥时也要给一句能显示的话，不能是空串")
+		t.Fatal("with no public key it still has to say something displayable, not an empty string")
 	}
-	// 铁律 8：长度不对的东西不是公钥，不许渲染成一个像样的指纹。
-	// 界面上打 "key a3…" 会被读成"这个包有签名者"，而它连验签都过不去。
+	// Iron rule 8: something of the wrong length is not a public key and must not render
+	// as a respectable fingerprint. A "key a3…" on screen reads as "this package has a
+	// signer", when it cannot even pass verification.
 	for _, bad := range []ed25519.PublicKey{{0xa3}, make(ed25519.PublicKey, 31), make(ed25519.PublicKey, 33)} {
 		got := Fingerprint(bad)
 		if strings.HasSuffix(got, "…") || len(bad) == 1 && got == "a3" {
-			t.Fatalf("%d 字节的公钥被渲染成了 %q，看起来像个正常指纹", len(bad), got)
+			t.Fatalf("a %d-byte public key rendered as %q, which looks like a normal fingerprint", len(bad), got)
 		}
 		if !strings.Contains(got, "invalid") {
-			t.Fatalf("%d 字节的公钥应该明说无效，得到 %q", len(bad), got)
+			t.Fatalf("a %d-byte public key should say plainly that it is invalid, got %q", len(bad), got)
 		}
 	}
 }
 
 func TestKeyPairRoundTrip(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "keys") // 不存在，SaveKeyPair 要自己建
+	dir := filepath.Join(t.TempDir(), "keys") // does not exist; SaveKeyPair has to create it
 	kp := mustGenerate(t)
 
 	if err := SaveKeyPair(dir, kp); err != nil {
@@ -122,7 +123,7 @@ func TestKeyPairRoundTrip(t *testing.T) {
 			t.Fatalf("stat %s: %v", name, err)
 		}
 		if got := info.Mode().Perm(); got != want {
-			t.Fatalf("%s 权限 = %04o，想要 %04o", name, got, want)
+			t.Fatalf("%s mode = %04o, want %04o", name, got, want)
 		}
 	}
 
@@ -131,15 +132,15 @@ func TestKeyPairRoundTrip(t *testing.T) {
 		t.Fatalf("LoadKeyPair: %v", err)
 	}
 	if !got.Public.Equal(kp.Public) || !got.Private.Equal(kp.Private) {
-		t.Fatal("读回来的密钥对和写进去的不一样")
+		t.Fatal("the keypair read back differs from the one written")
 	}
-	// 公钥文件是 hex 文本，用户能直接 cat 出来贴进索引条目。
+	// The public key file is hex text, so a user can cat it straight into an index entry.
 	raw, err := os.ReadFile(filepath.Join(dir, pubFile))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(string(raw)) != hex.EncodeToString(kp.Public) {
-		t.Fatalf("key.pub 应该是公钥的 hex，得到 %q", raw)
+		t.Fatalf("key.pub should be the hex of the public key, got %q", raw)
 	}
 }
 
@@ -147,23 +148,23 @@ func TestSaveKeyPairRefusesToOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	first := mustGenerate(t)
 	if err := SaveKeyPair(dir, first); err != nil {
-		t.Fatalf("第一次保存: %v", err)
+		t.Fatalf("first save: %v", err)
 	}
 	if err := SaveKeyPair(dir, mustGenerate(t)); err == nil {
-		t.Fatal("已有密钥时必须拒绝覆盖")
+		t.Fatal("must refuse to overwrite an existing key")
 	}
 	got, err := LoadKeyPair(dir)
 	if err != nil {
 		t.Fatalf("LoadKeyPair: %v", err)
 	}
 	if !got.Private.Equal(first.Private) {
-		t.Fatal("原来的私钥被覆盖了")
+		t.Fatal("the existing private key was overwritten")
 	}
 }
 
 func TestLoadKeyPairErrors(t *testing.T) {
-	// 私钥权限不是 0600 就拒绝加载，跟 ssh 一样。
-	t.Run("私钥权限太松", func(t *testing.T) {
+	// Refuse to load a private key that is not 0600, same as ssh.
+	t.Run("private key permissions too loose", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := SaveKeyPair(dir, mustGenerate(t)); err != nil {
 			t.Fatal(err)
@@ -173,19 +174,19 @@ func TestLoadKeyPairErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, e := LoadKeyPair(dir); e == nil {
-			t.Fatal("0644 的私钥必须被拒绝")
+			t.Fatal("a 0644 private key must be refused")
 		} else if !strings.Contains(e.Error(), "chmod 600") {
-			t.Fatalf("报错要告诉用户怎么修，得到 %v", e)
+			t.Fatalf("the error must tell the user how to fix it, got %v", e)
 		}
 	})
 
-	t.Run("完全没有密钥", func(t *testing.T) {
+	t.Run("no key at all", func(t *testing.T) {
 		if _, err := LoadKeyPair(t.TempDir()); !errors.Is(err, ErrNoKey) {
-			t.Fatalf("想要 ErrNoKey，得到 %v", err)
+			t.Fatalf("want ErrNoKey, got %v", err)
 		}
 	})
 
-	t.Run("只有私钥缺公钥", func(t *testing.T) {
+	t.Run("private key present, public key missing", func(t *testing.T) {
 		dir := t.TempDir()
 		kp := mustGenerate(t)
 		if err := SaveKeyPair(dir, kp); err != nil {
@@ -195,31 +196,31 @@ func TestLoadKeyPairErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := LoadKeyPair(dir); err == nil {
-			t.Fatal("缺公钥必须报错")
+			t.Fatal("a missing public key must be an error")
 		}
 	})
 
-	t.Run("私钥不是 hex", func(t *testing.T) {
+	t.Run("private key is not hex", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, secFile), []byte("这不是十六进制"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, secFile), []byte("this is not hex"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadKeyPair(dir); err == nil {
-			t.Fatal("坏私钥必须报错")
+			t.Fatal("a corrupt private key must be an error")
 		}
 	})
 
-	t.Run("私钥长度不对", func(t *testing.T) {
+	t.Run("private key has the wrong length", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, secFile), []byte("a3f9"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := LoadKeyPair(dir); err == nil {
-			t.Fatal("长度不对的私钥必须报错")
+			t.Fatal("a private key of the wrong length must be an error")
 		}
 	})
 
-	t.Run("公钥私钥不是一对", func(t *testing.T) {
+	t.Run("public and private key are not a pair", func(t *testing.T) {
 		dir := t.TempDir()
 		a, b := mustGenerate(t), mustGenerate(t)
 		if err := os.WriteFile(filepath.Join(dir, secFile), []byte(hex.EncodeToString(a.Private)), 0o600); err != nil {
@@ -229,20 +230,21 @@ func TestLoadKeyPairErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := LoadKeyPair(dir); err == nil {
-			t.Fatal("两个文件不是一对时必须报错")
+			t.Fatal("two files that are not a pair must be an error")
 		}
 	})
 }
 
 func TestSaveKeyPairRejectsBadKey(t *testing.T) {
 	if err := SaveKeyPair(t.TempDir(), KeyPair{}); err == nil {
-		t.Fatal("空密钥对不该被写进磁盘")
+		t.Fatal("an empty keypair must not be written to disk")
 	}
 }
 
-// 钥匙环的核心行为：首次见到不算数、之后必须一致、变了要连旧值一起报。
+// Core keyring behaviour: the first sighting does not count, later ones must match,
+// and a change is reported together with the old value.
 func TestRingTOFU(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "known") // 目录也不存在
+	dir := filepath.Join(t.TempDir(), "known") // the directory does not exist either
 	r, err := OpenRing(dir)
 	if err != nil {
 		t.Fatalf("OpenRing: %v", err)
@@ -252,17 +254,17 @@ func TestRingTOFU(t *testing.T) {
 	const first = "a3f9c1d2"
 	const second = "deadbeef"
 
-	// 文件都还不存在，要能容忍。
+	// None of the files exist yet; that has to be tolerated.
 	tr, old, err := r.Check(id, "sha256", first)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
 	if tr != TrustNew || old != "" {
-		t.Fatalf("头一次见应该是 (TrustNew, \"\")，得到 (%v, %q)", tr, old)
+		t.Fatalf("a first sighting should be (TrustNew, \"\"), got (%v, %q)", tr, old)
 	}
-	// Check 绝不自动钉住 —— 调用方装成功之后才 Pin。
+	// Check never pins by itself -- the caller Pins after the install succeeds.
 	if _, err := os.Stat(filepath.Join(dir, "sha256.txt")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("Check 不许写文件，钉住是 Pin 的事")
+		t.Fatal("Check must not write files; pinning is Pin's job")
 	}
 
 	if err := r.Pin(id, "sha256", first); err != nil {
@@ -276,10 +278,10 @@ func TestRingTOFU(t *testing.T) {
 		want     Trust
 		wantOld  string
 	}{
-		{name: "一致", id: id, kind: "sha256", value: first, want: TrustMatch, wantOld: first},
-		{name: "变了要带旧值回来", id: id, kind: "sha256", value: second, want: TrustChanged, wantOld: first},
-		{name: "另一个 id 还是新的", id: "github:x/y", kind: "sha256", value: first, want: TrustNew},
-		{name: "另一个 kind 各记各的", id: id, kind: "key", value: first, want: TrustNew},
+		{name: "matches", id: id, kind: "sha256", value: first, want: TrustMatch, wantOld: first},
+		{name: "a change returns the old value", id: id, kind: "sha256", value: second, want: TrustChanged, wantOld: first},
+		{name: "a different id is still new", id: "github:x/y", kind: "sha256", value: first, want: TrustNew},
+		{name: "a different kind is recorded separately", id: id, kind: "key", value: first, want: TrustNew},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -288,32 +290,32 @@ func TestRingTOFU(t *testing.T) {
 				t.Fatalf("Check: %v", err)
 			}
 			if got != tc.want || old != tc.wantOld {
-				t.Fatalf("Check = (%v, %q)，想要 (%v, %q)", got, old, tc.want, tc.wantOld)
+				t.Fatalf("Check = (%v, %q), want (%v, %q)", got, old, tc.want, tc.wantOld)
 			}
 		})
 	}
 
-	// Pin 覆盖（调用方应当已经拿到 --force）。
+	// Pin overwrites (the caller is expected to already have --force).
 	if err := r.Pin(id, "sha256", second); err != nil {
-		t.Fatalf("Pin 覆盖: %v", err)
+		t.Fatalf("Pin overwrite: %v", err)
 	}
 	if got, old, _ := r.Check(id, "sha256", second); got != TrustMatch || old != second {
-		t.Fatalf("覆盖后应该 TrustMatch/%q，得到 %v/%q", second, got, old)
+		t.Fatalf("after overwriting expected TrustMatch/%q, got %v/%q", second, got, old)
 	}
-	// 覆盖不许留下重复行。
+	// Overwriting must not leave a duplicate row.
 	raw, err := os.ReadFile(filepath.Join(dir, "sha256.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n := strings.Count(string(raw), id+" "); n != 1 {
-		t.Fatalf("%s 在文件里出现了 %d 次，应该只有 1 次:\n%s", id, n, raw)
+		t.Fatalf("%s appears %d times in the file, expected exactly 1:\n%s", id, n, raw)
 	}
 	if info, _ := os.Stat(filepath.Join(dir, "sha256.txt")); info.Mode().Perm() != 0o644 {
-		t.Fatalf("钥匙环文件权限 = %04o，想要 0644", info.Mode().Perm())
+		t.Fatalf("keyring file mode = %04o, want 0644", info.Mode().Perm())
 	}
 }
 
-// id 里有 : 和 /，所以存取必须按第一个空格切。
+// An id contains : and /, so storing and loading must split on the first space.
 func TestRingSplitsOnFirstSpaceOnly(t *testing.T) {
 	r, err := OpenRing(t.TempDir())
 	if err != nil {
@@ -335,7 +337,7 @@ func TestRingSplitsOnFirstSpaceOnly(t *testing.T) {
 			t.Fatalf("Check %s: %v", id, err)
 		}
 		if got != TrustMatch {
-			t.Fatalf("%s 应该 TrustMatch，得到 %v（旧值 %q）", id, got, old)
+			t.Fatalf("%s should be TrustMatch, got %v (old value %q)", id, got, old)
 		}
 	}
 }
@@ -347,12 +349,12 @@ func TestRingToleratesJunkAndMissingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := strings.Join([]string{
-		"# 这是注释",
+		"# this is a comment",
 		"",
 		"   ",
-		"孤零零一个没有值的 id",
+		"a lone id with no value",
 		"github:a/b abc123",
-		"  github:c/d   def456  ", // 前后空白和多余空格
+		"  github:c/d   def456  ", // leading/trailing and extra whitespace
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(dir, "sha256.txt"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -361,44 +363,44 @@ func TestRingToleratesJunkAndMissingFiles(t *testing.T) {
 		t.Fatalf("Check = %v, %v", got, err)
 	}
 	if got, old, err := r.Check("github:c/d", "sha256", "def456"); err != nil || got != TrustMatch {
-		t.Fatalf("多余空格那行没读对: %v, %q, %v", got, old, err)
+		t.Fatalf("the row with extra whitespace was not read correctly: %v, %q, %v", got, old, err)
 	}
-	// 从来没写过的 kind 一样要能读。
+	// A kind that was never written must still be readable.
 	if got, _, err := r.Check("github:a/b", "key", "x"); err != nil || got != TrustNew {
-		t.Fatalf("文件不存在时应该 TrustNew，得到 %v, %v", got, err)
+		t.Fatalf("a missing file should be TrustNew, got %v, %v", got, err)
 	}
 }
 
-// kind 直接当文件名用，所以它必须是安全名字而不是一段路径。
+// kind is used directly as a file name, so it must be a safe name and not a path.
 func TestRingRejectsBadInput(t *testing.T) {
 	r, err := OpenRing(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct{ name, id, kind, value string }{
-		{"空 id", "", "key", "v"},
-		{"空 value", "github:a/b", "key", ""},
-		{"空 kind", "github:a/b", "", "v"},
-		{"kind 路径穿越", "github:a/b", "../../etc/passwd", "v"},
-		{"kind 带斜杠", "github:a/b", "a/b", "v"},
-		{"id 带空格", "github:a/b c", "key", "v"},
-		{"id 带换行", "github:a/b\nevil x", "key", "v"},
-		{"value 带空格", "github:a/b", "key", "v v"},
-		{"id 以 # 开头", "#github:a/b", "key", "v"}, // load 会把它当注释吃掉
-		{"id 就是 #", "#", "key", "v"},
+		{"empty id", "", "key", "v"},
+		{"empty value", "github:a/b", "key", ""},
+		{"empty kind", "github:a/b", "", "v"},
+		{"kind path traversal", "github:a/b", "../../etc/passwd", "v"},
+		{"kind contains a slash", "github:a/b", "a/b", "v"},
+		{"id contains a space", "github:a/b c", "key", "v"},
+		{"id contains a newline", "github:a/b\nevil x", "key", "v"},
+		{"value contains a space", "github:a/b", "key", "v v"},
+		{"id starts with #", "#github:a/b", "key", "v"}, // load would swallow it as a comment
+		{"id is just #", "#", "key", "v"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := r.Pin(tc.id, tc.kind, tc.value); err == nil {
-				t.Fatal("Pin 应该拒绝")
+				t.Fatal("Pin should refuse")
 			}
 			if _, _, err := r.Check(tc.id, tc.kind, tc.value); err == nil {
-				t.Fatal("Check 应该拒绝")
+				t.Fatal("Check should refuse")
 			}
 		})
 	}
 	if _, err := OpenRing(""); err == nil {
-		t.Fatal("空目录名应该被拒绝")
+		t.Fatal("an empty directory name should be refused")
 	}
 }
 
@@ -410,7 +412,7 @@ func TestRingPinIsIdempotent(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		if err := r.Pin("github:a/b", "key", "abc"); err != nil {
-			t.Fatalf("Pin 第 %d 次: %v", i, err)
+			t.Fatalf("Pin call %d: %v", i, err)
 		}
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "key.txt"))
@@ -418,16 +420,16 @@ func TestRingPinIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(raw) != "github:a/b abc\n" {
-		t.Fatalf("重复 Pin 同一个值不该改动文件，得到 %q", raw)
+		t.Fatalf("re-Pinning the same value must not change the file, got %q", raw)
 	}
-	// 不该留下临时文件（key.txt.lock 是 Pin 的锁，长期存在是对的）。
+	// No temp files left behind (key.txt.lock is Pin's lock and is meant to persist).
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
 		if e.Name() != "key.txt" && e.Name() != "key.txt.lock" {
-			t.Fatalf("留下了临时文件 %s", e.Name())
+			t.Fatalf("left a temp file behind: %s", e.Name())
 		}
 	}
 }
@@ -435,14 +437,15 @@ func TestRingPinIsIdempotent(t *testing.T) {
 func TestTrustString(t *testing.T) {
 	for tr, want := range map[Trust]string{TrustNew: "new", TrustMatch: "match", TrustChanged: "changed"} {
 		if got := tr.String(); got != want {
-			t.Fatalf("Trust(%d).String() = %q，想要 %q", int(tr), got, want)
+			t.Fatalf("Trust(%d).String() = %q, want %q", int(tr), got, want)
 		}
 	}
 }
 
-// Pin 说成功就必须钉得住。这条不变量比任何单个用例都重要：一条 Pin 成功、
-// Check 却读不回来的记录，等于这个包的 TOFU 被静默关掉了 —— 每次安装都是
-// "首次，已钉住"，artifact 换了也不会有人告诉用户。
+// If Pin reports success, the value must actually stay pinned. This invariant matters
+// more than any single case: a record that Pins successfully but that Check cannot read
+// back means TOFU is silently off for that package -- every install is "first time,
+// pinned", and nobody is told when the artifact changes.
 func TestPinnedValuesAlwaysComeBack(t *testing.T) {
 	r, err := OpenRing(t.TempDir())
 	if err != nil {
@@ -453,31 +456,32 @@ func TestPinnedValuesAlwaysComeBack(t *testing.T) {
 		"gitlab:group/sub/proj@v2.0.0",
 		"https://example.com/a/b/toy.toml",
 		"https://example.com/a#frag",
-		"#github:evil/pkg", // 会被当注释吃掉，必须在 Pin 就被拒
+		"#github:evil/pkg", // would be swallowed as a comment; must be refused at Pin
 		"#",
 		"--force",
 		"..",
 		"../../etc/passwd",
 		strings.Repeat("a", 4096),
 		"a\x00b",
-		"名字里有中文",
+		"name with non-ASCII characters",
 	}
 	for _, id := range ids {
 		if err := r.Pin(id, "sha256", "cafebabe"); err != nil {
-			continue // 拒绝是可以接受的答案，静默丢失不是
+			continue // Refusing is an acceptable answer; silently losing it is not
 		}
 		got, old, err := r.Check(id, "sha256", "cafebabe")
 		if err != nil {
-			t.Fatalf("Pin %q 成功但 Check 报错: %v", id, err)
+			t.Fatalf("Pin %q succeeded but Check errored: %v", id, err)
 		}
 		if got != TrustMatch {
-			t.Fatalf("Pin %q 成功，Check 却是 %v（旧值 %q）—— 钉住记录静默丢了", id, got, old)
+			t.Fatalf("Pin %q succeeded but Check says %v (old value %q) -- the pin was silently lost", id, got, old)
 		}
 	}
 }
 
-// 并发 Pin 不许丢记录。丢一条 = 那个包下次是 TrustNew（放行并重新钉住）
-// 而不是 TrustMatch，也就是 TOFU 被静默降级。修之前 40 个并发只剩 16 条。
+// Concurrent Pins must not lose records. Losing one means that package is TrustNew
+// (allow and re-pin) on its next install instead of TrustMatch -- TOFU silently
+// downgraded. Before the fix, 40 concurrent writers left 16 records.
 func TestConcurrentPinKeepsEveryEntry(t *testing.T) {
 	dir := t.TempDir()
 	r, err := OpenRing(dir)
@@ -506,19 +510,19 @@ func TestConcurrentPinKeepsEveryEntry(t *testing.T) {
 			t.Fatalf("Check %d: %v", i, err)
 		}
 		if got != TrustMatch {
-			t.Fatalf("并发写之后 github:p/%d = %v，钉住记录丢了", i, got)
+			t.Fatalf("after the concurrent writes github:p/%d = %v -- the pin was lost", i, got)
 		}
 	}
 }
 
-// Check 出错时的失败方向必须是"拒绝"。零值 TrustNew 是"放行并钉住"那一档，
-// 丢掉 error 的调用方拿到它就等于静默降级成一次新的 TOFU。
+// Check must fail closed. The zero value TrustNew is the "allow and pin" tier, so a
+// caller that drops the error would silently downgrade into a fresh TOFU.
 func TestCheckFailsClosed(t *testing.T) {
 	r, err := OpenRing(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 坏输入是唯一不依赖文件系统权限就能触发的出错路径。
+	// Bad input is the only error path that does not depend on filesystem permissions.
 	for _, tc := range []struct{ id, kind, value string }{
 		{"", "sha256", "v"},
 		{"github:a/b", "../etc", "v"},
@@ -526,13 +530,14 @@ func TestCheckFailsClosed(t *testing.T) {
 	} {
 		got, _, err := r.Check(tc.id, tc.kind, tc.value)
 		if err == nil {
-			t.Fatalf("Check(%q,%q,%q) 应该报错", tc.id, tc.kind, tc.value)
+			t.Fatalf("Check(%q,%q,%q) should error", tc.id, tc.kind, tc.value)
 		}
 		if got == TrustNew {
-			t.Fatalf("Check 出错时返回了 TrustNew（放行那一档），应该是 TrustChanged")
+			t.Fatalf("Check returned TrustNew (the allow tier) on error; it should be TrustChanged")
 		}
 	}
-	// 钥匙环整个不可读时同理。root 下 chmod 拦不住，所以用目录顶掉文件。
+	// Same when the whole keyring is unreadable. chmod does not stop root, so a directory
+	// is put where the file should be.
 	dir := t.TempDir()
 	r2, err := OpenRing(dir)
 	if err != nil {
@@ -543,55 +548,58 @@ func TestCheckFailsClosed(t *testing.T) {
 	}
 	got, _, err := r2.Check("github:a/b", "sha256", "v")
 	if err == nil {
-		t.Fatal("读不了钥匙环必须报错，不能当成没钉过")
+		t.Fatal("an unreadable keyring must error, not be treated as nothing pinned")
 	}
 	if got == TrustNew {
-		t.Fatalf("读不了钥匙环时返回了 TrustNew（放行），应该是 TrustChanged")
+		t.Fatalf("an unreadable keyring returned TrustNew (allow); it should be TrustChanged")
 	}
 }
 
-// "已存在时拒绝覆盖" 必须是 O_EXCL 保证的，不能只靠 Stat —— Stat 和写之间
-// 的窗口里，另一个 toy keygen 建出来的私钥会被 O_TRUNC 抹掉。
+// "Refuses to overwrite" has to be guaranteed by O_EXCL, not by Stat alone -- in the
+// window between Stat and the write, a private key created by another toy keygen would
+// be wiped by O_TRUNC.
 func TestSaveKeyPairNeverTruncatesAnExistingSecret(t *testing.T) {
 	dir := t.TempDir()
-	// 私钥先在（Stat 会看到），公钥不在 —— 走到写公钥那一步之前就该停。
+	// Private key present (Stat sees it), public key absent -- it must stop before it
+	// ever gets to writing the public key.
 	secPath := filepath.Join(dir, secFile)
-	const sentinel = "别人的私钥"
+	const sentinel = "somebody else's private key"
 	if err := os.WriteFile(secPath, []byte(sentinel), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := SaveKeyPair(dir, mustGenerate(t)); err == nil {
-		t.Fatal("私钥已存在时必须拒绝")
+		t.Fatal("must refuse when the private key already exists")
 	}
 	raw, err := os.ReadFile(secPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(raw) != sentinel {
-		t.Fatalf("已有私钥被动过了: %q", raw)
+		t.Fatalf("the existing private key was modified: %q", raw)
 	}
 
-	// 绕过 Stat 那一圈，直接确认底层用的是 O_EXCL 而不是 O_TRUNC。
-	if err := writeNew(secPath, "新的", 0o600); err == nil {
-		t.Fatal("writeNew 必须用 O_EXCL，不能覆盖已有文件")
+	// Bypass the Stat loop and confirm directly that the layer below uses O_EXCL, not O_TRUNC.
+	if err := writeNew(secPath, "new", 0o600); err == nil {
+		t.Fatal("writeNew must use O_EXCL and never overwrite an existing file")
 	}
 	if raw, _ := os.ReadFile(secPath); string(raw) != sentinel {
-		t.Fatalf("writeNew 截断了已有文件: %q", raw)
+		t.Fatalf("writeNew truncated an existing file: %q", raw)
 	}
 }
 
-// Sign 的消息边界：不同消息、不同私钥签出来的东西不能撞。
+// Sign message boundaries: different messages and different private keys must not
+// produce the same signature.
 func TestSignIsBoundToKeyAndMessage(t *testing.T) {
 	a, b := mustGenerate(t), mustGenerate(t)
 	msg := []byte("name = \"tinyserve\"")
 	if Sign(a.Private, msg) == Sign(b.Private, msg) {
-		t.Fatal("两把不同的私钥签出了同一个签名")
+		t.Fatal("two different private keys produced the same signature")
 	}
 	if Sign(a.Private, msg) == Sign(a.Private, append(msg, '!')) {
-		t.Fatal("两条不同的消息签出了同一个签名")
+		t.Fatal("two different messages produced the same signature")
 	}
-	// 拿 a 的签名配 b 的公钥必须被拒。
+	// a's signature against b's public key must be refused.
 	if err := Verify(hex.EncodeToString(b.Public), msg, Sign(a.Private, msg)); !errors.Is(err, ErrBadSignature) {
-		t.Fatalf("换一把公钥应该 ErrBadSignature，得到 %v", err)
+		t.Fatalf("a different public key should give ErrBadSignature, got %v", err)
 	}
 }

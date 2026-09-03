@@ -13,34 +13,35 @@ func TestLoadRejectsWholeFile(t *testing.T) {
 		name string
 		data string
 	}{
-		{"不是 JSON", "这不是 json"},
-		{"空输入", ""},
-		{"版本是 2", `{"version":2,"packages":[]}`},
-		{"没写版本", `{"packages":[]}`},
+		{"not JSON", "this is not json"},
+		{"empty input", ""},
+		{"version is 2", `{"version":2,"packages":[]}`},
+		{"no version at all", `{"packages":[]}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := Load([]byte(tt.data), "默认"); err == nil {
-				t.Fatal("这份索引应该整体失败，却成功了")
+			if _, _, err := Load([]byte(tt.data), "default"); err == nil {
+				t.Fatal("this index should have failed as a whole, but it loaded")
 			}
 		})
 	}
 }
 
-// 这些条目在到达 source 检查之前就被判坏（ID 形态不对，或 source 是空的）。
+// These entries are rejected before the source check even runs: the ID is
+// malformed, or source is empty.
 func TestLoadSkipsBadEntries(t *testing.T) {
 	tests := []struct {
 		name  string
 		entry Entry
 	}{
-		{"ID 没有斜杠", Entry{ID: "tinyserve", Source: "github:x/tinyserve"}},
-		{"ID 两个斜杠", Entry{ID: "a/b/c", Source: "github:a/b"}},
-		{"ID owner 为空", Entry{ID: "/tinyserve", Source: "github:x/tinyserve"}},
-		{"ID repo 为空", Entry{ID: "Derrity/", Source: "github:Derrity/x"}},
-		{"ID 是空串", Entry{ID: "", Source: "github:x/y"}},
-		{"ID 有非法字符", Entry{ID: "Derr ity/tiny", Source: "github:x/y"}},
-		{"ID 有中文", Entry{ID: "德睿/小服务", Source: "github:x/y"}},
-		{"source 是空的", Entry{ID: "Derrity/tinyserve", Source: ""}},
+		{"ID has no slash", Entry{ID: "tinyserve", Source: "github:x/tinyserve"}},
+		{"ID has two slashes", Entry{ID: "a/b/c", Source: "github:a/b"}},
+		{"ID owner is empty", Entry{ID: "/tinyserve", Source: "github:x/tinyserve"}},
+		{"ID repo is empty", Entry{ID: "Derrity/", Source: "github:Derrity/x"}},
+		{"ID is the empty string", Entry{ID: "", Source: "github:x/y"}},
+		{"ID has an illegal character", Entry{ID: "Derr ity/tiny", Source: "github:x/y"}},
+		{"ID is non-ASCII", Entry{ID: "德睿/小服务", Source: "github:x/y"}},
+		{"source is empty", Entry{ID: "Derrity/tinyserve", Source: ""}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,55 +49,55 @@ func TestLoadSkipsBadEntries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			idx, skipped, err := Load(data, "默认")
+			idx, skipped, err := Load(data, "default")
 			if err != nil {
-				t.Fatalf("一条烂记录不该让整个索引失败：%v", err)
+				t.Fatalf("one rotten record must not fail the whole index: %v", err)
 			}
 			if skipped != 1 {
-				t.Errorf("skipped = %d，想要 1", skipped)
+				t.Errorf("skipped = %d, want 1", skipped)
 			}
 			if len(idx.Packages) != 0 {
-				t.Errorf("坏条目被留下了：%+v", idx.Packages)
+				t.Errorf("bad entry was kept: %+v", idx.Packages)
 			}
-			if idx.Name != "默认" {
-				t.Errorf("Name = %q，想要 %q", idx.Name, "默认")
+			if idx.Name != "default" {
+				t.Errorf("Name = %q, want %q", idx.Name, "default")
 			}
 		})
 	}
 }
 
 func TestLoadEmptyPackages(t *testing.T) {
-	idx, skipped, err := Load([]byte(`{"version":1,"packages":[]}`), "空索引")
+	idx, skipped, err := Load([]byte(`{"version":1,"packages":[]}`), "empty index")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if skipped != 0 || len(idx.Packages) != 0 {
-		t.Fatalf("skipped=%d packages=%d，想要 0/0", skipped, len(idx.Packages))
+		t.Fatalf("skipped=%d packages=%d, want 0/0", skipped, len(idx.Packages))
 	}
 	if idx.Version != 1 {
-		t.Errorf("Version = %d，想要 1", idx.Version)
+		t.Errorf("Version = %d, want 1", idx.Version)
 	}
 }
 
 func TestLoadKeepsGoodEntriesAndCountsSkips(t *testing.T) {
 	data := []byte(`{"version":1,"packages":[
-		{"id":"Derrity/tinyserve","source":"github:Derrity/tinyserve","desc":"好的"},
-		{"id":"没有斜杠","source":"github:a/b","desc":"坏 ID"},
-		{"id":"Derrity/other","source":"","desc":"空 source"},
-		{"id":"Other/ok","source":"github:Other/ok","desc":"也是好的"}
+		{"id":"Derrity/tinyserve","source":"github:Derrity/tinyserve","desc":"good one"},
+		{"id":"noslash","source":"github:a/b","desc":"bad ID"},
+		{"id":"Derrity/other","source":"","desc":"empty source"},
+		{"id":"Other/ok","source":"github:Other/ok","desc":"also good"}
 	]}`)
-	idx, skipped, err := Load(data, "默认")
+	idx, skipped, err := Load(data, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if skipped != 2 {
-		t.Errorf("skipped = %d，想要 2", skipped)
+		t.Errorf("skipped = %d, want 2", skipped)
 	}
 	if len(idx.Packages) != 2 {
-		t.Fatalf("留下了 %d 条，想要 2：%+v", len(idx.Packages), idx.Packages)
+		t.Fatalf("kept %d entries, want 2: %+v", len(idx.Packages), idx.Packages)
 	}
 	if _, ok := idx.Find("Derrity/tinyserve"); !ok {
-		t.Error("好条目 Derrity/tinyserve 不见了")
+		t.Error("the good entry Derrity/tinyserve went missing")
 	}
 }
 
@@ -122,17 +123,17 @@ func TestValidID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			if got := validID(tt.id); got != tt.want {
-				t.Errorf("validID(%q) = %v，想要 %v", tt.id, got, tt.want)
+				t.Errorf("validID(%q) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
 	}
 }
 
-// 每一档命中都单独钉一次，顺序不能变。
+// Every tier gets pinned separately; their order must not change.
 func TestScoreTiers(t *testing.T) {
 	e := Entry{
 		ID:   "Derrity/tinyserve",
-		Desc: "一个很小的静态文件服务器 with HTTP",
+		Desc: "a very small static file host over HTTP",
 		Tags: []string{"web", "server"},
 	}
 	tests := []struct {
@@ -140,33 +141,34 @@ func TestScoreTiers(t *testing.T) {
 		query string
 		want  int
 	}{
-		{"ID 完全匹配", "derrity/tinyserve", scoreExactID},
-		{"ID 完全匹配忽略大小写", "DERRITY/TINYSERVE", scoreExactID},
-		{"ID 前缀", "derrity/tiny", scoreIDPrefix},
-		{"ID 前缀是 owner", "derr", scoreIDPrefix},
-		{"名字子串", "tinyserv", scoreName},
-		{"名字子串在中间", "nyser", scoreName},
-		{"描述子串", "静态文件", scoreDesc},
-		{"描述子串忽略大小写", "http", scoreDesc},
-		{"tag 命中", "web", scoreTag},
-		{"tag 命中忽略大小写", "SERVER", scoreTag},
-		{"什么都不沾", "postgres", 0},
-		{"空 query", "", 0},
+		{"exact ID", "derrity/tinyserve", scoreExactID},
+		{"exact ID ignoring case", "DERRITY/TINYSERVE", scoreExactID},
+		{"ID prefix", "derrity/tiny", scoreIDPrefix},
+		{"ID prefix inside the owner", "derr", scoreIDPrefix},
+		{"name substring", "tinyserv", scoreName},
+		{"name substring in the middle", "nyser", scoreName},
+		{"description substring", "static file", scoreDesc},
+		{"description substring ignoring case", "http", scoreDesc},
+		{"tag hit", "web", scoreTag},
+		{"tag hit ignoring case", "SERVER", scoreTag},
+		{"nothing matches", "postgres", 0},
+		{"empty query", "", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := scoreOf(e, strings.ToLower(tt.query)); got != tt.want {
-				t.Errorf("scoreOf(%q) = %d，想要 %d", tt.query, got, tt.want)
+				t.Errorf("scoreOf(%q) = %d, want %d", tt.query, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestScoreTakesTheHighestTier(t *testing.T) {
-	// 这条记录 ID 前缀、名字、描述、tag 全都命中 "tiny"，只能算最高那一档。
+	// This record hits "tiny" on the ID prefix, the name, the desc and a tag.
+	// Only the highest tier may count.
 	e := Entry{ID: "tiny/tinyserve", Desc: "tiny", Tags: []string{"tiny"}}
 	if got := scoreOf(e, "tiny"); got != scoreIDPrefix {
-		t.Errorf("scoreOf = %d，想要 %d（ID 前缀这一档）", got, scoreIDPrefix)
+		t.Errorf("scoreOf = %d, want %d (the ID prefix tier)", got, scoreIDPrefix)
 	}
 }
 
@@ -191,11 +193,11 @@ func eq(a, b []string) bool {
 }
 
 func TestSearch(t *testing.T) {
-	main := &Index{Version: 1, Name: "默认", Packages: []Entry{
-		{ID: "Derrity/tinyserve", Desc: "静态文件服务器", Tags: []string{"web"}, Installs: 5},
-		{ID: "Derrity/tinytool", Desc: "另一个工具", Installs: 50},
-		{ID: "Other/serve", Desc: "提到了 tinyserve 三个字", Installs: 100},
-		{ID: "Third/thing", Desc: "毫无关系", Tags: []string{"tinyserve"}, Installs: 1000},
+	main := &Index{Version: 1, Name: "default", Packages: []Entry{
+		{ID: "Derrity/tinyserve", Desc: "static file server", Tags: []string{"web"}, Installs: 5},
+		{ID: "Derrity/tinytool", Desc: "another tool", Installs: 50},
+		{ID: "Other/serve", Desc: "mentions tinyserve in the description", Installs: 100},
+		{ID: "Third/thing", Desc: "completely unrelated", Tags: []string{"tinyserve"}, Installs: 1000},
 	}}
 
 	tests := []struct {
@@ -205,50 +207,50 @@ func TestSearch(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "各档排序",
+			name:  "tier ordering",
 			query: "tinyserve",
-			// 完全匹配没有；ID 前缀没有；名字子串 tinyserve > 描述 > tag
+			// no exact match, no ID prefix; name substring > desc > tag
 			want: []string{"Derrity/tinyserve", "Other/serve", "Third/thing"},
 		},
 		{
-			name:  "同分（都是 ID 前缀）按 Installs 降序",
+			name:  "ties (both ID prefixes) break on Installs descending",
 			query: "derrity/tiny",
 			want:  []string{"Derrity/tinytool", "Derrity/tinyserve"},
 		},
 		{
-			name:  "名字 > 描述 > tag，同为名字子串再按 Installs",
+			name:  "name > desc > tag, and equal names break on Installs",
 			query: "tiny",
 			want: []string{
-				"Derrity/tinytool",  // 名字 60，装机 50
-				"Derrity/tinyserve", // 名字 60，装机 5
-				"Other/serve",       // 描述 40
-				"Third/thing",       // tag 20，装机 1000 也压不过档位
+				"Derrity/tinytool",  // name 60, 50 installs
+				"Derrity/tinyserve", // name 60, 5 installs
+				"Other/serve",       // desc 40
+				"Third/thing",       // tag 20; 1000 installs still cannot beat the tier
 			},
 		},
 		{
-			name:  "空 query 返回全部并按 Installs 降序",
+			name:  "empty query returns everything by Installs descending",
 			query: "",
 			want:  []string{"Third/thing", "Other/serve", "Derrity/tinytool", "Derrity/tinyserve"},
 		},
 		{
-			name:  "只有空白也算空 query",
+			name:  "whitespace only also counts as an empty query",
 			query: "   ",
 			want:  []string{"Third/thing", "Other/serve", "Derrity/tinytool", "Derrity/tinyserve"},
 		},
 		{
-			name:  "limit 截断",
+			name:  "limit truncates",
 			query: "tinyserve",
 			limit: 2,
 			want:  []string{"Derrity/tinyserve", "Other/serve"},
 		},
 		{
-			name:  "limit 为 0 表示不限",
+			name:  "limit 0 means no limit",
 			query: "tinyserve",
 			limit: 0,
 			want:  []string{"Derrity/tinyserve", "Other/serve", "Third/thing"},
 		},
 		{
-			name:  "一条都不沾",
+			name:  "nothing matches at all",
 			query: "postgres",
 			want:  nil,
 		},
@@ -257,43 +259,43 @@ func TestSearch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := idsOf(Search([]*Index{main}, tt.query, tt.limit))
 			if !eq(got, tt.want) {
-				t.Errorf("Search(%q, limit=%d) = %v，想要 %v", tt.query, tt.limit, got, tt.want)
+				t.Errorf("Search(%q, limit=%d) = %v, want %v", tt.query, tt.limit, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestSearchTierBeatsInstalls(t *testing.T) {
-	idx := &Index{Name: "默认", Packages: []Entry{
-		{ID: "Big/tiny-thing", Installs: 999999}, // 名字子串
-		{ID: "tiny/thing", Installs: 1},          // ID 前缀，档位更高
+	idx := &Index{Name: "default", Packages: []Entry{
+		{ID: "Big/tiny-thing", Installs: 999999}, // name substring
+		{ID: "tiny/thing", Installs: 1},          // ID prefix, a higher tier
 	}}
 	got := idsOf(Search([]*Index{idx}, "tiny", 0))
 	want := []string{"tiny/thing", "Big/tiny-thing"}
 	if !eq(got, want) {
-		t.Errorf("ID 前缀该压过名字子串（装机量差 100 万倍也一样），实际 %v", got)
+		t.Errorf("ID prefix must beat a name substring even at a million-to-one install ratio, got %v", got)
 	}
 }
 
 func TestSearchExactIDWins(t *testing.T) {
-	idx := &Index{Name: "默认", Packages: []Entry{
-		// 装机量差 1000 倍也压不过完全匹配
+	idx := &Index{Name: "default", Packages: []Entry{
+		// a 1000x install lead still cannot beat an exact match
 		{ID: "Other/tinyserve-plus", Desc: "tinyserve", Installs: 100000},
 		{ID: "Derrity/tinyserve", Installs: 1},
 	}}
 	got := idsOf(Search([]*Index{idx}, "Derrity/tinyserve", 0))
 	if len(got) == 0 || got[0] != "Derrity/tinyserve" {
-		t.Fatalf("完全匹配应该排第一，实际 %v", got)
+		t.Fatalf("the exact match must come first, got %v", got)
 	}
 }
 
 func TestSearchDedupKeepsTheEarlierIndex(t *testing.T) {
-	first := &Index{Name: "官方", Packages: []Entry{
-		{ID: "Derrity/tinyserve", Desc: "官方那份", Installs: 1},
+	first := &Index{Name: "official", Packages: []Entry{
+		{ID: "Derrity/tinyserve", Desc: "the official one", Installs: 1},
 	}}
-	second := &Index{Name: "我的", Packages: []Entry{
-		{ID: "Derrity/tinyserve", Desc: "我 fork 的那份", Installs: 9999},
-		{ID: "Me/only-here", Desc: "tinyserve 相关"},
+	second := &Index{Name: "mine", Packages: []Entry{
+		{ID: "Derrity/tinyserve", Desc: "the one I forked", Installs: 9999},
+		{ID: "Me/only-here", Desc: "tinyserve related"},
 	}}
 
 	got := Search([]*Index{first, second}, "tinyserve", 0)
@@ -303,28 +305,28 @@ func TestSearchDedupKeepsTheEarlierIndex(t *testing.T) {
 			continue
 		}
 		seen++
-		if r.Index != "官方" {
-			t.Errorf("重复 ID 应该保留靠前索引的，实际来自 %q", r.Index)
+		if r.Index != "official" {
+			t.Errorf("a duplicate ID must keep the earlier index's copy, got one from %q", r.Index)
 		}
-		if r.Entry.Desc != "官方那份" {
-			t.Errorf("留下的是后面那条记录：%q", r.Entry.Desc)
+		if r.Entry.Desc != "the official one" {
+			t.Errorf("the later record was the one kept: %q", r.Entry.Desc)
 		}
 	}
 	if seen != 1 {
-		t.Errorf("同一个 ID 出现了 %d 次，想要 1 次", seen)
+		t.Errorf("the same ID showed up %d times, want 1", seen)
 	}
 	if len(got) != 2 {
-		t.Errorf("结果 %d 条，想要 2 条（去重后）", len(got))
+		t.Errorf("got %d results, want 2 (after dedup)", len(got))
 	}
 }
 
 func TestSearchIgnoresNilIndex(t *testing.T) {
-	idx := &Index{Name: "默认", Packages: []Entry{{ID: "a/b", Desc: "x"}}}
+	idx := &Index{Name: "default", Packages: []Entry{{ID: "a/b", Desc: "x"}}}
 	if got := Search([]*Index{nil, idx, nil}, "", 0); len(got) != 1 {
-		t.Fatalf("nil 索引该被跳过，实际拿到 %d 条", len(got))
+		t.Fatalf("nil indexes must be skipped, got %d results", len(got))
 	}
 	if got := Search(nil, "tiny", 0); len(got) != 0 {
-		t.Fatalf("没有索引时该是空结果，实际 %v", got)
+		t.Fatalf("no indexes must mean no results, got %v", got)
 	}
 }
 
@@ -339,90 +341,91 @@ func TestUpsertKeepsSorted(t *testing.T) {
 		got = append(got, e.ID)
 	}
 	if !eq(got, want) {
-		t.Fatalf("Upsert 之后顺序 = %v，想要 %v", got, want)
+		t.Fatalf("order after Upsert = %v, want %v", got, want)
 	}
 }
 
 func TestUpsertReplacesInPlace(t *testing.T) {
 	idx := &Index{Version: 1}
-	idx.Upsert(Entry{ID: "a/b", Desc: "旧的", Installs: 1})
-	idx.Upsert(Entry{ID: "c/d", Desc: "另一个"})
-	idx.Upsert(Entry{ID: "a/b", Desc: "新的", Installs: 7})
+	idx.Upsert(Entry{ID: "a/b", Desc: "old", Installs: 1})
+	idx.Upsert(Entry{ID: "c/d", Desc: "another"})
+	idx.Upsert(Entry{ID: "a/b", Desc: "new", Installs: 7})
 
 	if len(idx.Packages) != 2 {
-		t.Fatalf("同一个 ID 被插了两条：%+v", idx.Packages)
+		t.Fatalf("the same ID got inserted twice: %+v", idx.Packages)
 	}
 	e, ok := idx.Find("a/b")
 	if !ok {
-		t.Fatal("a/b 不见了")
+		t.Fatal("a/b went missing")
 	}
-	if e.Desc != "新的" || e.Installs != 7 {
-		t.Errorf("没有被替换：%+v", e)
+	if e.Desc != "new" || e.Installs != 7 {
+		t.Errorf("it was not replaced: %+v", e)
 	}
 	if idx.Packages[0].ID != "a/b" {
-		t.Errorf("替换之后顺序乱了：%+v", idx.Packages)
+		t.Errorf("the order broke after the replacement: %+v", idx.Packages)
 	}
 }
 
 func TestFindAndRemove(t *testing.T) {
 	idx := &Index{Version: 1, Packages: []Entry{
-		{ID: "a/b", Desc: "一"},
-		{ID: "c/d", Desc: "二"},
+		{ID: "a/b", Desc: "one"},
+		{ID: "c/d", Desc: "two"},
 	}}
 	if _, ok := idx.Find("a/b"); !ok {
-		t.Error("Find 没找到 a/b")
+		t.Error("Find did not turn up a/b")
 	}
 	if _, ok := idx.Find("nope/nope"); ok {
-		t.Error("Find 找到了不存在的条目")
+		t.Error("Find turned up an entry that does not exist")
 	}
 	if !idx.Remove("a/b") {
-		t.Error("Remove 该返回 true")
+		t.Error("Remove should have returned true")
 	}
 	if idx.Remove("a/b") {
-		t.Error("重复 Remove 该返回 false")
+		t.Error("a repeated Remove should return false")
 	}
 	if len(idx.Packages) != 1 || idx.Packages[0].ID != "c/d" {
-		t.Errorf("Remove 删错了：%+v", idx.Packages)
+		t.Errorf("Remove deleted the wrong entry: %+v", idx.Packages)
 	}
 }
 
 func TestMarshal(t *testing.T) {
-	idx := &Index{Version: 1, Name: "默认"}
+	idx := &Index{Version: 1, Name: "local-only-name"}
 	b, err := idx.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
 	if strings.Contains(s, "null") {
-		t.Errorf("空 packages 应该写成 []，不是 null：%s", s)
+		t.Errorf("empty packages must be written as [], not null: %s", s)
 	}
-	if strings.Contains(s, "默认") {
-		t.Errorf("Name 是本地的，不该进文件：%s", s)
+	if strings.Contains(s, "local-only-name") {
+		t.Errorf("Name is local and must not reach the file: %s", s)
 	}
 	if !strings.HasSuffix(s, "\n") {
-		t.Error("索引文件要以换行结尾，diff 才干净")
+		t.Error("the index file must end in a newline so diffs stay clean")
 	}
 	if !strings.Contains(s, "\n  ") {
-		t.Errorf("索引文件要缩进，diff 才好读：%s", s)
+		t.Errorf("the index file must be indented so diffs stay readable: %s", s)
 	}
 
-	idx.Upsert(Entry{ID: "z/z", Source: "github:z/z", Desc: "后"})
-	idx.Upsert(Entry{ID: "a/a", Source: "github:a/a", Desc: "先"})
+	idx.Upsert(Entry{ID: "z/z", Source: "github:z/z", Desc: "later"})
+	idx.Upsert(Entry{ID: "a/a", Source: "github:a/a", Desc: "earlier"})
 	b, err = idx.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if i, j := strings.Index(string(b), `"a/a"`), strings.Index(string(b), `"z/z"`); i < 0 || j < 0 || i > j {
-		t.Errorf("文件里应该按 ID 排序：%s", b)
+		t.Errorf("the file must be sorted by ID: %s", b)
 	}
 
-	// 序列化出来的东西必须还能被自己读回去（这一段不碰 ref：只看 JSON 层）。
+	// Whatever we serialize has to read back in (this part stays at the JSON
+	// layer and does not touch ref).
 	var back Index
 	if err := json.Unmarshal(b, &back); err != nil {
-		t.Fatalf("自己写的文件自己读不回来：%v", err)
+		t.Fatalf("we cannot read back the file we wrote ourselves: %v", err)
 	}
 	if back.Version != 1 || len(back.Packages) != 2 {
-		t.Errorf("读回来的不对：%+v", back)
+		t.Errorf("what came back is wrong: %+v", back)
 	}
 }
 
@@ -432,18 +435,19 @@ func TestMarshalFillsMissingVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(b), `"version": 1`) {
-		t.Errorf("没写版本时该补成 1：%s", b)
+		t.Errorf("a missing version must be filled in as 1: %s", b)
 	}
 }
 
-// 骨架注释说「source 必须能被 ref.Parse 解析」。空 source 之外，
-// 真正畸形的 source 也得被拦下来 —— 这一档原来一条用例都没有。
+// The skeleton comment says "source must parse with ref.Parse". Beyond an empty
+// source, a genuinely malformed one has to be rejected too — this tier had no
+// cases at all before.
 func TestLoadSkipsUnparsableSource(t *testing.T) {
 	for _, src := range []string{
-		"这不是 ref",
-		"github:a b/c",     // owner 里有空格
-		"github:../x",      // 会变成目录名的路径穿越
-		"ftp://x/toy.toml", // 不认的 scheme
+		"not a ref",
+		"github:a b/c",     // space inside the owner
+		"github:../x",      // path traversal that would become a directory name
+		"ftp://x/toy.toml", // scheme we do not accept
 		"a/b/c",
 		"   ",
 	} {
@@ -452,125 +456,130 @@ func TestLoadSkipsUnparsableSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			idx, skipped, err := Load(data, "默认")
+			idx, skipped, err := Load(data, "default")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if skipped != 1 || len(idx.Packages) != 0 {
-				t.Errorf("source %q 该被跳过：skipped=%d 留下 %+v", src, skipped, idx.Packages)
+				t.Errorf("source %q should have been skipped: skipped=%d kept %+v", src, skipped, idx.Packages)
 			}
 		})
 	}
 }
 
-// source 是这条记录的真相（规格 §5），必须指向某个 host 或某个 URL。
-// 写成裸 owner/repo 就是「查索引」——解析会绕回索引，那是个环。
+// source is this record's truth (spec §5) and must point at some host or some
+// URL. A bare owner/repo means "look it up in the index" — resolution loops back
+// to the index, which is a cycle.
 func TestLoadSkipsSourceThatPointsBackAtTheIndex(t *testing.T) {
 	data := []byte(`{"version":1,"packages":[
 		{"id":"a/b","source":"a/b"},
 		{"id":"c/d","source":"c/d@v1.0.0"},
 		{"id":"e/f","source":"github:e/f"}
 	]}`)
-	idx, skipped, err := Load(data, "默认")
+	idx, skipped, err := Load(data, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if skipped != 2 {
-		t.Errorf("skipped = %d，想要 2（两条 source 指回索引）", skipped)
+		t.Errorf("skipped = %d, want 2 (two sources point back at the index)", skipped)
 	}
 	if len(idx.Packages) != 1 || idx.Packages[0].ID != "e/f" {
-		t.Errorf("只该留下 github: 那条：%+v", idx.Packages)
+		t.Errorf("only the github: entry should survive: %+v", idx.Packages)
 	}
 }
 
-// 同一个 ID 两条记录会让 Find 和 Remove 说假话：Remove 返回 true，ID 却还在。
+// Two records under one ID make Find and Remove lie: Remove returns true and the
+// ID is still there.
 func TestLoadSkipsDuplicateIDs(t *testing.T) {
 	data := []byte(`{"version":1,"packages":[
-		{"id":"a/b","source":"github:a/b","desc":"真的"},
-		{"id":"a/b","source":"github:evil/x","desc":"假的"},
+		{"id":"a/b","source":"github:a/b","desc":"the real one"},
+		{"id":"a/b","source":"github:evil/x","desc":"the fake one"},
 		{"id":"c/d","source":"github:c/d"}
 	]}`)
-	idx, skipped, err := Load(data, "默认")
+	idx, skipped, err := Load(data, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if skipped != 1 {
-		t.Errorf("skipped = %d，想要 1（第二条 a/b）", skipped)
+		t.Errorf("skipped = %d, want 1 (the second a/b)", skipped)
 	}
-	if e, _ := idx.Find("a/b"); e.Desc != "真的" {
-		t.Errorf("留下的该是第一条：%+v", e)
+	if e, _ := idx.Find("a/b"); e.Desc != "the real one" {
+		t.Errorf("the first record should be the one kept: %+v", e)
 	}
 	if !idx.Remove("a/b") {
-		t.Fatal("Remove 该返回 true")
+		t.Fatal("Remove should have returned true")
 	}
 	if _, ok := idx.Find("a/b"); ok {
-		t.Error("Remove 说删了，a/b 却还在 —— 索引里有重复 ID")
+		t.Error("Remove claimed it deleted a/b and a/b is still there — duplicate IDs in the index")
 	}
 }
 
-// validID 的规则必须和 ref 一致：这两段会变成 ~/.toy 下的目录名（规格 §6）。
+// validID's rules must match ref's: these two segments become directory names
+// under ~/.toy (spec §6).
 func TestValidIDMatchesRefsSegmentRules(t *testing.T) {
 	long := strings.Repeat("a", 120)
 	for _, id := range []string{"../x", "a/..", "./x", "a/.", long + "/x", "x/" + long, " a/b", "a/b ", "a/b@v1"} {
 		if validID(id) {
-			t.Errorf("validID(%q) = true，但 ref 会拒绝它", id)
+			t.Errorf("validID(%q) = true, but ref would reject it", id)
 		}
 		if _, err := ref.Parse(id); err == nil && id != " a/b" && id != "a/b " && id != "a/b@v1" {
-			t.Errorf("前提变了：ref.Parse(%q) 现在不报错了", id)
+			t.Errorf("the premise changed: ref.Parse(%q) no longer errors", id)
 		}
 	}
 }
 
-// 靠后的索引不许把靠前索引的同名包换成自己的 source：
-// 「配置里靠前的赢」说的是 ID 出现过就占坑，不是「命中了才占坑」。
+// A later index must not be able to swap an earlier index's package for its own
+// source: "the earlier one in the config wins" means an ID that appears at all
+// claims the slot, not an ID that happens to match this query.
 func TestSearchLaterIndexCannotShadowAnEarlierID(t *testing.T) {
-	official := &Index{Name: "官方", Packages: []Entry{
-		{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "静态文件服务器"},
+	official := &Index{Name: "official", Packages: []Entry{
+		{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "static file server"},
 	}}
-	evil := &Index{Name: "坏人", Packages: []Entry{
-		// desc 特意写得沾 "web"，而官方那条不沾
+	evil := &Index{Name: "attacker", Packages: []Entry{
+		// the desc is written to graze "web" on purpose, while the official one does not
 		{ID: "Derrity/tinyserve", Source: "github:evil/backdoor", Desc: "web server", Installs: 9999},
 	}}
 	for _, r := range Search([]*Index{official, evil}, "web", 0) {
-		if r.Entry.ID == "Derrity/tinyserve" && r.Index != "官方" {
-			t.Fatalf("靠后的索引盖掉了同一个 ID：来自 %q，source=%s", r.Index, r.Entry.Source)
+		if r.Entry.ID == "Derrity/tinyserve" && r.Index != "official" {
+			t.Fatalf("a later index shadowed the same ID: it came from %q, source=%s", r.Index, r.Entry.Source)
 		}
 	}
 }
 
-// 自己写出来的索引必须能被自己 Load 回去（不只是被 json 读回去）。
+// An index we write ourselves must Load back in (not merely unmarshal).
 func TestMarshalRoundTripsThroughLoad(t *testing.T) {
-	idx := &Index{Name: "本地名字"}
+	idx := &Index{Name: "local name"}
 	idx.Upsert(Entry{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve",
-		Desc: "静态文件服务器", Tags: []string{"web"}, Key: "a3f9", Installs: 7})
-	idx.Upsert(Entry{ID: "Other/ok", Source: "https://example.com/toy.toml", Desc: "裸 URL 也行"})
+		Desc: "static file server", Tags: []string{"web"}, Key: "a3f9", Installs: 7})
+	idx.Upsert(Entry{ID: "Other/ok", Source: "https://example.com/toy.toml", Desc: "a bare URL works too"})
 
 	b, err := idx.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	back, skipped, err := Load(b, "读回来")
+	back, skipped, err := Load(b, "loaded back")
 	if err != nil {
-		t.Fatalf("自己写的索引自己 Load 不回来：%v", err)
+		t.Fatalf("we cannot Load the index we wrote ourselves: %v", err)
 	}
 	if skipped != 0 {
-		t.Errorf("自己写的条目被自己判成坏的 %d 条", skipped)
+		t.Errorf("%d of our own entries were judged bad by our own loader", skipped)
 	}
 	if len(back.Packages) != 2 {
-		t.Fatalf("读回 %d 条，想要 2：%+v", len(back.Packages), back.Packages)
+		t.Fatalf("loaded %d entries, want 2: %+v", len(back.Packages), back.Packages)
 	}
 	e, ok := back.Find("Derrity/tinyserve")
 	if !ok || e.Installs != 7 || e.Key != "a3f9" || len(e.Tags) != 1 {
-		t.Errorf("字段在往返中丢了：%+v", e)
+		t.Errorf("fields were lost in the round trip: %+v", e)
 	}
-	if back.Name != "读回来" {
-		t.Errorf("Name 该来自参数而不是文件：%q", back.Name)
+	if back.Name != "loaded back" {
+		t.Errorf("Name must come from the argument, not the file: %q", back.Name)
 	}
 }
 
-// GitHub 的 owner/repo 本来就大小写不敏感，所以
-// `toy install derrity/tinyserve` 必须找得到索引里的 Derrity/tinyserve。
-// 原来这里是精确字符串匹配，用户拿到的是一句「查不到这个包」，而包就在索引里。
+// GitHub owners and repos are case-insensitive to begin with, so
+// `toy install derrity/tinyserve` has to find Derrity/tinyserve in the index.
+// This used to be an exact string match, and the user got "no such package"
+// while the package was sitting right there in the index.
 func TestFindIsCaseInsensitive(t *testing.T) {
 	idx := &Index{Version: 1, Packages: []Entry{
 		{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve"},
@@ -578,65 +587,69 @@ func TestFindIsCaseInsensitive(t *testing.T) {
 	for _, q := range []string{"Derrity/tinyserve", "derrity/tinyserve", "DERRITY/TINYSERVE", "derrity/TinyServe"} {
 		e, ok := idx.Find(q)
 		if !ok {
-			t.Fatalf("Find(%q) 没找到", q)
+			t.Fatalf("Find(%q) found nothing", q)
 		}
-		// 找到的必须是索引里那条原样的记录：下载地址是按它的大小写拼的。
+		// What comes back must be the record exactly as the index holds it: the
+		// download URL is built from its casing.
 		if e.Source != "github:Derrity/tinyserve" {
-			t.Fatalf("Find(%q) 返回了 %+v —— source 的大小写必须原样", q, e)
+			t.Fatalf("Find(%q) returned %+v — source casing must be preserved verbatim", q, e)
 		}
 	}
 	if !idx.Remove("DERRITY/tinyserve") {
-		t.Fatal("Remove 也该大小写不敏感，否则删不掉自己刚找到的那条")
+		t.Fatal("Remove must be case-insensitive too, or it cannot delete what Find just returned")
 	}
 }
 
-// Upsert 也得按同一套比：不然 publish 一次大小写不同的 ID 就会插出第二条，
-// 而 Load 下次会把它当重复记录扔掉（「提交了却没生效」）。
+// Upsert has to compare the same way: otherwise publishing an ID with different
+// casing inserts a second record, which Load will then drop as a duplicate next
+// time ("I submitted it and nothing happened").
 func TestUpsertIsCaseInsensitive(t *testing.T) {
 	idx := &Index{Version: 1, Packages: []Entry{
-		{ID: "Derrity/tinyserve", Desc: "旧的"},
+		{ID: "Derrity/tinyserve", Desc: "old"},
 	}}
-	idx.Upsert(Entry{ID: "derrity/tinyserve", Desc: "新的"})
+	idx.Upsert(Entry{ID: "derrity/tinyserve", Desc: "new"})
 	if len(idx.Packages) != 1 {
-		t.Fatalf("插出了第二条：%+v", idx.Packages)
+		t.Fatalf("a second record was inserted: %+v", idx.Packages)
 	}
-	if idx.Packages[0].Desc != "新的" || idx.Packages[0].ID != "derrity/tinyserve" {
-		t.Fatalf("该整条替换成新的：%+v", idx.Packages[0])
+	if idx.Packages[0].Desc != "new" || idx.Packages[0].ID != "derrity/tinyserve" {
+		t.Fatalf("the whole record should have been replaced: %+v", idx.Packages[0])
 	}
 }
 
-// 去重同理：靠后的索引不能靠改一个字母的大小写把同一个 ID 的 source 换成自己的。
+// Same for dedup: a later index must not be able to swap an ID's source for its
+// own by flipping the case of one letter.
 func TestSearchDedupIsCaseInsensitive(t *testing.T) {
-	first := &Index{Version: 1, Name: "官方", Packages: []Entry{
+	first := &Index{Version: 1, Name: "official", Packages: []Entry{
 		{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve"},
 	}}
-	second := &Index{Version: 1, Name: "野的", Packages: []Entry{
+	second := &Index{Version: 1, Name: "rogue", Packages: []Entry{
 		{ID: "derrity/tinyserve", Source: "github:evil/x"},
 	}}
 	got := Search([]*Index{first, second}, "tinyserve", 0)
 	if len(got) != 1 {
-		t.Fatalf("应该只剩一条，实际 %d 条：%+v", len(got), got)
+		t.Fatalf("only one result should remain, got %d: %+v", len(got), got)
 	}
-	if got[0].Index != "官方" {
-		t.Fatalf("赢的该是靠前那个索引，实际来自 %q", got[0].Index)
+	if got[0].Index != "official" {
+		t.Fatalf("the earlier index should win, got one from %q", got[0].Index)
 	}
 }
 
-// 同一份索引里只差大小写的两条也是重复：留着的话 Find 只看得到第一条，
-// 而 Remove 删掉第一条之后仍然找得到第二条（「删了」是句假话）。
+// Two entries in one index differing only by case are duplicates too: keeping
+// both means Find only ever sees the first, and Remove deletes the first while
+// the second is still findable ("removed" would be a lie).
 func TestLoadSkipsCaseVariantDuplicateIDs(t *testing.T) {
 	data := []byte(`{"version":1,"packages":[
-		{"id":"Derrity/tinyserve","source":"github:Derrity/tinyserve","desc":"真的"},
-		{"id":"derrity/tinyserve","source":"github:evil/x","desc":"假的"}
+		{"id":"Derrity/tinyserve","source":"github:Derrity/tinyserve","desc":"the real one"},
+		{"id":"derrity/tinyserve","source":"github:evil/x","desc":"the fake one"}
 	]}`)
-	idx, skipped, err := Load(data, "默认")
+	idx, skipped, err := Load(data, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if skipped != 1 {
-		t.Fatalf("skipped = %d，想要 1", skipped)
+		t.Fatalf("skipped = %d, want 1", skipped)
 	}
-	if e, _ := idx.Find("derrity/tinyserve"); e.Desc != "真的" {
-		t.Fatalf("留下的该是第一条：%+v", e)
+	if e, _ := idx.Find("derrity/tinyserve"); e.Desc != "the real one" {
+		t.Fatalf("the first record should be the one kept: %+v", e)
 	}
 }

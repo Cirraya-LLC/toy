@@ -15,18 +15,18 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/toyfile"
 )
 
-// fakeRepo 是假 API 上一个仓库的全部事实。
+// fakeRepo is everything the fake API knows about one repo.
 type fakeRepo struct {
 	desc, license, homepage string
 	stars                   int
 	tag                     string
 	assets                  []string
-	missing                 bool // 仓库本身 404
-	noRelease               bool // 仓库在，但 releases/latest 404
-	rateLimited             bool // 403 + 剩余配额 0
+	missing                 bool // the repo itself 404s
+	noRelease               bool // the repo exists, but releases/latest 404s
+	rateLimited             bool // 403 with 0 remaining quota
 }
 
-// fakeAPI 起一个假的 GitHub API。测试一律走它，不联网。
+// fakeAPI stands up a fake GitHub API. Every test goes through it; nothing hits the network.
 func fakeAPI(t *testing.T, repos map[string]fakeRepo) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,20 +85,20 @@ func loadOut(t *testing.T, path string) *index.Index {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("读不出生成的索引：%v", err)
+		t.Fatalf("cannot read the generated index: %v", err)
 	}
 	idx, skipped, err := index.Load(data, "out")
 	if err != nil {
-		t.Fatalf("生成的索引自己 Load 不了：%v", err)
+		t.Fatalf("the generated index does not Load: %v", err)
 	}
 	if skipped != 0 {
-		t.Fatalf("生成的索引里有 %d 条不合法的记录", skipped)
+		t.Fatalf("the generated index holds %d invalid records", skipped)
 	}
 	return idx
 }
 
 var tinyserve = fakeRepo{
-	desc: "一个很小的静态文件服务器", license: "MIT", stars: 42, tag: "v1.2.3",
+	desc: "A very small static file server", license: "MIT", stars: 42, tag: "v1.2.3",
 	assets: []string{
 		"tinyserve_1.2.3_linux_amd64.tar.gz",
 		"tinyserve_1.2.3_linux_arm64.tar.gz",
@@ -108,48 +108,50 @@ var tinyserve = fakeRepo{
 	},
 }
 
-// 产出的必须是一条能被索引接受的内联条目，而且【绝不能有 [sha256]】——
-// 内联条目跟着上游最新 tag 走，钉死某一版的字节会让上游一发新版就变成
-// 「哈希对不上，拒绝安装」，读起来完全像投毒警告。
+// What comes out has to be an inline entry the index accepts, and it must NEVER carry
+// [sha256]: inline entries follow the upstream's newest tag, so pinning one version's
+// bytes turns the author's next release into "checksum mismatch, refusing to install",
+// which reads exactly like a poisoning warning.
 func TestGenProducesInlineEntryAndNeverWritesSHA256(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "idx.json")
 	if err := runFakeGen(t, map[string]fakeRepo{"Derrity/tinyserve": tinyserve},
 		[]string{"Derrity/tinyserve"}, out, false); err != nil {
-		t.Fatalf("gen 失败：%v", err)
+		t.Fatalf("gen failed: %v", err)
 	}
 
 	idx := loadOut(t, out)
 	e, ok := idx.Find("Derrity/tinyserve")
 	if !ok {
-		t.Fatal("索引里没有这条")
+		t.Fatal("the entry is not in the index")
 	}
 	if e.Source != "github:Derrity/tinyserve" {
 		t.Errorf("source = %q", e.Source)
 	}
 	if e.Toyfile == "" {
-		t.Fatal("条目没有内联 toyfile —— 那就产出了一条谁也装不上的空指针")
+		t.Fatal("the entry has no inline toyfile -- that is a dangling pointer nobody can install")
 	}
 	if e.Stars != 42 || e.Desc == "" {
-		t.Errorf("stars/desc 没带上：%d %q", e.Stars, e.Desc)
+		t.Errorf("stars/desc did not come along: %d %q", e.Stars, e.Desc)
 	}
 	if e.Key != "" || e.Sig != "" {
-		t.Error("生成器不该凭空产出 key/sig —— 那个勾说的是「作者本人签的」")
+		t.Error("the generator must not conjure up a key/sig -- that checkmark means \"the author signed this\"")
 	}
 
-	// 只看非注释行：文件头那段注释里就写着「故意没有 [sha256]」，那句话本身不是内容。
+	// Non-comment lines only: the header comment literally says "there is deliberately no
+	// [sha256]", and that sentence is not content.
 	for _, line := range strings.Split(e.Toyfile, "\n") {
 		if t2 := strings.TrimSpace(line); !strings.HasPrefix(t2, "#") && strings.Contains(t2, "sha256") {
-			t.Fatalf("内联条目里写了 sha256：%q —— 上游一发新版，所有人都会拿到「哈希对不上」", line)
+			t.Fatalf("the inline entry writes sha256: %q -- the next upstream release hands everyone a checksum mismatch", line)
 		}
 	}
 	tf, err := toyfile.ParseFrom([]byte(e.Toyfile), toyfile.OriginIndex)
 	if err != nil {
-		t.Fatalf("内联的 toyfile 解析不了：%v", err)
+		t.Fatalf("the inline toyfile does not parse: %v", err)
 	}
 	if len(tf.SHA256) != 0 {
-		t.Fatal("解析出来居然有 sha256")
+		t.Fatal("it parsed with a sha256 section after all")
 	}
-	// Windows 不做（规格 §11），checksums.txt 不是资产。
+	// No Windows (spec §11); checksums.txt is not an asset.
 	want := map[string]string{
 		"linux/amd64":  "tinyserve_{version}_linux_amd64.tar.gz",
 		"linux/arm64":  "tinyserve_{version}_linux_arm64.tar.gz",
@@ -160,7 +162,7 @@ func TestGenProducesInlineEntryAndNeverWritesSHA256(t *testing.T) {
 	}
 	for k, v := range want {
 		if tf.Artifact[k] != v {
-			t.Errorf("[artifact] %s = %q，想要 %q", k, tf.Artifact[k], v)
+			t.Errorf("[artifact] %s = %q, want %q", k, tf.Artifact[k], v)
 		}
 	}
 	if tf.Bin["tinyserve"] != "tinyserve" {
@@ -168,12 +170,13 @@ func TestGenProducesInlineEntryAndNeverWritesSHA256(t *testing.T) {
 	}
 }
 
-// 默认不覆盖已存在的条目：索引里的条目可能被人手工修正过（尤其 [bin] 右边）。
+// Existing entries are not overwritten by default: they may have been hand-corrected
+// (especially the right-hand side of [bin]).
 func TestGenDoesNotOverwriteWithoutUpdate(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "idx.json")
 	seed := &index.Index{Version: index.Version}
 	seed.Upsert(index.Entry{
-		ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "人工修正过的描述",
+		ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "hand-corrected description",
 		Toyfile: "name = \"tinyserve\"\n\n[bin]\ntinyserve = \"nested/tinyserve\"\n\n" +
 			"[artifact]\n\"linux/amd64\" = \"tinyserve_{version}_linux_amd64.tar.gz\"\n",
 	})
@@ -184,66 +187,70 @@ func TestGenDoesNotOverwriteWithoutUpdate(t *testing.T) {
 
 	repos := map[string]fakeRepo{"Derrity/tinyserve": tinyserve}
 	if err := runFakeGen(t, repos, []string{"Derrity/tinyserve"}, out, false); err != nil {
-		t.Fatalf("gen 失败：%v", err)
+		t.Fatalf("gen failed: %v", err)
 	}
 	e, _ := loadOut(t, out).Find("Derrity/tinyserve")
 	if !strings.Contains(e.Toyfile, "nested/tinyserve") {
-		t.Fatal("没加 --update 却把人工修正过的 [bin] 冲掉了")
+		t.Fatal("a hand-corrected [bin] was clobbered without --update")
 	}
 
 	if err := runFakeGen(t, repos, []string{"Derrity/tinyserve"}, out, true); err != nil {
-		t.Fatalf("gen --update 失败：%v", err)
+		t.Fatalf("gen --update failed: %v", err)
 	}
 	e, _ = loadOut(t, out).Find("Derrity/tinyserve")
 	if strings.Contains(e.Toyfile, "nested/tinyserve") {
-		t.Fatal("--update 应该覆盖，实际没覆盖")
+		t.Fatal("--update should have overwritten it and did not")
 	}
 }
 
-// 签过名的条目连 --update 都不许动：重新生成必然换掉 toyfile 原文，
-// 而签名签的就是那份原文 —— 覆盖等于把一个「✓ 已签名」悄悄弄没。
+// Signed entries are off limits even to --update: regenerating necessarily replaces the
+// toyfile source, and the signature signs exactly that source -- overwriting quietly
+// makes a "✓ signed" disappear.
 func TestGenNeverTouchesSignedEntries(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "idx.json")
 	seed := &index.Index{Version: index.Version}
-	// 故意也带上 toyfile：这样只有「签过名」这一条守卫能救它 ——
-	// 否则「指针条目不降档」那条会顺手挡住，这个测试就测不到自己要测的东西。
+	// Deliberately carries a toyfile too, so that only the "is signed" guard can save it --
+	// otherwise the "do not downgrade pointer entries" guard would catch it first and this
+	// test would not be testing what it claims to.
 	seed.Upsert(index.Entry{
 		ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve",
-		Key: "a3f9", Sig: "sig", Desc: "签过名的内联条目",
+		Key: "a3f9", Sig: "sig", Desc: "signed inline entry",
 		Toyfile: "name = \"tinyserve\"\n\n[bin]\ntinyserve = \"nested/tinyserve\"\n\n" +
 			"[artifact]\n\"linux/amd64\" = \"tinyserve_{version}_linux_amd64.tar.gz\"\n",
 	})
 	data, _ := seed.Marshal()
 	os.WriteFile(out, data, 0o644)
 
-	// 全部被有意跳过不算失败（没有一条出错），所以这里退 0。
+	// Everything being deliberately skipped is not a failure (nothing errored), so this
+	// exits 0.
 	if err := runFakeGen(t, map[string]fakeRepo{"Derrity/tinyserve": tinyserve},
 		[]string{"Derrity/tinyserve"}, out, true); err != nil {
-		t.Fatalf("跳过不是失败：%v", err)
+		t.Fatalf("a skip is not a failure: %v", err)
 	}
 	e, _ := loadOut(t, out).Find("Derrity/tinyserve")
 	if e.Sig != "sig" || !strings.Contains(e.Toyfile, "nested/tinyserve") {
-		t.Fatal("--update 把一条签过名的条目改掉了 —— 重新生成会让那个「✓」悄悄失效")
+		t.Fatal("--update modified a signed entry -- regenerating would quietly invalidate that checkmark")
 	}
 }
 
-// 指针条目（上游自己有 toy.toml）换成内联是 TrustHost → TrustIndexed 的降档，
-// 不是刷新。--update 也不放行。
+// A pointer entry (upstream ships its own toy.toml) turning into an inline one is a
+// TrustHost -> TrustIndexed downgrade, not a refresh. --update does not unlock it either.
 func TestGenNeverDowngradesPointerEntries(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "idx.json")
 	seed := &index.Index{Version: index.Version}
-	seed.Upsert(index.Entry{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "指针条目"})
+	seed.Upsert(index.Entry{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Desc: "pointer entry"})
 	data, _ := seed.Marshal()
 	os.WriteFile(out, data, 0o644)
 
 	runFakeGen(t, map[string]fakeRepo{"Derrity/tinyserve": tinyserve},
 		[]string{"Derrity/tinyserve"}, out, true)
 	if e, _ := loadOut(t, out).Find("Derrity/tinyserve"); e.Toyfile != "" {
-		t.Fatal("把一条指针条目降档成了内联条目")
+		t.Fatal("a pointer entry was downgraded into an inline entry")
 	}
 }
 
-// 一个仓库失败不影响其它，而且每种失败要说不同的人话。
+// One repo failing must not affect the others, and each kind of failure has to say
+// something different in plain words.
 func TestGenIsolatesFailuresAndClassifiesThem(t *testing.T) {
 	repos := map[string]fakeRepo{
 		"Derrity/tinyserve": tinyserve,
@@ -260,18 +267,19 @@ func TestGenIsolatesFailuresAndClassifiesThem(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "idx.json")
 	cfg := genConfig{repos: list, out: out, prov: newGitHub(srv.URL, "")}
 	if err := gen(context.Background(), cfg); err != nil {
-		t.Fatalf("有一条成功时不该整体失败：%v", err)
+		t.Fatalf("one success means the batch must not fail as a whole: %v", err)
 	}
 
-	// 裸二进制的仓库（jqlang/jq 就是这个形状）也要产出条目：install 支持单文件
-	// 形态，把它整个拒掉等于让这类仓库永远进不了索引。
+	// A bare-binary repo (jqlang/jq has exactly this shape) has to produce an entry too:
+	// install supports the single-file shape, and rejecting it wholesale would keep repos
+	// like it out of the index forever.
 	idx := loadOut(t, out)
 	if len(idx.Packages) != 2 {
-		t.Fatalf("产出了 %d 条，该有 tinyserve 和 bare 两条", len(idx.Packages))
+		t.Fatalf("produced %d entries, expected two: tinyserve and bare", len(idx.Packages))
 	}
 
-	// 每种失败的措辞各自检查一遍：一句笼统的「没有可用资产」会让人挨个
-	// 去仓库页面上看到底是哪种。
+	// Each kind of failure gets its own wording checked: one blanket "no usable assets"
+	// would send you to the repo page to figure out which of them it was.
 	for _, tc := range []struct{ id, want string }{
 		{"nobody/gone", "does not exist"},
 		{"nobody/norelease", "never published a release"},
@@ -280,84 +288,91 @@ func TestGenIsolatesFailuresAndClassifiesThem(t *testing.T) {
 	} {
 		r := genOne(context.Background(), cfg, &index.Index{Version: index.Version}, tc.id)
 		if r.err == nil {
-			t.Errorf("%s 应该失败", tc.id)
+			t.Errorf("%s should have failed", tc.id)
 			continue
 		}
 		if !strings.Contains(r.err.Error(), tc.want) {
-			t.Errorf("%s 的报错是 %q，里面应该有 %q", tc.id, r.err, tc.want)
+			t.Errorf("the error for %s is %q, it should contain %q", tc.id, r.err, tc.want)
 		}
 	}
 
-	// 裸二进制条目照出，[bin] 右边是【工具名】而不是资产名。
+	// The bare-binary entry still comes out, and the right of [bin] is the TOOL NAME, not
+	// the asset name.
 	//
-	// 这条断言翻转过：原来钉的是「右边该写资产名本身」，而那正好是一个 bug ——
-	// 资产名按平台变（yq_linux_amd64 / yq_darwin_arm64）而 [bin] 只有一行，
-	// 于是除了恰好写对的那一个平台，其余每个平台都软链到一个不存在的文件，
-	// 且在下载和校验都成功之后才炸。索引里 mikefarah/yq 就是这么在 6 个平台
-	// 里坏了 5 个。现在 install 把单文件落成 [bin] 指定的路径
-	// （cmd/toy/install.go 的 insUnpack），所以这一行对每个平台都成立。
+	// This assertion was flipped: it used to pin "the right-hand side should be the asset
+	// name itself", and that was precisely a bug -- asset names vary by platform
+	// (yq_linux_amd64 / yq_darwin_arm64) while [bin] is a single line, so every platform
+	// except the one it happened to match got a symlink to a file that does not exist, and
+	// only after the download and checksum both succeeded. That is exactly how
+	// mikefarah/yq was broken on 5 of its 6 platforms in the index. Install now lands a
+	// single file at the path [bin] names (insUnpack in cmd/toy/install.go), so this one
+	// line holds on every platform.
 	r := genOne(context.Background(), cfg, &index.Index{Version: index.Version}, "nobody/bare")
 	if r.err != nil {
-		t.Fatalf("裸二进制的仓库该产出条目：%v", r.err)
+		t.Fatalf("a bare-binary repo should produce an entry: %v", r.err)
 	}
 	if got := r.pack.binPath; got != "jq" {
-		t.Errorf("[bin] 右边 = %q，该是工具名 jq —— 写资产名的话别的平台全是断掉的软链", got)
+		t.Errorf("right of [bin] = %q, should be the tool name jq -- writing the asset name leaves broken symlinks on every other platform", got)
 	}
 	if !r.pack.bare {
-		t.Error("该被认出是裸二进制形态（决定 [bin] 上面那句注释怎么写）")
+		t.Error("this should be recognised as the bare-binary shape (it decides which comment goes above [bin])")
 	}
 }
 
-// 没 token 撞限流时要说人话：提示设 GITHUB_TOKEN，并说明剩余配额。
+// Hitting the rate limit without a token has to say something useful: suggest setting
+// GITHUB_TOKEN, and report the remaining quota.
 func TestRateLimitTellsYouToSetAToken(t *testing.T) {
 	srv := fakeAPI(t, map[string]fakeRepo{"a/b": {rateLimited: true}})
 	c := newGitHub(srv.URL, "")
 	_, err := c.Fetch(context.Background(), "a", "b")
 	if err == nil {
-		t.Fatal("应该报限流")
+		t.Fatal("should have reported the rate limit")
 	}
 	if !strings.Contains(err.Error(), "GITHUB_TOKEN") || !strings.Contains(err.Error(), "quota") {
-		t.Errorf("限流报错没说该怎么办：%v", err)
+		t.Errorf("the rate-limit error does not say what to do about it: %v", err)
 	}
 	if !strings.Contains(c.Quota(), "0 remaining") {
 		t.Errorf("Quota() = %q", c.Quota())
 	}
 }
 
-// 版本号必须变成 {version} 占位符 —— 钉死这一版的话，上游一发新版这条就指向
-// 一个不存在的文件了（"打个 tag 就是发新版"是这个产品的卖点）。
-// tag 里认得出版本、文件名里认不出时（2024.09 这类），拿 tag 兜底。
+// The version number has to become the {version} placeholder -- pinned to this one
+// release, the entry points at a file that does not exist as soon as upstream cuts a new
+// one ("cut a tag and you have shipped" is this product's selling point).
+// When the tag has a recognisable version but the filenames do not (2024.09 and friends),
+// fall back to the tag.
 func TestVersionPlaceholderFallsBackToTheTag(t *testing.T) {
 	p, err := makePack("a", "b", repoInfo{
 		Tag:    "2024.09",
 		Assets: []string{"b_2024.09_linux_amd64.tar.gz", "b_2024.09_darwin_arm64.tar.gz"},
 	})
 	if err != nil {
-		t.Fatalf("makePack 失败：%v", err)
+		t.Fatalf("makePack failed: %v", err)
 	}
 	got := p.res.Artifact["linux/amd64"]
 	if !strings.Contains(got, "{version}") {
-		t.Fatalf("没换成占位符：%q", got)
+		t.Fatalf("not turned into a placeholder: %q", got)
 	}
 }
 
 func TestReadRepoListStripsCommentsAndDupes(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "repos.txt")
-	os.WriteFile(f, []byte("# 头注释\n\nDerrity/tinyserve\n cli/cli  # 二进制叫 gh\nderrity/TINYSERVE\n"), 0o644)
+	os.WriteFile(f, []byte("# header comment\n\nDerrity/tinyserve\n cli/cli  # the binary is called gh\nderrity/TINYSERVE\n"), 0o644)
 	got, err := readRepoList(f)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"Derrity/tinyserve", "cli/cli"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("got %v，want %v", got, want)
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
-// 客户端挑版本靠 `git ls-remote --tags` + semver（规格 §2）。tag 长成
-// `jq-1.8.2` 的仓库它一个版本都解析不出来 —— 条目照样生成得出来，而
-// `toy install` 第一步就死掉，报错里连"是因为 tag 的形状"都看不出来。
-// 装不下去的条目不该进索引，这和 unstableBinPath 是同一类判断。
+// The client picks versions with `git ls-remote --tags` + semver (spec §2). A repo whose
+// tags look like `jq-1.8.2` yields not a single parseable version -- the entry generates
+// fine, and then `toy install` dies at step one with an error that never hints the tag
+// SHAPE is the problem. An entry nobody can install does not belong in the index; same
+// class of judgement as unstableBinPath.
 func TestGenRefusesReposWhoseTagsAreNotSemver(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "idx.json")
 	err := runFakeGen(t, map[string]fakeRepo{
@@ -367,23 +382,24 @@ func TestGenRefusesReposWhoseTagsAreNotSemver(t *testing.T) {
 		},
 	}, []string{"jqlang/jq"}, out, false)
 	if err == nil {
-		t.Fatal("想要整批失败：唯一那条产不出条目")
+		t.Fatal("want the batch to fail: the only line in it produces no entry")
 	}
 	if _, serr := os.Stat(out); serr == nil {
-		t.Fatal("不该写出索引文件 —— 一条条目都没产出")
+		t.Fatal("no index file should have been written -- not one entry was produced")
 	}
 }
 
-// 报告里那一列印的必须是【真正会落到 PATH 上】的名字。
+// That column in the report must print the name that ACTUALLY LANDS ON PATH.
 //
-// name 是包目录名、binName 是命令名，ripgrep 这种仓库上两者不一样
-// （name=ripgrep、binName=rg）。这一列是 §14.9 第 2 条留给人的唯一关口 ——
-// 印成 name 的话，人核对的是一个根本不会出现在 PATH 上的字符串。
+// name is the package directory name, binName is the command name, and on a repo like
+// ripgrep the two differ (name=ripgrep, binName=rg). This column is the only checkpoint
+// §14.9 rule 2 leaves for a person -- print name and they are checking a string that
+// never shows up on PATH at all.
 func TestReportListsTheNameThatActuallyLandsOnPATH(t *testing.T) {
 	if got := reportBinNames([]genResult{{
 		written: true, id: "o/r",
 		pack: pack{name: "ripgrep", binName: "rg"},
 	}}); len(got) != 1 || !strings.HasPrefix(got[0], "rg\t") {
-		t.Fatalf("报告里那一列 = %v，想要以 \"rg\" 打头", got)
+		t.Fatalf("that column of the report = %v, want it to start with \"rg\"", got)
 	}
 }

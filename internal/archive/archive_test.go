@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// ---------- 造包的小工具（恶意包也是在这里手搓出来的） ----------
+// ---------- archive-building helpers (the malicious archives are hand-rolled here too) ----------
 
 type tarEntry struct {
 	name string
@@ -26,7 +26,7 @@ func reg(name, body string) tarEntry {
 	return tarEntry{name: name, typ: tar.TypeReg, mode: 0o644, body: body}
 }
 
-// buildTar 把 entries 写成一个 tar（gz=true 时再套一层 gzip），返回文件路径。
+// buildTar writes entries as a tar (wrapped in gzip when gz=true) and returns the path.
 func buildTar(t *testing.T, name string, gz bool, entries []tarEntry) string {
 	t.Helper()
 	var raw bytes.Buffer
@@ -43,16 +43,16 @@ func buildTar(t *testing.T, name string, gz bool, entries []tarEntry) string {
 			hdr.Size = 0
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
-			t.Fatalf("写 tar 头失败：%v", err)
+			t.Fatalf("writing tar header failed: %v", err)
 		}
 		if e.typ == tar.TypeReg {
 			if _, err := tw.Write([]byte(e.body)); err != nil {
-				t.Fatalf("写 tar 内容失败：%v", err)
+				t.Fatalf("writing tar content failed: %v", err)
 			}
 		}
 	}
 	if err := tw.Close(); err != nil {
-		t.Fatalf("关 tar 失败：%v", err)
+		t.Fatalf("closing tar failed: %v", err)
 	}
 
 	out := raw.Bytes()
@@ -60,17 +60,17 @@ func buildTar(t *testing.T, name string, gz bool, entries []tarEntry) string {
 		var zbuf bytes.Buffer
 		zw := gzip.NewWriter(&zbuf)
 		if _, err := zw.Write(out); err != nil {
-			t.Fatalf("gzip 写失败：%v", err)
+			t.Fatalf("gzip write failed: %v", err)
 		}
 		if err := zw.Close(); err != nil {
-			t.Fatalf("gzip 关失败：%v", err)
+			t.Fatalf("gzip close failed: %v", err)
 		}
 		out = zbuf.Bytes()
 	}
 
 	p := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(p, out, 0o644); err != nil {
-		t.Fatalf("落盘失败：%v", err)
+		t.Fatalf("writing the file failed: %v", err)
 	}
 	return p
 }
@@ -78,7 +78,7 @@ func buildTar(t *testing.T, name string, gz bool, entries []tarEntry) string {
 type zipEntry struct {
 	name string
 	mode os.FileMode
-	body string // 符号链接时这里就是目标
+	body string // for a symlink this is the target
 }
 
 func buildZip(t *testing.T, name string, entries []zipEntry) string {
@@ -90,18 +90,18 @@ func buildZip(t *testing.T, name string, entries []zipEntry) string {
 		hdr.SetMode(e.mode)
 		w, err := zw.CreateHeader(hdr)
 		if err != nil {
-			t.Fatalf("写 zip 头失败：%v", err)
+			t.Fatalf("writing zip header failed: %v", err)
 		}
 		if _, err := w.Write([]byte(e.body)); err != nil {
-			t.Fatalf("写 zip 内容失败：%v", err)
+			t.Fatalf("writing zip content failed: %v", err)
 		}
 	}
 	if err := zw.Close(); err != nil {
-		t.Fatalf("关 zip 失败：%v", err)
+		t.Fatalf("closing zip failed: %v", err)
 	}
 	p := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
-		t.Fatalf("落盘失败：%v", err)
+		t.Fatalf("writing the file failed: %v", err)
 	}
 	return p
 }
@@ -110,14 +110,14 @@ func mustBeEmpty(t *testing.T, dir string) {
 	t.Helper()
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("读 %s 失败：%v", dir, err)
+		t.Fatalf("reading %s failed: %v", dir, err)
 	}
 	if len(ents) != 0 {
 		names := make([]string, 0, len(ents))
 		for _, e := range ents {
 			names = append(names, e.Name())
 		}
-		t.Fatalf("拒绝之后 %s 应该是空的，实际还剩：%v", dir, names)
+		t.Fatalf("%s should be empty after a refusal, still holds: %v", dir, names)
 	}
 }
 
@@ -132,36 +132,36 @@ func TestIsArchive(t *testing.T) {
 		{"x.TGZ", true},
 		{"x.tar", true},
 		{"x.zip", true},
-		{"x.tar.xz", true}, // 认得出来，但 Extract 会明确报 ErrUnsupported
+		{"x.tar.xz", true}, // recognised, but Extract reports ErrUnsupported explicitly
 		{"/a/b/c.tar.gz", true},
 		{"tinyserve", false},
 		{"tool.exe", false},
-		{"x.gz", false}, // 裸 gzip 不是包，按单文件处理
+		{"x.gz", false}, // bare gzip is not an archive; install it as a single file
 		{"x.tar.bz2", false},
 		{"", false},
 	}
 	for _, c := range cases {
 		if got := IsArchive(c.name); got != c.want {
-			t.Errorf("IsArchive(%q) = %v，想要 %v", c.name, got, c.want)
+			t.Errorf("IsArchive(%q) = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
 
-// ---------- 正常路径 ----------
+// ---------- happy path ----------
 
 func TestExtractTarGzHappyPath(t *testing.T) {
 	src := buildTar(t, "ok.tar.gz", true, []tarEntry{
-		{name: "./", typ: tar.TypeDir, mode: 0o755}, // GNU tar 常见的第一条
+		{name: "./", typ: tar.TypeDir, mode: 0o755}, // the usual first entry from GNU tar
 		{name: "bin", typ: tar.TypeDir, mode: 0o755},
-		{name: "bin/tinyserve", typ: tar.TypeReg, mode: 0o4755, body: "ELF..."}, // 带 setuid
+		{name: "bin/tinyserve", typ: tar.TypeReg, mode: 0o4755, body: "ELF..."}, // carries setuid
 		reg("README.md", "hi"),
-		reg("share/doc/a/b.txt", "deep"), // 中间目录没有显式条目
+		reg("share/doc/a/b.txt", "deep"), // no explicit entries for the intermediate dirs
 	})
 	dest := t.TempDir()
 
 	files, err := Extract(src, dest)
 	if err != nil {
-		t.Fatalf("Extract 失败：%v", err)
+		t.Fatalf("Extract failed: %v", err)
 	}
 
 	want := []string{
@@ -170,30 +170,30 @@ func TestExtractTarGzHappyPath(t *testing.T) {
 		filepath.Join("share", "doc", "a", "b.txt"),
 	}
 	if strings.Join(files, "|") != strings.Join(want, "|") {
-		t.Errorf("返回的文件列表 = %v，想要 %v", files, want)
+		t.Errorf("file list = %v, want %v", files, want)
 	}
 
 	if b, err := os.ReadFile(filepath.Join(dest, "share/doc/a/b.txt")); err != nil || string(b) != "deep" {
-		t.Errorf("深层文件内容不对：%q, %v", b, err)
+		t.Errorf("wrong content in the deep file: %q, %v", b, err)
 	}
 
-	// 权限只有两档，setuid 绝不能带出来
+	// Two permission tiers only, and setuid must never survive
 	fi, err := os.Stat(filepath.Join(dest, "bin/tinyserve"))
 	if err != nil {
-		t.Fatalf("stat 失败：%v", err)
+		t.Fatalf("stat failed: %v", err)
 	}
 	if fi.Mode().Perm() != 0o755 {
-		t.Errorf("可执行文件权限 = %o，想要 755", fi.Mode().Perm())
+		t.Errorf("executable permissions = %o, want 755", fi.Mode().Perm())
 	}
 	if fi.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
-		t.Errorf("setuid/setgid/sticky 被带出来了：%v", fi.Mode())
+		t.Errorf("setuid/setgid/sticky survived: %v", fi.Mode())
 	}
 	fi, err = os.Stat(filepath.Join(dest, "README.md"))
 	if err != nil {
-		t.Fatalf("stat 失败：%v", err)
+		t.Fatalf("stat failed: %v", err)
 	}
 	if fi.Mode().Perm() != 0o644 {
-		t.Errorf("普通文件权限 = %o，想要 644", fi.Mode().Perm())
+		t.Errorf("regular file permissions = %o, want 644", fi.Mode().Perm())
 	}
 }
 
@@ -201,10 +201,10 @@ func TestExtractPlainTarAndZip(t *testing.T) {
 	tarSrc := buildTar(t, "ok.tar", false, []tarEntry{reg("a.txt", "tar")})
 	dest := t.TempDir()
 	if _, err := Extract(tarSrc, dest); err != nil {
-		t.Fatalf("解 .tar 失败：%v", err)
+		t.Fatalf("extracting .tar failed: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dest, "a.txt")); string(b) != "tar" {
-		t.Errorf(".tar 内容不对：%q", b)
+		t.Errorf("wrong .tar content: %q", b)
 	}
 
 	zipSrc := buildZip(t, "ok.zip", []zipEntry{
@@ -215,87 +215,87 @@ func TestExtractPlainTarAndZip(t *testing.T) {
 	dest = t.TempDir()
 	files, err := Extract(zipSrc, dest)
 	if err != nil {
-		t.Fatalf("解 zip 失败：%v", err)
+		t.Fatalf("extracting zip failed: %v", err)
 	}
 	if len(files) != 2 {
-		t.Fatalf("zip 返回 %v，想要两个文件", files)
+		t.Fatalf("zip returned %v, want two files", files)
 	}
 	fi, err := os.Stat(filepath.Join(dest, "bin/tool"))
 	if err != nil {
-		t.Fatalf("stat 失败：%v", err)
+		t.Fatalf("stat failed: %v", err)
 	}
 	if fi.Mode().Perm() != 0o755 {
-		t.Errorf("zip 里的可执行文件权限 = %o，想要 755", fi.Mode().Perm())
+		t.Errorf("executable permissions from zip = %o, want 755", fi.Mode().Perm())
 	}
 	fi, err = os.Stat(filepath.Join(dest, "notes.txt"))
 	if err != nil {
-		t.Fatalf("stat 失败：%v", err)
+		t.Fatalf("stat failed: %v", err)
 	}
 	if fi.Mode().Perm() != 0o644 {
-		t.Errorf("0600 应该归到 644 那一档，实际 %o", fi.Mode().Perm())
+		t.Errorf("0600 should land in the 644 tier, got %o", fi.Mode().Perm())
 	}
 }
 
-// ---------- 攻击性用例 ----------
+// ---------- attack cases ----------
 
 func TestExtractRejectsEscapes(t *testing.T) {
 	cases := []struct {
 		name string
 		mk   func(t *testing.T) string
 	}{
-		{"tar 相对穿越", func(t *testing.T) string {
+		{"tar relative traversal", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{reg("../../etc/passwd", "pwned")})
 		}},
-		{"tar 绝对路径", func(t *testing.T) string {
+		{"tar absolute path", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{reg("/etc/passwd", "pwned")})
 		}},
-		{"tar 中段穿越", func(t *testing.T) string {
+		{"tar traversal in the middle", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{reg("a/b/../../../out.txt", "pwned")})
 		}},
-		{"tar 目录条目穿越", func(t *testing.T) string {
+		{"tar directory entry traversal", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{{name: "../evil", typ: tar.TypeDir, mode: 0o755}})
 		}},
-		{"符号链接指向上层", func(t *testing.T) string {
+		{"symlink pointing up a level", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{
 				{name: "link", typ: tar.TypeSymlink, mode: 0o777, link: "../../etc"},
 			})
 		}},
-		{"符号链接指向绝对路径", func(t *testing.T) string {
+		{"symlink pointing at an absolute path", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{
 				{name: "link", typ: tar.TypeSymlink, mode: 0o777, link: "/etc/passwd"},
 			})
 		}},
-		{"深层符号链接爬回上层", func(t *testing.T) string {
+		{"deep symlink climbing back up", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{
 				{name: "a/b", typ: tar.TypeDir, mode: 0o755},
 				{name: "a/b/link", typ: tar.TypeSymlink, mode: 0o777, link: "../../../outside"},
 			})
 		}},
-		{"硬链接指向包外", func(t *testing.T) string {
+		{"hard link pointing outside the package", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{
 				{name: "hl", typ: tar.TypeLink, mode: 0o644, link: "../../etc/passwd"},
 			})
 		}},
-		{"硬链接指向绝对路径", func(t *testing.T) string {
+		{"hard link pointing at an absolute path", func(t *testing.T) string {
 			return buildTar(t, "e.tar.gz", true, []tarEntry{
 				{name: "hl", typ: tar.TypeLink, mode: 0o644, link: "/etc/passwd"},
 			})
 		}},
-		{"zip 反斜杠", func(t *testing.T) string {
+		{"zip backslash", func(t *testing.T) string {
 			return buildZip(t, "e.zip", []zipEntry{{name: `..\evil`, mode: 0o644, body: "pwned"}})
 		}},
-		{"zip 反斜杠多层", func(t *testing.T) string {
+		{"zip backslash, several levels", func(t *testing.T) string {
 			return buildZip(t, "e.zip", []zipEntry{{name: `..\..\etc\passwd`, mode: 0o644, body: "pwned"}})
 		}},
-		{"zip 相对穿越", func(t *testing.T) string {
+		{"zip relative traversal", func(t *testing.T) string {
 			return buildZip(t, "e.zip", []zipEntry{{name: "../evil.txt", mode: 0o644, body: "pwned"}})
 		}},
-		{"zip 符号链接出界", func(t *testing.T) string {
+		{"zip symlink out of bounds", func(t *testing.T) string {
 			return buildZip(t, "e.zip", []zipEntry{
 				{name: "link", mode: os.ModeSymlink | 0o777, body: "../../etc"},
 			})
 		}},
-		{"空成员名", func(t *testing.T) string {
+		{"empty member name", func(t *testing.T) string {
 			return buildZip(t, "e.zip", []zipEntry{{name: "  ", mode: 0o644, body: "x"}})
 		}},
 	}
@@ -306,68 +306,69 @@ func TestExtractRejectsEscapes(t *testing.T) {
 			dest := t.TempDir()
 			files, err := Extract(src, dest)
 			if !errors.Is(err, ErrTraversal) {
-				t.Fatalf("想要 ErrTraversal，实际 err=%v files=%v", err, files)
+				t.Fatalf("want ErrTraversal, got err=%v files=%v", err, files)
 			}
 			if files != nil {
-				t.Errorf("被拒的包不该返回文件列表，实际 %v", files)
+				t.Errorf("a refused archive must not return a file list, got %v", files)
 			}
-			mustBeEmpty(t, dest) // 整个包被拒 = 一个字节都不该留下
+			mustBeEmpty(t, dest) // whole archive refused = not one byte left behind
 		})
 	}
 }
 
-// TestPrefixConfusion 钉住"带分隔符的前缀比较"：dest 旁边有个名字以它开头的兄弟目录，
-// 光比前缀（不带分隔符）会把 /…/destevil 当成 /…/dest 里面的东西。
+// TestPrefixConfusion pins the separator-aware prefix comparison: with a sibling
+// directory next to dest whose name starts with it, a plain prefix check (no separator)
+// treats /.../destevil as something inside /.../dest.
 func TestPrefixConfusion(t *testing.T) {
 	root := t.TempDir()
 	dest := filepath.Join(root, "dest")
 	sibling := filepath.Join(root, "destevil")
 	for _, d := range []string{dest, sibling} {
 		if err := os.Mkdir(d, 0o755); err != nil {
-			t.Fatalf("建目录失败：%v", err)
+			t.Fatalf("creating the directory failed: %v", err)
 		}
 	}
 	src := buildTar(t, "e.tar.gz", true, []tarEntry{reg("../destevil/pwned", "x")})
 
 	if _, err := Extract(src, dest); !errors.Is(err, ErrTraversal) {
-		t.Fatalf("想要 ErrTraversal，实际 %v", err)
+		t.Fatalf("want ErrTraversal, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(sibling, "pwned")); !os.IsNotExist(err) {
-		t.Fatalf("兄弟目录被写进去了：%v", err)
+		t.Fatalf("the sibling directory was written into: %v", err)
 	}
 	mustBeEmpty(t, dest)
 }
 
-// ---------- 包内链接是允许的 ----------
+// ---------- links inside the package are allowed ----------
 
 func TestSymlinkInsideDestIsAllowed(t *testing.T) {
 	src := buildTar(t, "ok.tar.gz", true, []tarEntry{
 		{name: "sub", typ: tar.TypeDir, mode: 0o755},
 		reg("sub/real.txt", "hello"),
 		{name: "link", typ: tar.TypeSymlink, mode: 0o777, link: "sub/real.txt"},
-		{name: "sub/back", typ: tar.TypeSymlink, mode: 0o777, link: "../sub/real.txt"}, // 绕一圈但没出界
+		{name: "sub/back", typ: tar.TypeSymlink, mode: 0o777, link: "../sub/real.txt"}, // takes a detour, stays inside
 	})
 	dest := t.TempDir()
 
 	files, err := Extract(src, dest)
 	if err != nil {
-		t.Fatalf("包内符号链接应该放行，实际 %v", err)
+		t.Fatalf("symlinks inside the package should be allowed, got %v", err)
 	}
 	if len(files) != 3 {
-		t.Errorf("文件列表 = %v，想要 3 条（文件 + 两个链接）", files)
+		t.Errorf("file list = %v, want 3 entries (the file plus two links)", files)
 	}
 	for _, name := range []string{"link", filepath.Join("sub", "back")} {
 		p := filepath.Join(dest, name)
 		fi, err := os.Lstat(p)
 		if err != nil {
-			t.Fatalf("%s 没建出来：%v", name, err)
+			t.Fatalf("%s was not created: %v", name, err)
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
-			t.Errorf("%s 不是符号链接", name)
+			t.Errorf("%s is not a symlink", name)
 		}
 		b, err := os.ReadFile(p)
 		if err != nil || string(b) != "hello" {
-			t.Errorf("顺着 %s 读到 %q, %v", name, b, err)
+			t.Errorf("reading through %s gave %q, %v", name, b, err)
 		}
 	}
 }
@@ -380,14 +381,14 @@ func TestHardlinkInsideDestIsAllowed(t *testing.T) {
 	dest := t.TempDir()
 
 	if _, err := Extract(src, dest); err != nil {
-		t.Fatalf("包内硬链接应该放行，实际 %v", err)
+		t.Fatalf("hard links inside the package should be allowed, got %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dest, "hl.txt")); err != nil || string(b) != "hello" {
-		t.Errorf("硬链接内容 = %q, %v", b, err)
+		t.Errorf("hard link content = %q, %v", b, err)
 	}
 }
 
-// ---------- 非常规成员：跳过，不报错 ----------
+// ---------- irregular members: skipped, not an error ----------
 
 func TestIrregularMembersAreSkipped(t *testing.T) {
 	src := buildTar(t, "odd.tar.gz", true, []tarEntry{
@@ -400,13 +401,13 @@ func TestIrregularMembersAreSkipped(t *testing.T) {
 
 	files, err := Extract(src, dest)
 	if err != nil {
-		t.Fatalf("非常规成员应该被跳过而不是报错，实际 %v", err)
+		t.Fatalf("irregular members should be skipped, not error out, got %v", err)
 	}
 	if len(files) != 1 || files[0] != "real.txt" {
-		t.Fatalf("文件列表 = %v，想要只有 real.txt", files)
+		t.Fatalf("file list = %v, want real.txt only", files)
 	}
 	if _, err := os.Lstat(filepath.Join(dest, "run/pipe")); !os.IsNotExist(err) {
-		t.Errorf("FIFO 不该被建出来：%v", err)
+		t.Errorf("the FIFO must not be created: %v", err)
 	}
 
 	zsrc := buildZip(t, "odd.zip", []zipEntry{
@@ -418,14 +419,14 @@ func TestIrregularMembersAreSkipped(t *testing.T) {
 	dest = t.TempDir()
 	files, err = Extract(zsrc, dest)
 	if err != nil {
-		t.Fatalf("zip 非常规成员应该被跳过，实际 %v", err)
+		t.Fatalf("zip irregular members should be skipped, got %v", err)
 	}
 	if len(files) != 1 || files[0] != "real.txt" {
-		t.Fatalf("zip 文件列表 = %v，想要只有 real.txt", files)
+		t.Fatalf("zip file list = %v, want real.txt only", files)
 	}
 }
 
-// ---------- 体积上限 ----------
+// ---------- size limit ----------
 
 func TestTooLargeAbortsAndCleansUp(t *testing.T) {
 	big := strings.Repeat("A", 300)
@@ -451,9 +452,9 @@ func TestTooLargeAbortsAndCleansUp(t *testing.T) {
 			dest := t.TempDir()
 			files, err := extractTo(tc.src(t), dest, 100)
 			if !errors.Is(err, ErrTooLarge) {
-				t.Fatalf("想要 ErrTooLarge，实际 err=%v files=%v", err, files)
+				t.Fatalf("want ErrTooLarge, got err=%v files=%v", err, files)
 			}
-			mustBeEmpty(t, dest) // 已经写出去的（含中途建的目录）必须清干净
+			mustBeEmpty(t, dest) // everything already written, dirs created along the way included, must be cleaned
 		})
 	}
 }
@@ -465,21 +466,21 @@ func TestUnderLimitStillWorks(t *testing.T) {
 	})
 	dest := t.TempDir()
 	if _, err := extractTo(src, dest, 100); err != nil {
-		t.Fatalf("正好在上限内不该报错：%v", err)
+		t.Fatalf("staying within the limit must not error: %v", err)
 	}
 }
 
-// ---------- 格式与参数 ----------
+// ---------- formats and arguments ----------
 
 func TestUnsupportedFormats(t *testing.T) {
 	dest := t.TempDir()
 	for _, name := range []string{"pkg.tar.xz", "tinyserve", "pkg.tar.bz2"} {
 		p := filepath.Join(t.TempDir(), name)
 		if err := os.WriteFile(p, []byte("whatever"), 0o644); err != nil {
-			t.Fatalf("落盘失败：%v", err)
+			t.Fatalf("writing the file failed: %v", err)
 		}
 		if _, err := Extract(p, dest); !errors.Is(err, ErrUnsupported) {
-			t.Errorf("%s：想要 ErrUnsupported，实际 %v", name, err)
+			t.Errorf("%s: want ErrUnsupported, got %v", name, err)
 		}
 	}
 }
@@ -488,31 +489,31 @@ func TestDestDirMustExist(t *testing.T) {
 	src := buildTar(t, "ok.tar.gz", true, []tarEntry{reg("a.txt", "x")})
 	missing := filepath.Join(t.TempDir(), "nope")
 	if _, err := Extract(src, missing); err == nil {
-		t.Fatal("destDir 不存在时应该报错")
+		t.Fatal("a missing destDir should be an error")
 	}
 
 	notDir := filepath.Join(t.TempDir(), "afile")
 	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
-		t.Fatalf("落盘失败：%v", err)
+		t.Fatalf("writing the file failed: %v", err)
 	}
 	if _, err := Extract(src, notDir); err == nil {
-		t.Fatal("destDir 是文件时应该报错")
+		t.Fatal("a destDir that is a file should be an error")
 	}
 }
 
 func TestBrokenGzip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "bad.tar.gz")
 	if err := os.WriteFile(p, []byte("not gzip at all"), 0o644); err != nil {
-		t.Fatalf("落盘失败：%v", err)
+		t.Fatalf("writing the file failed: %v", err)
 	}
 	if _, err := Extract(p, t.TempDir()); err == nil {
-		t.Fatal("坏 gzip 应该报错")
+		t.Fatal("broken gzip should be an error")
 	}
 }
 
-// TestWithin 单独钉住"前缀比较带分隔符"这一条。
-// 走 Extract 测不出来：filepath.Join 会先 Clean，".." 那道判定把它遮住了，
-// 所以这层防御只能在这里验。
+// TestWithin pins the separator-aware prefix comparison on its own.
+// Extract cannot exercise it: filepath.Join Cleans first, so the ".." check masks it,
+// which leaves this as the only place that layer can be verified.
 func TestWithin(t *testing.T) {
 	const dest = "/tmp/x/dest"
 	cases := []struct {
@@ -521,7 +522,7 @@ func TestWithin(t *testing.T) {
 	}{
 		{"/tmp/x/dest", true},
 		{"/tmp/x/dest/bin/tool", true},
-		{"/tmp/x/destevil", false}, // 只比前缀就会误判成自己人
+		{"/tmp/x/destevil", false}, // a plain prefix check would call this one of our own
 		{"/tmp/x/destevil/pwned", false},
 		{"/tmp/x/des", false},
 		{"/tmp/x", false},
@@ -530,7 +531,7 @@ func TestWithin(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := within(dest, c.p); got != c.want {
-			t.Errorf("within(%q, %q) = %v，想要 %v", dest, c.p, got, c.want)
+			t.Errorf("within(%q, %q) = %v, want %v", dest, c.p, got, c.want)
 		}
 	}
 }
@@ -551,23 +552,26 @@ func TestSafeMode(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := safeMode(c.in); got != c.want {
-			t.Errorf("safeMode(%o) = %o，想要 %o", c.in, got, c.want)
+			t.Errorf("safeMode(%o) = %o, want %o", c.in, got, c.want)
 		}
 	}
 }
 
-// ---------- 符号链接当路径中间段（词法校验拦不住的那一类） ----------
+// ---------- symlinks as path components (the class the lexical check cannot catch) ----------
 
-// TestSymlinkDirComponentEscape 是这个包最要紧的一条回归。
-// 三条成员单独看每一条都通过了词法校验，合起来却把文件写到了 destDir 外面：
+// TestSymlinkDirComponentEscape is the most important regression in this package.
+// Each of the three members passes the lexical check on its own, yet together they write
+// a file outside destDir:
 //
-//	x        -> "."   词法落点 dest/x，在界内
-//	x/up     -> ".."  词法 Join(dest/x, "..") = dest，在界内；真实落点是 dest/up -> dest 的父目录
-//	x/up/pwned        词法 dest/x/up/pwned，在界内；真实写到 destDir 外面
+//	x        -> "."   lexically dest/x, inside
+//	x/up     -> ".."  lexically Join(dest/x, "..") = dest, inside; really dest/up -> destDir's parent
+//	x/up/pwned        lexically dest/x/up/pwned, inside; really written outside destDir
 //
-// 根因是词法校验按【词法】父目录解析链接目标，内核按【真实】父目录解析。
-// 只要有一个链接指得比自己浅（x -> "."），两边深度就错开一层，后面一个 ".." 就爬出去了。
-// 所以"放行的链接必定指向内部、跟随它们也逃不出去"这条归纳不成立。
+// The root cause: the lexical check resolves a link target against the LEXICAL parent
+// while the kernel uses the REAL parent. One link pointing shallower than itself
+// (x -> ".") is enough to skew the two depths by a level, and the next ".." climbs out.
+// So "links we let through point inside, therefore following them cannot escape" does
+// not hold.
 func TestSymlinkDirComponentEscape(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -587,7 +591,7 @@ func TestSymlinkDirComponentEscape(t *testing.T) {
 				{name: "x/up/pwned", mode: 0o644, body: "PWNED"},
 			})
 		}},
-		{"多跳", func(t *testing.T) string { // 一条链接不够就多绕几跳
+		{"multiple hops", func(t *testing.T) string { // if one link is not enough, take a few more
 			return buildTar(t, "evil.tar.gz", true, []tarEntry{
 				{name: "a", typ: tar.TypeDir, mode: 0o755},
 				{name: "a/b", typ: tar.TypeSymlink, mode: 0o777, link: ".."},
@@ -600,64 +604,65 @@ func TestSymlinkDirComponentEscape(t *testing.T) {
 			root := t.TempDir()
 			dest := filepath.Join(root, "dest")
 			if err := os.Mkdir(dest, 0o755); err != nil {
-				t.Fatalf("建目录失败：%v", err)
+				t.Fatalf("creating the directory failed: %v", err)
 			}
 			files, err := Extract(tc.mk(t), dest)
 			if !errors.Is(err, ErrTraversal) {
-				t.Fatalf("想要 ErrTraversal，实际 err=%v files=%v", err, files)
+				t.Fatalf("want ErrTraversal, got err=%v files=%v", err, files)
 			}
 			if _, err := os.Stat(filepath.Join(root, "pwned")); !os.IsNotExist(err) {
-				t.Fatalf("destDir 外面被写了东西：%v", err)
+				t.Fatalf("something was written outside destDir: %v", err)
 			}
 			mustBeEmpty(t, dest)
 		})
 	}
 }
 
-// TestPreexistingSymlinkDirIsRefused：destDir 里本来就躺着一个符号链接目录时，
-// 包不能借它把东西写到外面去。上一次安装、别的工具、用户自己都可能留下这种链接。
+// TestPreexistingSymlinkDirIsRefused: when destDir already holds a symlinked directory,
+// a package must not use it to write outside. A previous install, another tool, or the
+// user himself can all leave such a link behind.
 func TestPreexistingSymlinkDirIsRefused(t *testing.T) {
 	root := t.TempDir()
 	dest := filepath.Join(root, "dest")
 	outside := filepath.Join(root, "outside")
 	for _, d := range []string{dest, outside} {
 		if err := os.Mkdir(d, 0o755); err != nil {
-			t.Fatalf("建目录失败：%v", err)
+			t.Fatalf("creating the directory failed: %v", err)
 		}
 	}
 	if err := os.Symlink(outside, filepath.Join(dest, "pre")); err != nil {
-		t.Fatalf("建链接失败：%v", err)
+		t.Fatalf("creating the link failed: %v", err)
 	}
-	// 深一层也要拦住：Lstat 一个深层路径会把中间的链接悄悄解析掉。
+	// One level deeper has to be caught too: Lstat on a deep path silently resolves the links in the middle.
 	if err := os.Mkdir(filepath.Join(outside, "deep"), 0o755); err != nil {
-		t.Fatalf("建目录失败：%v", err)
+		t.Fatalf("creating the directory failed: %v", err)
 	}
 	for _, member := range []string{"pre/pwned", "pre/deep/pwned"} {
 		src := buildTar(t, "e.tar.gz", true, []tarEntry{reg(member, "PWNED")})
 		if _, err := Extract(src, dest); !errors.Is(err, ErrTraversal) {
-			t.Fatalf("成员 %s：想要 ErrTraversal，实际 %v", member, err)
+			t.Fatalf("member %s: want ErrTraversal, got %v", member, err)
 		}
 	}
 	ents, err := os.ReadDir(outside)
 	if err != nil {
-		t.Fatalf("读 %s 失败：%v", outside, err)
+		t.Fatalf("reading %s failed: %v", outside, err)
 	}
 	if len(ents) != 1 || ents[0].Name() != "deep" {
-		t.Fatalf("destDir 外面被写了东西：%v", ents)
+		t.Fatalf("something was written outside destDir: %v", ents)
 	}
 }
 
-// TestHardlinkMustTargetAPackageFile：os.Link 会跟随目标路径中间的符号链接，
-// 所以硬链接目标只认"本次解压自己写出来的普通文件"。
+// TestHardlinkMustTargetAPackageFile: os.Link follows symlinks in the middle of the
+// target path, so a hard link target must be a regular file this extraction wrote itself.
 func TestHardlinkMustTargetAPackageFile(t *testing.T) {
-	t.Run("穿过符号链接把包外文件拽进来", func(t *testing.T) {
+	t.Run("dragging an outside file in through a symlink", func(t *testing.T) {
 		root := t.TempDir()
 		dest := filepath.Join(root, "dest")
 		if err := os.Mkdir(dest, 0o755); err != nil {
-			t.Fatalf("建目录失败：%v", err)
+			t.Fatalf("creating the directory failed: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("TOP SECRET"), 0o600); err != nil {
-			t.Fatalf("落盘失败：%v", err)
+			t.Fatalf("writing the file failed: %v", err)
 		}
 		src := buildTar(t, "e.tar.gz", true, []tarEntry{
 			{name: "x", typ: tar.TypeSymlink, mode: 0o777, link: "."},
@@ -665,15 +670,15 @@ func TestHardlinkMustTargetAPackageFile(t *testing.T) {
 			{name: "stolen", typ: tar.TypeLink, mode: 0o644, link: "x/up/secret.txt"},
 		})
 		if _, err := Extract(src, dest); !errors.Is(err, ErrTraversal) {
-			t.Fatalf("想要 ErrTraversal，实际 %v", err)
+			t.Fatalf("want ErrTraversal, got %v", err)
 		}
 		if _, err := os.Lstat(filepath.Join(dest, "stolen")); !os.IsNotExist(err) {
-			t.Fatal("包外的文件被硬链进来了")
+			t.Fatal("a file outside the package was hard-linked in")
 		}
 		mustBeEmpty(t, dest)
 	})
 
-	t.Run("指向包里的符号链接也不行", func(t *testing.T) {
+	t.Run("pointing at a symlink inside the package is not allowed either", func(t *testing.T) {
 		src := buildTar(t, "e.tar.gz", true, []tarEntry{
 			reg("real.txt", "hi"),
 			{name: "sym", typ: tar.TypeSymlink, mode: 0o777, link: "real.txt"},
@@ -681,24 +686,24 @@ func TestHardlinkMustTargetAPackageFile(t *testing.T) {
 		})
 		dest := t.TempDir()
 		if _, err := Extract(src, dest); !errors.Is(err, ErrTraversal) {
-			t.Fatalf("想要 ErrTraversal，实际 %v", err)
+			t.Fatalf("want ErrTraversal, got %v", err)
 		}
 		mustBeEmpty(t, dest)
 	})
 
-	t.Run("目标还没出现就引用它要响亮地失败", func(t *testing.T) {
+	t.Run("referencing a target that has not appeared yet must fail loudly", func(t *testing.T) {
 		src := buildTar(t, "e.tar.gz", true, []tarEntry{
 			{name: "hl", typ: tar.TypeLink, mode: 0o644, link: "later.txt"},
 			reg("later.txt", "hi"),
 		})
 		dest := t.TempDir()
 		if _, err := Extract(src, dest); !errors.Is(err, ErrTraversal) {
-			t.Fatalf("想要 ErrTraversal，实际 %v", err)
+			t.Fatalf("want ErrTraversal, got %v", err)
 		}
-		mustBeEmpty(t, dest) // 不能留下半个包
+		mustBeEmpty(t, dest) // no half a package left behind
 	})
 
-	t.Run("链上再挂一条硬链接是允许的", func(t *testing.T) {
+	t.Run("chaining another hard link onto one is allowed", func(t *testing.T) {
 		src := buildTar(t, "ok.tar.gz", true, []tarEntry{
 			reg("real.txt", "hello"),
 			{name: "a", typ: tar.TypeLink, mode: 0o644, link: "real.txt"},
@@ -706,7 +711,7 @@ func TestHardlinkMustTargetAPackageFile(t *testing.T) {
 		})
 		dest := t.TempDir()
 		if _, err := Extract(src, dest); err != nil {
-			t.Fatalf("硬链接指向前面的硬链接应该放行，实际 %v", err)
+			t.Fatalf("a hard link to an earlier hard link should be allowed, got %v", err)
 		}
 		if b, err := os.ReadFile(filepath.Join(dest, "b")); err != nil || string(b) != "hello" {
 			t.Errorf("b = %q, %v", b, err)
@@ -714,10 +719,10 @@ func TestHardlinkMustTargetAPackageFile(t *testing.T) {
 	})
 }
 
-// ---------- 成员数上限（字节上限管不住 inode） ----------
+// ---------- member count limit (a byte limit does nothing about inodes) ----------
 
 func TestTooManyEntriesIsRefused(t *testing.T) {
-	// 全用同名目录条目：计数照涨，盘上只建一个目录，测试才跑得快。
+	// All entries share one directory name: the count still climbs, only one directory hits disk, and the test stays fast.
 	tarEntries := make([]tarEntry, maxEntries+1)
 	zipEntries := make([]zipEntry, maxEntries+1)
 	for i := range tarEntries {
@@ -734,35 +739,36 @@ func TestTooManyEntriesIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dest := t.TempDir()
 			if _, err := Extract(tc.src, dest); !errors.Is(err, ErrTooLarge) {
-				t.Fatalf("想要 ErrTooLarge，实际 %v", err)
+				t.Fatalf("want ErrTooLarge, got %v", err)
 			}
 			mustBeEmpty(t, dest)
 		})
 	}
 }
 
-// TestSymlinkTargetCannotDoubleBack：错位也能出现在链接【目标】那一侧。
-// x -> "." 之后 "x/../outside" 词法算出来是 destDir 里，内核走的却是 destDir 的父目录 ——
-// 不写出去，但包里会留下一条能读到包外的链接，而它可能被 store 软链上 PATH。
+// TestSymlinkTargetCannotDoubleBack: the skew can appear on the link TARGET side too.
+// After x -> ".", "x/../outside" is lexically inside destDir while the kernel walks into
+// destDir's parent. Nothing is written outside, but the package is left holding a link
+// that reads outside it - and store may symlink that onto PATH.
 func TestSymlinkTargetCannotDoubleBack(t *testing.T) {
 	root := t.TempDir()
 	dest := filepath.Join(root, "dest")
 	if err := os.Mkdir(dest, 0o755); err != nil {
-		t.Fatalf("建目录失败：%v", err)
+		t.Fatalf("creating the directory failed: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "outside.txt"), []byte("OUTSIDE"), 0o644); err != nil {
-		t.Fatalf("落盘失败：%v", err)
+		t.Fatalf("writing the file failed: %v", err)
 	}
 	src := buildTar(t, "e.tar.gz", true, []tarEntry{
 		{name: "x", typ: tar.TypeSymlink, mode: 0o777, link: "."},
 		{name: "esc", typ: tar.TypeSymlink, mode: 0o777, link: "x/../outside.txt"},
 	})
 	if _, err := Extract(src, dest); !errors.Is(err, ErrTraversal) {
-		t.Fatalf("想要 ErrTraversal，实际 %v", err)
+		t.Fatalf("want ErrTraversal, got %v", err)
 	}
 	mustBeEmpty(t, dest)
 
-	// 开头连着的 .. 是从链接自己的父目录往上爬，那条父链保证全是真目录，不该误伤。
+	// Leading ".."s climb from the link's own parent, and that parent chain is guaranteed to be real directories, so no collateral.
 	ok := buildTar(t, "ok.tar.gz", true, []tarEntry{
 		{name: "sub", typ: tar.TypeDir, mode: 0o755},
 		reg("sub/real.txt", "hello"),
@@ -771,14 +777,14 @@ func TestSymlinkTargetCannotDoubleBack(t *testing.T) {
 	})
 	dest2 := t.TempDir()
 	if _, err := Extract(ok, dest2); err != nil {
-		t.Fatalf("开头的 .. 不该被误伤：%v", err)
+		t.Fatalf("leading .. must not be caught: %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dest2, "sub", "deep", "back")); err != nil || string(b) != "hello" {
-		t.Errorf("顺着链接读 = %q, %v", b, err)
+		t.Errorf("reading through the link = %q, %v", b, err)
 	}
 }
 
-// TestLegitSymlinkedDirLayoutStillWorks：常见的 framework/版本目录布局不能被误伤。
+// TestLegitSymlinkedDirLayoutStillWorks: the common framework/versioned-directory layout must not be caught.
 func TestLegitSymlinkedDirLayoutStillWorks(t *testing.T) {
 	src := buildTar(t, "ok.tar.gz", true, []tarEntry{
 		{name: "Versions/A", typ: tar.TypeDir, mode: 0o755},
@@ -788,9 +794,9 @@ func TestLegitSymlinkedDirLayoutStillWorks(t *testing.T) {
 	})
 	dest := t.TempDir()
 	if _, err := Extract(src, dest); err != nil {
-		t.Fatalf("正经的版本目录布局被误伤了：%v", err)
+		t.Fatalf("a legitimate versioned directory layout was caught: %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dest, "libfoo.so")); err != nil || string(b) != "ELF" {
-		t.Errorf("顺着链接读 = %q, %v", b, err)
+		t.Errorf("reading through the link = %q, %v", b, err)
 	}
 }

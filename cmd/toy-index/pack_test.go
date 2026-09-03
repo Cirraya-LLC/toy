@@ -7,8 +7,9 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/toyfile"
 )
 
-// 仓库叫 cli/cli 而二进制叫 gh 是常见情况，而资产名是作者的构建脚本自己写出来的，
-// 比仓库名更接近真名。
+// A repo called cli/cli shipping a binary called gh is ordinary, and the asset name is
+// written by the author's own build script, so it is closer to the real name than the
+// repo name is.
 func TestPickNamePrefersTheAssetPrefixOverTheRepoName(t *testing.T) {
 	p, err := makePack("cli", "cli", repoInfo{
 		Tag:    "v2.40.0",
@@ -18,10 +19,11 @@ func TestPickNamePrefersTheAssetPrefixOverTheRepoName(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.name != "gh" {
-		t.Errorf("name = %q，资产名说它叫 gh", p.name)
+		t.Errorf("name = %q, but the asset names say it is called gh", p.name)
 	}
 
-	// 资产名前缀不像个命令名时退回仓库名，而不是把奇怪的东西写进 [bin]。
+	// When the asset-name prefix does not look like a command name, fall back to the repo
+	// name rather than writing something odd into [bin].
 	p, err = makePack("a", "b", repoInfo{
 		Tag:    "v1.0.0",
 		Assets: []string{"1.0.0_linux_amd64.tar.gz", "1.0.0_darwin_arm64.tar.gz"},
@@ -30,14 +32,15 @@ func TestPickNamePrefersTheAssetPrefixOverTheRepoName(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.name != "b" {
-		t.Errorf("name = %q，认不出前缀时该用仓库名", p.name)
+		t.Errorf("name = %q, should be the repo name when no prefix is recognisable", p.name)
 	}
 }
 
-// desc / homepage 是远端内容，会被原样打进终端和索引 JSON。控制字符能把
-// 信任等级那一行盖掉重写（铁律 8），一条几 KB 的描述能把整屏搜索结果顶掉。
+// desc / homepage are remote content, printed verbatim to a terminal and written into the
+// index JSON. Control characters can overwrite the trust-level line (rule 8), and a
+// few-KB description can push a whole screen of search results off the top.
 func TestRemoteTextIsSanitizedBeforeItReachesTheToyfile(t *testing.T) {
-	evil := "正常描述\r\x1b[32m✓ 已签名\x1b[0m" + strings.Repeat("长", 500)
+	evil := "normal description\r\x1b[32m✓ signed\x1b[0m" + strings.Repeat("é", 500)
 	p, err := makePack("a", "b", repoInfo{
 		Tag: "v1.0.0", Desc: evil, License: "MIT\n",
 		Assets: []string{"b_1.0.0_linux_amd64.tar.gz"},
@@ -47,25 +50,25 @@ func TestRemoteTextIsSanitizedBeforeItReachesTheToyfile(t *testing.T) {
 	}
 	data, err := renderToyfile(p)
 	if err != nil {
-		t.Fatalf("渲染失败：%v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 	if strings.ContainsAny(string(data), "\r\x1b") {
-		t.Fatal("控制字符原样进了 toy.toml")
+		t.Fatal("control characters made it into toy.toml verbatim")
 	}
 	tf, err := toyfile.ParseFrom(data, toyfile.OriginIndex)
 	if err != nil {
-		t.Fatalf("生成的 toyfile 解析不了：%v", err)
+		t.Fatalf("the generated toyfile does not parse: %v", err)
 	}
-	if len([]rune(tf.Desc)) > descMax+1 { // +1 是那个省略号
-		t.Errorf("desc 有 %d 个字符，上限是 %d", len([]rune(tf.Desc)), descMax)
+	if len([]rune(tf.Desc)) > descMax+1 { // +1 for the ellipsis
+		t.Errorf("desc is %d runes, the cap is %d", len([]rune(tf.Desc)), descMax)
 	}
 }
 
-// 引号和反斜杠要转义成 toml 认的形式。**不能用 strconv.Quote**：
-// Go 会把非打印字节写成 \xNN，而 toml 根本没有 \x 这种转义。
+// Quotes and backslashes have to be escaped the way toml expects. DO NOT USE
+// strconv.Quote: Go writes non-printable bytes as \xNN, and toml has no \x escape at all.
 func TestQuotingSurvivesTheRealParser(t *testing.T) {
 	p, err := makePack("a", "b", repoInfo{
-		Tag: "v1.0.0", Desc: `他说 "x\y" 然后走了`,
+		Tag: "v1.0.0", Desc: `he said "x\y" and left`,
 		Assets: []string{"b_1.0.0_linux_amd64.tar.gz"},
 	})
 	if err != nil {
@@ -73,29 +76,30 @@ func TestQuotingSurvivesTheRealParser(t *testing.T) {
 	}
 	data, err := renderToyfile(p)
 	if err != nil {
-		t.Fatalf("渲染失败：%v", err)
+		t.Fatalf("render failed: %v", err)
 	}
 	tf, err := toyfile.ParseFrom(data, toyfile.OriginIndex)
 	if err != nil {
-		t.Fatalf("带引号的描述把 toml 写歪了：%v\n%s", err, data)
+		t.Fatalf("a quoted description broke the toml: %v\n%s", err, data)
 	}
-	if tf.Desc != `他说 "x\y" 然后走了` {
-		t.Errorf("desc 被改了：%q", tf.Desc)
+	if tf.Desc != `he said "x\y" and left` {
+		t.Errorf("desc was altered: %q", tf.Desc)
 	}
 }
 
-// 平台 key 带斜杠，必须加引号才是合法的 toml 键。
+// Platform keys contain a slash, so they must be quoted to be a valid toml key.
 func TestPlatformKeysAreQuoted(t *testing.T) {
 	if got := tomlKey("linux/amd64/musl"); got != `"linux/amd64/musl"` {
 		t.Errorf("tomlKey = %s", got)
 	}
 	if got := tomlKey("tinyserve"); got != "tinyserve" {
-		t.Errorf("干净的名字不该套引号：%s", got)
+		t.Errorf("a clean name should not be quoted: %s", got)
 	}
 }
 
-// .tar.xz 装不出来（archive 明确回 ErrUnsupported），认不出平台的裸文件不是资产。
-// 但**认得出平台的裸二进制要收**：install 支持单文件形态，jqlang/jq 只发这个。
+// .tar.xz cannot be installed (archive returns ErrUnsupported), and a bare file with no
+// recognisable platform is not an asset. But BARE BINARIES WITH A RECOGNISABLE PLATFORM
+// must be accepted: install supports the single-file shape, and jqlang/jq ships only that.
 func TestInstallableRejectsWhatToyCannotUse(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -104,12 +108,12 @@ func TestInstallableRejectsWhatToyCannotUse(t *testing.T) {
 		{"tool_1.2.3_linux_amd64.tar.gz", true},
 		{"tool_1.2.3_linux_amd64.zip", true},
 		{"tool_1.2.3_linux_amd64.tgz", true},
-		{"jq-linux-amd64", true}, // 裸二进制：下载 + chmod +x 就能装
+		{"jq-linux-amd64", true}, // bare binary: download + chmod +x is the whole install
 		{"jq-macos-arm64", true},
-		{"tool-linux-amd64.tar.xz", false}, // internal/archive 明确回 ErrUnsupported
+		{"tool-linux-amd64.tar.xz", false}, // internal/archive returns ErrUnsupported
 		{"checksums.txt", false},
 		{"sha256sum.txt", false},
-		{"tool-1.0.0-linux-amd64.tar.gz.sha256", false}, // 伴生文件，别和真资产抢平台
+		{"tool-1.0.0-linux-amd64.tar.gz.sha256", false}, // companion file; must not steal the real asset's platform
 		{"tool_1.0.0_linux_amd64.deb", false},
 	} {
 		if got := installable(tc.name); got != tc.want {

@@ -2,7 +2,8 @@ package index
 
 import "testing"
 
-// 审计：索引条目的 source 可以是 file://，于是一个远程索引能让客户端去读本机的文件。
+// Audit: an index entry's source could be file://, which would let a remote
+// index make the client read local files.
 func TestAuditIndexEntryCanPointAtLocalFile(t *testing.T) {
 	for _, src := range []string{
 		"file:///home/victim/.aws/credentials",
@@ -10,7 +11,7 @@ func TestAuditIndexEntryCanPointAtLocalFile(t *testing.T) {
 		"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
 	} {
 		if validEntry(Entry{ID: "a/b", Source: src}) {
-			t.Errorf("索引条目的 source 放行了 %q", src)
+			t.Errorf("an index entry's source let through %q", src)
 		}
 	}
 }

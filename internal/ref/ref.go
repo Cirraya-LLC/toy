@@ -1,5 +1,5 @@
-// Package ref 解析用户在命令行上写的包引用。
-// 规格 §2 的四条路都从这里进来。
+// Package ref parses the package references users type on the command line.
+// All four paths from spec §2 come through here.
 package ref
 
 import (
@@ -12,51 +12,55 @@ import (
 type Kind int
 
 const (
-	KindIndex Kind = iota // "Derrity/tinyserve"       —— 要查索引
-	KindHost              // "github:Derrity/tinyserve" —— 直接读那个托管方
-	KindURL               // "https://…/toy.toml"       —— 完全裸奔
+	KindIndex Kind = iota // "Derrity/tinyserve"        — look it up in the index
+	KindHost              // "github:Derrity/tinyserve" — read that host directly
+	KindURL               // "https://…/toy.toml"       — no safety net at all
 )
 
 var ErrBadRef = errors.New("ref: cannot parse this package reference")
 
 type Ref struct {
 	Kind    Kind
-	Host    string // KindHost 才有，如 "github"
+	Host    string // KindHost only, e.g. "github"
 	Owner   string
 	Repo    string
-	URL     string // KindURL 才有：toy.toml 的直接地址
-	Version string // 用户写了 @v1.2.3 才有，空表示取最新
-	Raw     string // 原始输入，报错时用
+	URL     string // KindURL only: the direct address of a toy.toml
+	Version string // set only when the user wrote @v1.2.3; empty means latest
+	Raw     string // the original input, for error messages
 }
 
-// owner / repo / version 都会被拼进 URL 和 ~/.toy 下的目录路径（规格 §6），
-// 所以长度也要有个上限，免得一个 ref 就造出个没法处理的路径。
+// owner / repo / version all get spliced into URLs and into paths under ~/.toy
+// (spec §6), so they need a length cap too — otherwise one ref can produce a
+// path nothing can handle.
 const maxSegment = 100
 
-// URL 形态只认这三种 scheme（规格 §5：索引来源是 file:// 或 https://；
-// §2：裸 URL 是直接指向 toy.toml 的地址）。
+// The URL form accepts only these three schemes (spec §5: an index source is
+// file:// or https://; §2: a bare URL points straight at a toy.toml).
 var allowedSchemes = map[string]bool{"http": true, "https": true, "file": true}
 
-// Parse 认这四种形态：
+// Parse accepts these four shapes:
 //
 //	Derrity/tinyserve            KindIndex
-//	Derrity/tinyserve@v1.2.3     KindIndex + 指定版本
+//	Derrity/tinyserve@v1.2.3     KindIndex with a pinned version
 //	github:Derrity/tinyserve     KindHost
 //	https://…/toy.toml           KindURL
 //
-// owner/repo 只允许 [A-Za-z0-9._-]，不允许空段，不允许多于一个斜杠。
+// owner/repo allow only [A-Za-z0-9._-], no empty segments, no more than one
+// slash.
 func Parse(s string) (Ref, error) {
 	raw := s
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return Ref{}, fmt.Errorf("%w: empty package reference; write it as owner/repo or github:owner/repo", ErrBadRef)
 	}
-	// URL 形态先认出来：它里面的斜杠和冒号跟下面两种形态的规则完全不是一回事。
+	// Recognize the URL form first: the slashes and colons inside it follow
+	// completely different rules from the two forms below.
 	if strings.Contains(s, "://") {
 		return parseURL(s, raw)
 	}
 
-	// @version 只对 owner/repo 形态有意义；URL 自己就指到了具体文件。
+	// @version only means something for the owner/repo form; a URL already
+	// points at a specific file.
 	body, version := s, ""
 	if b, v, ok := strings.Cut(s, "@"); ok {
 		body, version = b, v
@@ -67,8 +71,9 @@ func Parse(s string) (Ref, error) {
 
 	r := Ref{Kind: KindIndex, Version: version, Raw: raw}
 
-	// host 前缀。注意 "C:foo" 这种 Windows 盘符不能被当成 host ——
-	// 所以 host 名至少两个字符、必须字母开头。
+	// The host prefix. Note that a Windows drive letter like "C:foo" must not
+	// be read as a host — hence: at least two characters, must start with a
+	// letter.
 	if h, rest, ok := strings.Cut(body, ":"); ok {
 		if !validHostName(h) {
 			return Ref{}, fmt.Errorf("%w: %q: %q is not a valid host prefix (a host name starts with a letter, "+
@@ -108,28 +113,36 @@ func parseURL(s, raw string) (Ref, error) {
 		if u.Path == "" {
 			return Ref{}, fmt.Errorf("%w: %q: a local file goes as file:///absolute/path/toy.toml (three slashes)", ErrBadRef, s)
 		}
-		// file:// 后面跟主机名是个陷阱：读的人只会用 u.Path，所以
-		// file://evil.com/etc/passwd 读的是【本机】的 /etc/passwd，而这一行
-		// 在日志、安装清单和信任等级里长得像一个远程地址（规格 §4 要求如实告知）。
-		// RFC 8089 只认空主机名和 localhost，别的一律拒绝而不是悄悄丢掉。
+		// A host name after file:// is a trap: whoever reads this only uses
+		// u.Path, so file://evil.com/etc/passwd reads the LOCAL /etc/passwd
+		// while that line looks like a remote address in logs, in the install
+		// manifest and in the trust level (spec §4 demands we say what we
+		// actually did). RFC 8089 allows only an empty host or localhost;
+		// reject anything else instead of quietly dropping it.
 		if h := u.Hostname(); h != "" && !strings.EqualFold(h, "localhost") {
 			return Ref{}, fmt.Errorf("%w: %q: file:// must not carry the host name %q — it is ignored, and what "+
 				"actually gets read is the local file %q. Write local files as file:///absolute/path/toy.toml (three slashes)", ErrBadRef, s, h, u.Path)
 		}
 	} else if u.Hostname() == "" {
-		// 用 Hostname() 不是 Host()："https://:8080/x" 的 Host 是 ":8080"，非空但没有主机名。
+		// Hostname(), not Host(): the Host of "https://:8080/x" is ":8080" —
+		// non-empty, but there is no host name in it.
 		return Ref{}, fmt.Errorf("%w: %q: missing the host name; write it as https://host/path/toy.toml", ErrBadRef, s)
 	}
-	// 主机名大小写不敏感，统一小写：URL 会变成下载缓存和 TOFU 记录的 key（规格 §4、§6），
-	// 只差大小写的两个地址必须是同一个 key，否则 Example.COM 能绕过 example.com 钉住的 hash。
+	// Host names are case-insensitive, so lowercase them: the URL becomes the
+	// key of the download cache and of the TOFU record (spec §4, §6). Two
+	// addresses differing only in case must be one key, or Example.COM can slip
+	// past the hash pinned for example.com.
 	u.Host = strings.ToLower(u.Host)
-	// 存 u.String() 而不是原样：scheme 和主机名已被规范化，且保证还能再被 Parse。
+	// Store u.String() rather than the input: scheme and host are normalized,
+	// and the result is guaranteed to parse again.
 	return Ref{Kind: KindURL, URL: u.String(), Raw: raw}, nil
 }
 
-// validSegment 是 owner/repo 的字符白名单。这些值会被拼进下载 URL 和
-// ~/.toy/pkg/<host>/<owner>/<name>/ 这样的文件系统路径，所以宁可严格：
-// ".." 和空段是路径穿越，斜杠和反斜杠会凭空多出一层目录。
+// validSegment is the character allowlist for owner/repo. These values get
+// spliced into download URLs and into filesystem paths like
+// ~/.toy/pkg/<host>/<owner>/<name>/, so be strict: ".." and empty segments are
+// path traversal, and slashes or backslashes conjure up an extra directory
+// level.
 func validSegment(what, s string) error {
 	switch {
 	case s == "":
@@ -147,8 +160,9 @@ func validSegment(what, s string) error {
 	return nil
 }
 
-// validVersion：版本号同样会变成 pkg 下的一级目录，规则跟 owner/repo 一样，
-// 只是多允许一个 semver 的构建元数据分隔符 +。
+// validVersion: a version also becomes a directory level under pkg, so the
+// rules match owner/repo, plus one extra character — semver's build metadata
+// separator '+'.
 func validVersion(s string) error {
 	switch {
 	case s == "":
@@ -173,8 +187,9 @@ func isSegmentChar(c rune) bool {
 		c == '.' || c == '_' || c == '-'
 }
 
-// validHostName 认的是 host 表里的名字（github / gitlab / codeberg / …），
-// 不是域名。至少两个字符这条是为了让 "C:foo" 这种 Windows 盘符落不进来。
+// validHostName validates a name from the host table (github / gitlab /
+// codeberg / …), not a domain name. The two-character minimum exists so that a
+// Windows drive letter like "C:foo" cannot land here.
 func validHostName(s string) bool {
 	if len(s) < 2 || len(s) > 64 {
 		return false
@@ -190,7 +205,7 @@ func validHostName(s string) bool {
 	return true
 }
 
-// ID 返回规范化的 "owner/repo"，索引里用它当 key。
+// ID returns the canonical "owner/repo", which the index uses as its key.
 func (r Ref) ID() string {
 	if r.Owner == "" || r.Repo == "" {
 		return ""
@@ -198,7 +213,7 @@ func (r Ref) ID() string {
 	return r.Owner + "/" + r.Repo
 }
 
-// String 返回可以再被 Parse 的规范形式。
+// String returns the canonical form, which is guaranteed to parse again.
 func (r Ref) String() string {
 	if r.Kind == KindURL {
 		return r.URL

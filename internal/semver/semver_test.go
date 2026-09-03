@@ -18,21 +18,23 @@ func TestParseOK(t *testing.T) {
 		{"1.2.3-rc.1", V{1, 2, 3, "rc.1", "1.2.3-rc.1"}},
 		{"v2.0.0-alpha", V{2, 0, 0, "alpha", "v2.0.0-alpha"}},
 		{"v1.0.0-rc-1", V{1, 0, 0, "rc-1", "v1.0.0-rc-1"}},
-		// 构建元数据不参与比较，解析时丢掉，但 Raw 保留原样
+		// Build metadata takes no part in comparison and is dropped on parse,
+		// but Raw keeps it verbatim.
 		{"v1.2.3+build.5", V{1, 2, 3, "", "v1.2.3+build.5"}},
 		{"v1.2.3-rc.1+build.5", V{1, 2, 3, "rc.1", "v1.2.3-rc.1+build.5"}},
-		// 前导零不合 semver 严格定义，但真实仓库里有，照收
+		// Leading zeros are not strictly semver, but real repos have them, so
+		// accept them.
 		{"v1.02.3", V{1, 2, 3, "", "v1.02.3"}},
 		{"  v1.2.3  ", V{1, 2, 3, "", "v1.2.3"}},
 	}
 	for _, c := range cases {
 		got, err := Parse(c.in)
 		if err != nil {
-			t.Errorf("Parse(%q) 报错了：%v", c.in, err)
+			t.Errorf("Parse(%q) failed: %v", c.in, err)
 			continue
 		}
 		if got != c.want {
-			t.Errorf("Parse(%q) = %+v，想要 %+v", c.in, got, c.want)
+			t.Errorf("Parse(%q) = %+v, want %+v", c.in, got, c.want)
 		}
 	}
 }
@@ -41,7 +43,7 @@ func TestParseRejects(t *testing.T) {
 	bad := []string{
 		"",
 		"   ",
-		"release-2024", // 规格点名的那种非 semver tag
+		"release-2024", // the kind of non-semver tag the spec calls out
 		"latest",
 		"v",
 		"1.2",
@@ -51,26 +53,27 @@ func TestParseRejects(t *testing.T) {
 		"v1..3",
 		"1.-2.3",
 		"v1.2.-3",
-		"1.0.0-",      // 预发布标签是空的
-		"1.0.0-rc..1", // 中间有空段
-		"1.0.0-rc.",   // 结尾的点
-		"1.0.0-rc!",   // 非法字符
+		"1.0.0-",      // empty pre-release tag
+		"1.0.0-rc..1", // empty part in the middle
+		"1.0.0-rc.",   // trailing dot
+		"1.0.0-rc!",   // illegal character
 		"v 1.2.3",
-		"99999999999999999999.0.0", // 溢出
-		// 构建元数据同样是点分标识符，不能因为「不参与比较」就不校验 ——
-		// 它照样进 Raw / Number()，也就照样进目录名和下载 URL。
-		"v1.2.3+a/b",         // git 真的允许推这个 tag，实测过
-		"1.2.3-rc.1+foo/bar", // 预发布 + 带斜杠的构建元数据
-		"v1.2.3+",            // 空的构建元数据
-		"v1.2.3+a..b",        // 中间有空段
+		"99999999999999999999.0.0", // overflow
+		// Build metadata is dot-separated identifiers too, and "takes no part in
+		// comparison" is no excuse for skipping validation — it still lands in
+		// Raw / Number(), hence in directory names and download URLs.
+		"v1.2.3+a/b",         // git really will let you push this tag; verified
+		"1.2.3-rc.1+foo/bar", // pre-release plus build metadata with a slash
+		"v1.2.3+",            // empty build metadata
+		"v1.2.3+a..b",        // empty part in the middle
 		"v1.2.3+a b",
 		"v1.2.3+++",
-		strings.Repeat("1", 200) + ".0.0",    // 超长（也超 int）
-		"v1.2.3-" + strings.Repeat("a", 200), // 超长但每段都合法
+		strings.Repeat("1", 200) + ".0.0",    // too long (and past int range)
+		"v1.2.3-" + strings.Repeat("a", 200), // too long, though every part is legal
 	}
 	for _, s := range bad {
 		if v, err := Parse(s); err == nil {
-			t.Errorf("Parse(%q) 应该报错，却拿到了 %+v", s, v)
+			t.Errorf("Parse(%q) should have failed, got %+v", s, v)
 		}
 	}
 }
@@ -81,36 +84,36 @@ func TestCompare(t *testing.T) {
 		want int
 	}{
 		{"1.2.3", "1.2.3", 0},
-		{"v1.2.3", "1.2.3", 0}, // v 前缀不影响比较
+		{"v1.2.3", "1.2.3", 0}, // the v prefix does not affect comparison
 		{"2.0.0", "1.9.9", 1},
 		{"1.2.0", "1.10.0", -1},
 		{"1.2.10", "1.2.9", 1},
 		{"0.0.1", "0.0.0", 1},
-		// 预发布版排在同号正式版之前
+		// A pre-release sorts before the stable release of the same number
 		{"1.0.0-rc", "1.0.0", -1},
 		{"1.0.0", "1.0.0-rc", 1},
 		{"1.0.0-rc", "0.9.9", 1},
 		{"1.0.0-rc.1", "1.0.0-rc.1", 0},
-		// 纯数字段按数值比，不是按字符串比
+		// All-digit parts compare by value, not as strings
 		{"1.0.0-rc.2", "1.0.0-rc.10", -1},
 		{"1.0.0-alpha", "1.0.0-beta", -1},
-		{"1.0.0-alpha.1", "1.0.0-alpha.beta", -1}, // 数字段低于含字母的段
-		{"1.0.0-alpha", "1.0.0-alpha.1", -1},      // 段数多的更大
+		{"1.0.0-alpha.1", "1.0.0-alpha.beta", -1}, // numeric parts rank below parts with letters
+		{"1.0.0-alpha", "1.0.0-alpha.1", -1},      // more parts wins
 	}
 	for _, c := range cases {
 		a, err := Parse(c.a)
 		if err != nil {
-			t.Fatalf("Parse(%q)：%v", c.a, err)
+			t.Fatalf("Parse(%q): %v", c.a, err)
 		}
 		b, err := Parse(c.b)
 		if err != nil {
-			t.Fatalf("Parse(%q)：%v", c.b, err)
+			t.Fatalf("Parse(%q): %v", c.b, err)
 		}
 		if got := Compare(a, b); got != c.want {
-			t.Errorf("Compare(%q, %q) = %d，想要 %d", c.a, c.b, got, c.want)
+			t.Errorf("Compare(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
 		}
 		if got := Compare(b, a); got != -c.want {
-			t.Errorf("Compare(%q, %q) = %d，反过来应该是 %d", c.b, c.a, got, -c.want)
+			t.Errorf("Compare(%q, %q) = %d, reversed it should be %d", c.b, c.a, got, -c.want)
 		}
 	}
 }
@@ -120,24 +123,24 @@ func TestMax(t *testing.T) {
 		name     string
 		tags     []string
 		allowPre bool
-		want     string // 期望的 Raw
+		want     string // expected Raw
 	}{
-		{"普通挑最高", []string{"v1.0.0", "v1.2.0", "v0.9.9"}, false, "v1.2.0"},
-		{"最高的不在最后", []string{"v0.1.0", "v2.0.0", "v1.5.0"}, false, "v2.0.0"},
-		{"跳过非 semver 的 tag", []string{"release-2024", "latest", "v1.0.0", "nightly"}, false, "v1.0.0"},
-		{"默认忽略预发布", []string{"v1.0.0", "v2.0.0-rc.1"}, false, "v1.0.0"},
-		{"allowPre 才拿 rc", []string{"v1.0.0", "v2.0.0-rc.1"}, true, "v2.0.0-rc.1"},
-		{"同号正式版赢过 rc", []string{"v1.0.0-rc.1", "v1.0.0"}, true, "v1.0.0"},
-		{"混着 v 前缀", []string{"1.0.0", "v1.1.0"}, false, "v1.1.0"},
+		{"picks the highest", []string{"v1.0.0", "v1.2.0", "v0.9.9"}, false, "v1.2.0"},
+		{"the highest is not last", []string{"v0.1.0", "v2.0.0", "v1.5.0"}, false, "v2.0.0"},
+		{"skips non-semver tags", []string{"release-2024", "latest", "v1.0.0", "nightly"}, false, "v1.0.0"},
+		{"pre-releases ignored by default", []string{"v1.0.0", "v2.0.0-rc.1"}, false, "v1.0.0"},
+		{"allowPre is what takes the rc", []string{"v1.0.0", "v2.0.0-rc.1"}, true, "v2.0.0-rc.1"},
+		{"stable beats the rc of the same number", []string{"v1.0.0-rc.1", "v1.0.0"}, true, "v1.0.0"},
+		{"mixed v prefixes", []string{"1.0.0", "v1.1.0"}, false, "v1.1.0"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := Max(c.tags, c.allowPre)
 			if err != nil {
-				t.Fatalf("Max 报错了：%v", err)
+				t.Fatalf("Max failed: %v", err)
 			}
 			if got.Raw != c.want {
-				t.Fatalf("Max = %q，想要 %q", got.Raw, c.want)
+				t.Fatalf("Max = %q, want %q", got.Raw, c.want)
 			}
 		})
 	}
@@ -149,27 +152,28 @@ func TestMaxErrors(t *testing.T) {
 		tags     []string
 		allowPre bool
 	}{
-		{"空列表", nil, false},
-		{"全是非 semver", []string{"release-2024", "latest", "main"}, false},
-		{"只有预发布且不允许", []string{"v1.0.0-rc.1", "v1.0.0-rc.2"}, false},
+		{"empty list", nil, false},
+		{"all non-semver", []string{"release-2024", "latest", "main"}, false},
+		{"only pre-releases, and they are not allowed", []string{"v1.0.0-rc.1", "v1.0.0-rc.2"}, false},
 	}
 	for _, c := range bad {
 		t.Run(c.name, func(t *testing.T) {
 			if v, err := Max(c.tags, c.allowPre); err == nil {
-				t.Fatalf("应该报错，却拿到了 %+v", v)
+				t.Fatalf("should have failed, got %+v", v)
 			}
 		})
 	}
 }
 
-// 非 semver 的 tag 必须是「跳过」，绝不能被当成 0.0.0 —— 否则它会赢过真的低版本。
+// A non-semver tag must be SKIPPED, never treated as 0.0.0 — otherwise it beats
+// a genuinely low version.
 func TestMaxNeverTreatsJunkAsZero(t *testing.T) {
 	got, err := Max([]string{"release-2024", "v0.0.1"}, false)
 	if err != nil {
-		t.Fatalf("Max 报错了：%v", err)
+		t.Fatalf("Max failed: %v", err)
 	}
 	if got.Raw != "v0.0.1" {
-		t.Fatalf("Max = %q，想要 v0.0.1", got.Raw)
+		t.Fatalf("Max = %q, want v0.0.1", got.Raw)
 	}
 }
 
@@ -182,12 +186,12 @@ func TestNumber(t *testing.T) {
 		{mustParse(t, "1.2.3"), "1.2.3"},
 		{mustParse(t, "v1.2.3-rc.1"), "1.2.3-rc.1"},
 		{mustParse(t, "v1.2.3+build.5"), "1.2.3+build.5"},
-		{V{Major: 1, Minor: 2, Patch: 3}, "1.2.3"},                   // 手工构造、没有 Raw
-		{V{Major: 1, Minor: 0, Patch: 0, Pre: "rc.1"}, "1.0.0-rc.1"}, // 同上，带预发布
+		{V{Major: 1, Minor: 2, Patch: 3}, "1.2.3"},                   // hand-built, no Raw
+		{V{Major: 1, Minor: 0, Patch: 0, Pre: "rc.1"}, "1.0.0-rc.1"}, // same, with a pre-release
 	}
 	for _, c := range cases {
 		if got := c.in.Number(); got != c.want {
-			t.Errorf("%+v.Number() = %q，想要 %q", c.in, got, c.want)
+			t.Errorf("%+v.Number() = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
@@ -196,17 +200,20 @@ func mustParse(t *testing.T, s string) V {
 	t.Helper()
 	v, err := Parse(s)
 	if err != nil {
-		t.Fatalf("Parse(%q)：%v", s, err)
+		t.Fatalf("Parse(%q): %v", s, err)
 	}
 	return v
 }
 
-// Parse 放行的东西会原样变成 ~/.toy/pkg 下的目录名（规格 §6）和 release 下载
-// URL 的一部分（§2.4，经 Number() → toyfile.Expand）。所以「解析通过」必须蕴含
-// 「拿去当路径分量和 URL 分量是安全的」。
+// Whatever Parse lets through becomes, verbatim, a directory name under
+// ~/.toy/pkg (spec §6) and part of a release download URL (§2.4, via Number()
+// → toyfile.Expand). So "it parsed" must imply "it is safe to use as a path
+// component and a URL component".
 //
-// 写成 fuzz 而不是一张表：表只能挡住我想得到的坏字符，而这条不变量要挡的是
-// 以后有人放宽语法时想不到的那些。不加 -fuzz 时它就跑下面这些种子。
+// Written as a fuzz target rather than a table: a table only catches the bad
+// characters I thought of, and this invariant needs to catch the ones nobody
+// thinks of the day someone loosens the grammar. Without -fuzz it just runs the
+// seeds below.
 func FuzzParseNeverYieldsUnsafeVersion(f *testing.F) {
 	for _, seed := range []string{
 		"v1.2.3", "1.2.3-rc.1", "v1.2.3+build.5", "v1.2.3-rc.1+build.5",
@@ -218,58 +225,61 @@ func FuzzParseNeverYieldsUnsafeVersion(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string) {
 		v, err := Parse(s)
 		if err != nil {
-			return // 拒了就没有不变量要守
+			return // rejected, so there is no invariant left to hold
 		}
 		for what, got := range map[string]string{"Raw": v.Raw, "Number()": v.Number()} {
 			if got == "" {
-				t.Fatalf("Parse(%q) 通过了，但 %s 是空的 —— 空字符串当不了目录名", s, what)
+				t.Fatalf("Parse(%q) passed, but %s is empty — an empty string cannot be a directory name", s, what)
 			}
 			if len(got) > maxLen {
-				t.Errorf("Parse(%q) 通过了，但 %s 有 %d 个字符，超过 %d", s, what, len(got), maxLen)
+				t.Errorf("Parse(%q) passed, but %s is %d characters, over the %d limit", s, what, len(got), maxLen)
 			}
 			if strings.Contains(got, "..") {
-				t.Errorf("Parse(%q) 通过了，但 %s = %q 里有 \"..\"（路径穿越）", s, what, got)
+				t.Errorf("Parse(%q) passed, but %s = %q contains \"..\" (path traversal)", s, what, got)
 			}
 			for _, c := range got {
 				ok := c == '.' || c == '-' || c == '+' ||
 					(c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 				if !ok {
-					t.Errorf("Parse(%q) 通过了，但 %s = %q 里有 %q —— 它要当目录名和 URL 分量用", s, what, got, c)
+					t.Errorf("Parse(%q) passed, but %s = %q contains %q — this is used as a directory name and a URL component", s, what, got, c)
 				}
 			}
 		}
 	})
 }
 
-// V 的字段是导出的，所以「都非负」不是任何东西保证的事。相减实现的 Compare
-// 在这里会溢出并把大小关系判反。
+// V's fields are exported, so "they are all non-negative" is not something
+// anything guarantees. A subtraction-based Compare overflows here and inverts
+// the ordering.
 func TestCompareDoesNotOverflowOnHandBuiltV(t *testing.T) {
 	lo, hi := V{Major: math.MinInt}, V{Major: math.MaxInt}
 	if got := Compare(lo, hi); got != -1 {
-		t.Errorf("Compare(极小, 极大) = %d，想要 -1", got)
+		t.Errorf("Compare(min, max) = %d, want -1", got)
 	}
 	if got := Compare(hi, lo); got != 1 {
-		t.Errorf("Compare(极大, 极小) = %d，想要 1", got)
+		t.Errorf("Compare(max, min) = %d, want 1", got)
 	}
 }
 
-// 「一个 semver tag 都没有」和「只有预发布版」是用户要做的两件不同的事：
-// 前者只能去催上游打 tag，后者自己加个 --version 就装上了。合并成一句
-// 笼统的报错会让第二种人无路可走（规格 §3「报错并明确告诉作者该怎么办」）。
+// "No semver tags at all" and "only pre-releases" are two different situations
+// for the user: the first leaves nothing to do but nag upstream to tag a
+// release, while the second is solved by adding --version. Collapsing both into
+// one vague error leaves the second person with nowhere to go (spec §3: "fail
+// with an error that tells the author exactly what to do").
 func TestMaxErrorsTellYouWhichSituationYouAreIn(t *testing.T) {
 	_, preOnly := Max([]string{"v1.0.0-rc.1", "v1.0.0-rc.2"}, false)
 	if preOnly == nil {
-		t.Fatal("只有预发布版时应该报错")
+		t.Fatal("pre-releases only should be an error")
 	}
 	if !strings.Contains(preOnly.Error(), "--version") {
-		t.Errorf("只有预发布版时应该告诉用户用 --version，实际是：%v", preOnly)
+		t.Errorf("with pre-releases only, the error should point at --version, got: %v", preOnly)
 	}
 
 	_, noSemver := Max([]string{"release-2024", "latest"}, false)
 	if noSemver == nil {
-		t.Fatal("全是非 semver 时应该报错")
+		t.Fatal("all non-semver should be an error")
 	}
 	if strings.Contains(noSemver.Error(), "--version") {
-		t.Errorf("一个 semver tag 都没有时不该建议 --version（指定哪个都装不上）：%v", noSemver)
+		t.Errorf("with no semver tag at all, do not suggest --version (no tag would install): %v", noSemver)
 	}
 }

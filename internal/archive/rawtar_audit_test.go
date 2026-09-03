@@ -8,9 +8,10 @@ import (
 	"testing"
 )
 
-// rawHdr 手搓一个 512 字节的 ustar 头。Go 的 tar.Writer 会替我们"消毒"
-// （比如 PAXRecords 里的 path/linkpath 会被 Header 字段覆盖掉、名字里有 NUL
-// 直接拒绝写），而真正的攻击者是自己拼字节的 —— 所以要绕开 Writer。
+// rawHdr hand-rolls a 512-byte ustar header. Go's tar.Writer sanitises for us - a
+// PAXRecords path/linkpath gets overwritten by the Header fields, a name containing NUL
+// is refused outright - while a real attacker assembles the bytes himself. So we go
+// around the Writer.
 func rawHdr(name string, typ byte, link string, size int64, mode int64) []byte {
 	b := make([]byte, 512)
 	put := func(off int, s string, n int) {
@@ -25,7 +26,7 @@ func rawHdr(name string, typ byte, link string, size int64, mode int64) []byte {
 	b[156] = typ
 	put(157, link, 100)
 	put(257, "ustar\x0000", 8)
-	// checksum：先填空格算和
+	// checksum: fill the field with spaces first, then sum
 	for i := 148; i < 156; i++ {
 		b[i] = ' '
 	}
@@ -44,14 +45,14 @@ func rawBody(buf *bytes.Buffer, body []byte) {
 	}
 }
 
-// rawTar 把若干手搓成员拼成一个 tar 文件。
+// rawTar concatenates hand-rolled members into one tar file.
 func rawTar(t *testing.T, name string, parts ...[]byte) string {
 	t.Helper()
 	var buf bytes.Buffer
 	for _, p := range parts {
 		buf.Write(p)
 	}
-	buf.Write(make([]byte, 1024)) // 两个空块收尾
+	buf.Write(make([]byte, 1024)) // two empty blocks to terminate
 	p := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
@@ -59,12 +60,13 @@ func rawTar(t *testing.T, name string, parts ...[]byte) string {
 	return p
 }
 
-// paxMember 造一个 PAX 扩展头（typeflag 'x'）+ 紧跟着的真实成员。
-// 扩展头里的 path/linkpath 会盖掉后面那个成员头里的短名字。
+// paxMember builds a PAX extended header (typeflag 'x') followed by the real member.
+// The path/linkpath in the extended header overrides the short name in that member's
+// own header.
 func paxMember(records map[string]string, next []byte) []byte {
 	var rec bytes.Buffer
 	for k, v := range records {
-		// 格式："%d %s=%s\n"，长度包含它自己
+		// format: "%d %s=%s\n", where the length counts itself
 		line := fmt.Sprintf(" %s=%s\n", k, v)
 		n := len(line) + 1
 		for {
@@ -82,7 +84,7 @@ func paxMember(records map[string]string, next []byte) []byte {
 	return out.Bytes()
 }
 
-// gnuLongName 造一个 GNU 'L' 长名头 + 紧跟着的真实成员。
+// gnuLong builds a GNU 'L' long-name header followed by the real member.
 func gnuLong(typ byte, longname string, next []byte) []byte {
 	var out bytes.Buffer
 	body := append([]byte(longname), 0)

@@ -17,13 +17,16 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
-// 原本怀疑：一个远程的 toy.toml 能把 [artifact] 写成 file:///…，于是 toy 去读
-// 本机的任意文件，把它当二进制装进 ~/.toy/pkg、软链进 PATH，还顺手缓存进
-// ~/.toy/cache/<sha256>（那正是 `toy serve` 对外提供的目录）。
+// Original suspicion: a remote toy.toml could write [artifact] as file:///…, so
+// toy reads an arbitrary local file, installs it into ~/.toy/pkg as if it were a
+// binary, symlinks it onto PATH, and drops it into ~/.toy/cache/<sha256> along the
+// way — the very directory `toy serve` hands out.
 //
-// 这条现在到不了 —— 另一条修复（toyfile 拒绝把 artifact/script 的值写成 URL）
-// 把它顺手堵上了：地址只能由 toy 按托管方自己拼，写死 URL 一律在解析期就拒。
-// 翻成回归测试：这个拒绝必须发生，而且错误要说清楚作者该怎么改。
+// This is unreachable now: another fix (toyfile refuses a URL as the value of
+// artifact/script) closed it on the way past. Addresses may only be assembled by
+// toy from the host templates, and a hardcoded URL is refused at parse time.
+// Flipped into a regression test: that refusal has to happen, and the error has
+// to tell the author what to write instead.
 func TestArtifactValueCannotBeAURL(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TOY_HOME", home)
@@ -42,31 +45,34 @@ func TestArtifactValueCannotBeAURL(t *testing.T) {
 
 	err := runInstall(context.Background(), []string{srv.URL + "/toy.toml"})
 	if err == nil {
-		t.Fatalf("远程 toy.toml 把 [artifact] 写成 file://%s，toy 照读不误 —— "+
-			"值只能是 release 里的资产名，地址由 toy 自己拼", secret)
+		t.Fatalf("a remote toy.toml wrote [artifact] as file://%s and toy read it anyway — "+
+			"the value may only be an asset name from the release, toy assembles the address itself", secret)
 	}
 	if !errors.Is(err, toyfile.ErrUnsafeTarget) {
-		t.Fatalf("拒是拒了，但不是因为那个值不安全（错误里认不出 ErrUnsafeTarget），"+
-			"换个 toy.toml 就可能又漏过去：%v", err)
+		t.Fatalf("it was refused, but not because the value is unsafe (the error does not carry ErrUnsafeTarget), "+
+			"so a different toy.toml could slip through again: %v", err)
 	}
-	// 作者会看到这句话，它得说清楚问题在哪、该写什么。
+	// The author reads this sentence; it has to say what is wrong and what to write.
 	for _, want := range []string{"URL", "asset name"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("报错里没有 %q，作者看不出该改什么：%v", want, err)
+			t.Errorf("the error does not contain %q, so the author cannot tell what to change: %v", want, err)
 		}
 	}
-	// 什么都不该落地。
+	// Nothing at all should have landed.
 	if _, err := os.Stat(filepath.Join(home, "bin", "pwn")); !os.IsNotExist(err) {
-		t.Errorf("拒绝了却还是建出了软链：%v", err)
+		t.Errorf("it was refused and still created the symlink: %v", err)
 	}
 }
 
-// 原本怀疑：裸地址里的用户名密码会被原样写进安装清单和 TOFU 记录（明文落盘），
-// 还会出现在 `toy list` 的「来源」一列上。
+// Original suspicion: the username and password in a bare URL get written
+// verbatim into the install manifest and the TOFU record (plaintext on disk), and
+// show up in the "source" column of `toy list`.
 //
-// 这个装法现在同样到不了 —— 它靠的也是把 artifact 值写成 file://（见上一条）。
-// 翻成回归测试：带凭据的裸地址必须在解析期就被拒，那串密码既不落盘、
-// 也不出现在用户看到的任何一行输出里（错误信息会进日志、进 issue，比落盘更容易扩散）。
+// That install path is unreachable now as well — it also relied on writing the
+// artifact value as file:// (see above). Flipped into a regression test: a bare
+// URL carrying credentials has to be refused at parse time, and that password must
+// neither hit the disk nor appear in any line of output the user sees (error text
+// ends up in logs and in issues, which spreads further than the disk does).
 func TestCredentialsInBareURLNeverLandOnDisk(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TOY_HOME", home)
@@ -85,14 +91,15 @@ func TestCredentialsInBareURLNeverLandOnDisk(t *testing.T) {
 	u := strings.Replace(srv.URL, "http://", "http://alice:hunter2@", 1) + "/toy.toml"
 	err := runInstall(context.Background(), []string{u})
 	if err == nil {
-		t.Fatal("这份 toy.toml 把 [artifact] 写成了 file://，本该在解析期就被拒")
+		t.Fatal("this toy.toml wrote [artifact] as file://, it should have been refused at parse time")
 	}
-	// 凭据也不许出现在用户看到的输出里。抹掉是 internal/ui 那一层的活
-	// （safe() → redactURLs，"堵源头只要堵一次"），这里走 main 走的那条路验一遍：
-	// 在 cmd 里再抹一次只会多一份会跟它分叉的实现。
+	// The credentials must not reach the user's output either. Scrubbing is
+	// internal/ui's job (safe() -> redactURLs, "plug the source once"); this
+	// exercises the same path main takes. Scrubbing a second time inside cmd
+	// would only add an implementation that drifts away from it.
 	out := captureStderr(t, func() { ui.Error("%v", err) })
 	if strings.Contains(out, "hunter2") {
-		t.Errorf("裸地址上的密码被原样打给用户了（会进日志、进 issue）：\n%s", out)
+		t.Errorf("the password from the bare URL was printed verbatim to the user (it ends up in logs and issues):\n%s", out)
 	}
 
 	var hits []string
@@ -104,16 +111,17 @@ func TestCredentialsInBareURLNeverLandOnDisk(t *testing.T) {
 			hits = append(hits, p)
 		}
 		if strings.Contains(p, "hunter2") {
-			hits = append(hits, p+"（文件名里）")
+			hits = append(hits, p+" (in the file name)")
 		}
 		return nil
 	})
 	if len(hits) > 0 {
-		t.Errorf("密码明文落在这些文件里：%v", hits)
+		t.Errorf("the password is sitting in plaintext in these files: %v", hits)
 	}
 }
 
-// 审计：toy serve 的路径处理和 Range。结论应该是全部 404 / 416，不越界。
+// Audit: path handling and Range in toy serve. The verdict should be 404 / 416
+// across the board, with nothing read out of bounds.
 func TestAuditMirrorHandlerPaths(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("nope"), 0o644)
@@ -129,7 +137,7 @@ func TestAuditMirrorHandlerPaths(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusNotFound {
-			t.Errorf("%q → %d %q", p, w.Code, w.Body.String())
+			t.Errorf("%q -> %d %q", p, w.Code, w.Body.String())
 		}
 	}
 	for _, rng := range []string{"bytes=0-99999999999999999999", "bytes=-9223372036854775808", "bytes=18446744073709551615-"} {
@@ -138,10 +146,10 @@ func TestAuditMirrorHandlerPaths(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusOK && w.Code != http.StatusRequestedRangeNotSatisfiable && w.Code != http.StatusPartialContent {
-			t.Errorf("Range %q → %d", rng, w.Code)
+			t.Errorf("Range %q -> %d", rng, w.Code)
 		}
 		if strings.Contains(w.Body.String(), "nope") {
-			t.Errorf("Range %q 读到了别的文件", rng)
+			t.Errorf("Range %q read a different file", rng)
 		}
 	}
 }

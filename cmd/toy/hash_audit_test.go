@@ -11,12 +11,14 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/store"
 )
 
-// 原本怀疑：`--force` 一个开关同时放行「重装同一个版本」和「这个版本换了内容」。
-// 这条是成立的 —— 想重装的用户没有别的选择，只能连 TOFU 一起关掉（铁律 4/6），
-// 而 TOFU 存在的全部意义就是拦住那两件事。
+// Original suspicion: one `--force` switch waives both "install the same version
+// again" and "this version's bytes changed". It held up — a user who just wants
+// a reinstall had no other option than to switch off TOFU along with it (iron
+// laws 4/6), and stopping exactly those two things is the whole point of TOFU.
 //
-// 已经修了：`--reinstall` 专管重装（日常操作），`--force` 只放行安全检查报出的变化。
-// 这个测试现在守的是那道分割线 —— 一次重装不许顺手放行一条变了的 TOFU 记录。
+// Already fixed: `--reinstall` handles reinstalling (an everyday action) and
+// `--force` only waives what a safety check reports. This test now guards that
+// dividing line — a reinstall must not quietly waive a changed TOFU pin.
 func TestReinstallDoesNotWaiveTheVersionPin(t *testing.T) {
 	fh := audNewFakeHost(t)
 	fh.publish(t, "alice", "tool", "v1.0.0", "#!/bin/sh\necho GOOD\n")
@@ -24,62 +26,68 @@ func TestReinstallDoesNotWaiveTheVersionPin(t *testing.T) {
 	writeIdx("fake:alice/tool")
 
 	if err := runInstall(context.Background(), []string{"alice/tool"}); err != nil {
-		t.Fatalf("第一次装就失败了：%v", err)
+		t.Fatalf("the first install already failed: %v", err)
 	}
 	link := filepath.Join(home, "bin", "audtool")
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho GOOD\n" {
-		t.Fatalf("第一次装完就不对：%q", b)
+		t.Fatalf("wrong content right after the first install: %q", b)
 	}
 
-	// 同一个 tag，release 资产的字节被换掉了 —— 正是铁律 6 要拦的那件事。
+	// Same tag, the release asset's bytes swapped out — exactly what iron law 6
+	// exists to catch.
 	asset := filepath.Join(fh.root, "alice", "tool", "rel", "v1.0.0", "audtool")
 	if err := os.WriteFile(asset, []byte("#!/bin/sh\necho EVIL\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// 光给 --force 不该触发一次重装：它现在只是「放行安全检查报出的变化」。
-	// 而且必须说出来，不然用户以为他放行的那件事生效了。
+	// --force on its own must not trigger a reinstall: all it does now is waive
+	// what a safety check reports. And it has to say so, or the user walks away
+	// believing the thing they waived actually happened.
 	out := captureStderr(t, func() {
 		if err := runInstall(context.Background(), []string{"--force", "alice/tool"}); err != nil {
-			t.Fatalf("--force 不该在这里报错，它该说一句「已经是这一版了」：%v", err)
+			t.Fatalf("--force must not error here, it should say \"already on this version\": %v", err)
 		}
 	})
 	if !strings.Contains(out, "--reinstall") {
-		t.Fatalf("光给 --force 时什么都没装，却没告诉用户重装要的是 --reinstall：\n%s", out)
+		t.Fatalf("--force alone installed nothing and never told the user that reinstalling takes --reinstall:\n%s", out)
 	}
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho GOOD\n" {
-		t.Fatalf("--force 自己触发了一次重装，装到的是 %q", b)
+		t.Fatalf("--force triggered a reinstall by itself and pulled in %q", b)
 	}
 
-	// 这一条是分割线本身：重装的意图不能放行「这一版换了内容」。
+	// This is the dividing line itself: intent to reinstall must not waive
+	// "this version's content changed".
 	err := runInstall(context.Background(), []string{"--reinstall", "alice/tool"})
 	if err == nil {
-		t.Fatal("--reinstall 把一次哈希变更也一并放行了 —— 那正是它被拆出来要避免的事（铁律 4/6）")
+		t.Fatal("--reinstall waived a checksum change too — precisely what splitting it out was meant to prevent (iron laws 4/6)")
 	}
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho GOOD\n" {
-		t.Fatalf("拒绝之后已经装着的那一版被动过了：%q", b)
+		t.Fatalf("the installed version was touched even though the install was refused: %q", b)
 	}
 
-	// 两个意图都摆出来才装得上，而且必须逐条打印放行了什么（铁律 8）。
+	// Both intents stated, and every waiver has to be printed item by item (iron law 8).
 	out = captureStderr(t, func() {
 		if err := runInstall(context.Background(), []string{"--reinstall", "--force", "alice/tool"}); err != nil {
-			t.Fatalf("--reinstall --force 都给了还是装不上：%v", err)
+			t.Fatalf("still cannot install with both --reinstall and --force: %v", err)
 		}
 	})
 	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "sha256") {
-		t.Fatalf("--force 放行了一次哈希变更却没逐条说清楚放行了什么：\n%s", out)
+		t.Fatalf("--force waived a checksum change without spelling out what it waived:\n%s", out)
 	}
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho EVIL\n" {
-		t.Fatalf("两个开关都给了却没真的换成新内容：%q", b)
+		t.Fatalf("both switches given and the new content still was not installed: %q", b)
 	}
 }
 
-// 原本怀疑：`toy install foo@v1.0.0` 装了一个比已装的 v2.0.0 旧的版本是漏洞。
-// 这条被推翻了 —— 那是用户**显式要求**的，拦下来只会让「我就是要回退一版」没法做。
+// Original suspicion: `toy install foo@v1.0.0` installing something older than
+// the v2.0.0 already on disk is a hole. Overturned — the user ASKED for that,
+// and blocking it makes "I want to roll back one version" impossible.
 //
-// 真正的问题在旁边：上游把最新那个 tag 删掉（账号被接管、release 被撤、自建 host
-// 被换掉）走的是同一条路，而那时输出里只有一句「已安装 t 1.0.0」，一个字都没提降级。
-// 所以现在装是照装，但必须说一句（铁律 8）。这个测试守的是那句话。
+// The real problem sits next door: an upstream deleting its newest tag (account
+// taken over, release pulled, a self-hosted host swapped out) travels the exact
+// same path, and back then the output said nothing but "installed t 1.0.0" —
+// not one word about a downgrade. So it still installs, but it has to say so
+// (iron law 8). This test guards that sentence.
 func TestDowngradeIsAllowedButAnnounced(t *testing.T) {
 	fh := audNewFakeHost(t)
 	fh.publish(t, "alice", "tool", "v1.0.0", "#!/bin/sh\necho OLD\n")
@@ -88,30 +96,31 @@ func TestDowngradeIsAllowedButAnnounced(t *testing.T) {
 	writeIdx("fake:alice/tool")
 
 	if err := runInstall(context.Background(), []string{"alice/tool"}); err != nil {
-		t.Fatalf("装不上：%v", err)
+		t.Fatalf("install failed: %v", err)
 	}
 	link := filepath.Join(home, "bin", "audtool")
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho NEW\n" {
-		t.Fatalf("默认该装最高的那个 tag，装到的是 %q", b)
+		t.Fatalf("the default is the highest tag, got %q", b)
 	}
 
 	out := captureStderr(t, func() {
 		if err := runInstall(context.Background(), []string{"alice/tool@1.0.0"}); err != nil {
-			t.Fatalf("显式点名一个旧版本被拦下来了，那是用户自己要的：%v", err)
+			t.Fatalf("naming an older version explicitly got blocked, and the user asked for it: %v", err)
 		}
 	})
 	if b, _ := os.ReadFile(link); string(b) != "#!/bin/sh\necho OLD\n" {
-		t.Fatalf("点名 @1.0.0 却没装成 v1.0.0：%q", b)
+		t.Fatalf("asked for @1.0.0 and did not get v1.0.0: %q", b)
 	}
 	if !strings.Contains(out, "downgrade") {
-		t.Fatalf("从 v2.0.0 装回 v1.0.0，输出里一个字都没提这是降级 —— "+
-			"上游撤掉最新 tag 时走的是同一条路，而那时用户完全看不出来：\n%s", out)
+		t.Fatalf("went from v2.0.0 back to v1.0.0 without one word about it being a downgrade — "+
+			"an upstream pulling its newest tag takes the same path, and there the user sees nothing at all:\n%s", out)
 	}
 }
 
-// insIsOlder 只在两边都是合法 semver 时才敢说「旧」：说不准的时候一句猜出来的
-// 「这是一次降级」比不说更糟（insIsNewer 在同样的情况下按另一套规则放行，
-// 两个函数不是互为反面，别合并）。
+// insIsOlder only dares call something "older" when both sides are valid semver:
+// a guessed "this is a downgrade" is worse than saying nothing (insIsNewer lets
+// the same cases through under a different rule — the two functions are not
+// mirror images, do not merge them).
 func TestIsOlderStaysQuietWhenItCannotTell(t *testing.T) {
 	for _, c := range []struct {
 		oldTag, newTag string
@@ -120,18 +129,18 @@ func TestIsOlderStaysQuietWhenItCannotTell(t *testing.T) {
 		{"v2.0.0", "v1.0.0", true},
 		{"v1.0.0", "v2.0.0", false},
 		{"v1.0.0", "v1.0.0", false},
-		{"nightly", "v1.0.0", false}, // 已装的那个不是 semver
-		{"v2.0.0", "nightly", false}, // 这次这个不是 semver
+		{"nightly", "v1.0.0", false}, // the installed one is not semver
+		{"v2.0.0", "nightly", false}, // this one is not semver
 	} {
 		got := insIsOlder(store.Manifest{Tag: c.oldTag}, &resolved{Tag: c.newTag})
 		if got != c.want {
-			t.Errorf("insIsOlder(%q → %q) = %v，想要 %v", c.oldTag, c.newTag, got, c.want)
+			t.Errorf("insIsOlder(%q -> %q) = %v, want %v", c.oldTag, c.newTag, got, c.want)
 		}
 	}
 }
 
-// insTOFU 自己那一半一直是对的，钉在这儿：不给 force 就必须拒，
-// 而且错误要能被 errors.Is(err, sign.ErrChanged) 认出来。
+// insTOFU's own half was always right. Pinned here: without force it must
+// refuse, and the error has to be recognizable via errors.Is(err, sign.ErrChanged).
 func TestTOFURejectsAChangedPinWithoutForce(t *testing.T) {
 	ring, err := sign.OpenRing(t.TempDir())
 	if err != nil {
@@ -142,6 +151,6 @@ func TestTOFURejectsAChangedPinWithoutForce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := insTOFU(ring, id, "sha256", strings.Repeat("b", 64), "artifact", false); err == nil {
-		t.Fatal("不带 force 就该拒绝，铁律 6")
+		t.Fatal("without force this must be refused, iron law 6")
 	}
 }

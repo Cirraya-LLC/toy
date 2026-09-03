@@ -1,52 +1,56 @@
 # toy
 
-<!-- 仓库推上去之后把 OWNER/REPO 换掉，badge 就活了。 -->
+<!-- Swap OWNER/REPO once the repo is pushed and the badge goes live. -->
 [![ci](https://github.com/Cirraya-LLC/toy/actions/workflows/ci.yml/badge.svg)](https://github.com/Cirraya-LLC/toy/actions/workflows/ci.yml)
 
-**装那些没人给你打包的小工具。装的时候一行脚本都不跑。**
+**Install the small tools nobody packages for you. Nothing is executed at install time.**
 
 ```bash
-toy install github:Derrity/tinyserve   # 知道仓库在哪，直接装
-tinyserve                              # 直接就能用
+toy install github:Derrity/tinyserve   # know where the repo is? install it
+tinyserve                              # it just works
 ```
 
-想按名字找工具（`toy search json`、`toy install Derrity/tinyserve`）就先加一个索引 ——
-**v1 一个都不预置**，见下面「从哪都能装」。
+To find tools by name (`toy search json`, `toy install Derrity/tinyserve`) you need an
+index first — **v1 ships with none**. See "Install from anywhere" below.
 
 ---
 
-## 为什么
+## Why
 
-因为把一个小工具送到别人手里，现在的路都太长了。
+Because getting a small tool into someone else's hands is absurdly long today.
 
-进 Debian 要等一个 2–3 年的发行周期，而且[给非平凡的东西打包能花掉你五天](https://news.ycombinator.com/item?id=26211842)。
-进 Homebrew core 要过审。开个 tap 又等于[让一个陌生人的 Ruby 代码在别人机器上执行](https://docs.brew.sh/Taps) ——
-Homebrew 6.0 不得不为此加了一道 Tap Trust。
+Debian means waiting out a 2–3 year release cycle, and
+[packaging anything non-trivial can eat five days of your life](https://news.ycombinator.com/item?id=26211842).
+Homebrew core means review. Opening a tap means
+[running a stranger's Ruby on other people's machines](https://docs.brew.sh/Taps) —
+which is exactly why Homebrew 6.0 had to bolt on Tap Trust.
 
-于是大家退回到 `curl | bash`，把整台机器交给一个没人看过的脚本。
+So everyone falls back to `curl | bash` and hands the whole machine to a script nobody read.
 
-toy 的答案是把这两头都砍掉：**发布只要 8 行 toml，安装的时候什么都不执行。**
+toy's answer is to cut both ends off: **publishing is 8 lines of toml, and installing
+executes nothing.**
 
-## 两条不会变的规矩
+## Two rules that will never change
 
-**一、装的时候不跑任何代码。**
-没有 install、没有 postinstall、没有 build、没有 hook，一个都没有。
-toy 只会下载、验哈希、解压、建软链。
+**1. No code runs at install time.**
+No install, no postinstall, no build, no hooks. Not one.
+toy downloads, verifies the hash, extracts, and creates a symlink. That's the whole verb list.
 
-这不是省事，是这个项目存在的理由。吃掉 700+ 个 npm 包的 Shai-Hulud 蠕虫，
-传播方式就是 `preinstall` 钩子。一个从设计上就没有钩子的分发器，这类攻击根本无从谈起。
+This isn't laziness, it's the reason the project exists. The Shai-Hulud worm that ate
+700+ npm packages spread through `preinstall` hooks. A distributor with no hook mechanism
+at all doesn't have that attack surface to defend.
 
-**二、包和包之间没有依赖。**
-每个 toy 是一个自包含的二进制或一个单文件脚本。没有依赖图，就没有依赖地狱，
-也没有 left-pad。
+**2. Packages have no dependencies on each other.**
+Every toy is one self-contained binary or one single-file script. No dependency graph
+means no dependency hell, and no left-pad.
 
-## 发布一个工具
+## Publishing a tool
 
-在你的仓库根上放一个 `toy.toml`：
+Drop a `toy.toml` at the root of your repo:
 
 ```toml
 name    = "tinyserve"
-desc    = "一个很小的静态文件服务器"
+desc    = "a very small static file server"
 license = "MIT"
 
 [bin]
@@ -57,190 +61,215 @@ tinyserve = "tinyserve"
 "darwin/arm64" = "tinyserve_{version}_darwin_arm64.tar.gz"
 ```
 
-打个 tag，发个 release。**完事了。**
+Push a tag, cut a release. **Done.**
 
-已经在用 goreleaser 的话，这个文件不用自己写：
-
-```bash
-toy init          # 读 ./dist 里的资产文件名，反推出上面那份 toy.toml
-```
-
-它会把版本号换成 `{version}` 占位符、顺手把 `[sha256]` 算好（安装侧就从
-"首次信任"升级成强制校验），并在最后明说哪几处是猜的 —— 尤其 `[bin]` 右边那个
-包内路径，包里分了子目录（`bin/` 之类）的话得改。整棵树套在一层目录里的那种
-（cargo-dist 的 `tool-1.2.3-x86_64-unknown-linux-musl/`）不用管：解压时那一层会
-被剥掉。已经有 `toy.toml` 时它不会覆盖。
-
-没有 URL、没有版本号、没有托管方名字 —— 所以下次发版这个文件一个字都不用改。
-不用注册、不用等审核、不用求任何人。
+Already using goreleaser? You don't have to write that file by hand:
 
 ```bash
-toy install github:你的名字/你的工具   # 别人现在就能装
+toy init          # reads the asset filenames in ./dist and works the toy.toml out backwards
 ```
 
-想被搜到，再把一行条目提进索引。跑一次 `toy keygen` 就能给自己的条目签名。
-**这两步都是可选的。**
+It rewrites the version into a `{version}` placeholder, computes `[sha256]` for you
+(which upgrades the install side from trust-on-first-use to enforced verification), and
+says outright at the end which parts are guesses — especially the right-hand side of
+`[bin]`, the in-package path, which you'll have to fix if your archive has subdirectories
+(`bin/` and friends). The case where the whole tree is wrapped in a single top-level
+directory (cargo-dist's `tool-1.2.3-x86_64-unknown-linux-musl/`) needs no attention:
+that layer gets stripped at extraction time. It will not overwrite an existing `toy.toml`.
 
-### 平台 key：两段就够，需要时可以更细
+No URL, no version, no host name — so the next release doesn't touch this file at all.
+No registration, no review queue, nobody's permission.
 
-`[artifact]` 的 key 一般就是 `GOOS/GOARCH`。但 `linux/amd64` 一个字都没说 libc，
-而 glibc 构建丢进 Alpine 报的是 `not found` —— 文件明明就在那儿。所以 key 允许
-再带一段，toy 按**从具体到通用**的顺序试，第一个命中的就装：
+```bash
+toy install github:you/your-tool   # anyone can install it right now
+```
 
-| 你的机器 | 依次试 |
+Want to be searchable? Send one entry to an index. Run `toy keygen` once and you can sign
+your own entries. **Both steps are optional.**
+
+### Platform keys: two segments is enough, add a third when you need it
+
+`[artifact]` keys are normally just `GOOS/GOARCH`. But `linux/amd64` says nothing about
+libc, and a glibc build dropped into Alpine reports `not found` — with the file sitting
+right there. So a key may carry one more segment, and toy tries candidates **from most
+specific to most generic**, installing the first hit:
+
+| Your machine | Tried in order |
 | --- | --- |
-| 普通 Linux（glibc） | `linux/amd64/gnu` → `linux/amd64` |
-| Alpine（musl） | `linux/amd64/musl` → `linux/amd64` |
-| Apple Silicon | `darwin/arm64` → `darwin/amd64`（Rosetta 2） |
-| 树莓派 3 / Zero | `linux/armv7` / `linux/armv6` → `linux/arm` |
+| Ordinary Linux (glibc) | `linux/amd64/gnu` → `linux/amd64` |
+| Alpine (musl) | `linux/amd64/musl` → `linux/amd64` |
+| Apple Silicon | `darwin/arm64` → `darwin/amd64` (Rosetta 2) |
+| Raspberry Pi 3 / Zero | `linux/armv7` / `linux/armv6` → `linux/arm` |
 
-**作为作者你不用管这些**：只写 `linux/amd64` 就行，绝大多数项目都是这样，
-裸 `linux/amd64` 差不多总是 glibc 构建。只有你**真的同时发**了 glibc 和 musl
-两份二进制时，才需要多写一行 `"linux/amd64/musl"`。
+**As an author you can ignore all of this**: write `linux/amd64` and be done, which is what
+the vast majority of projects do — a bare `linux/amd64` is almost always a glibc build.
+You only need that extra `"linux/amd64/musl"` line if you **actually ship both** glibc and
+musl binaries.
 
-**装的不是为这台机器构建的那个时，toy 会明说** —— Rosetta 会慢一截，
-musl 机器上装到 glibc 构建根本起不来。反过来，只发两段 key 的包装在普通 Linux 上
-不会有任何多余的话：那本来就是给你的那个。
+**When the thing installed wasn't built for this machine, toy says so** — Rosetta costs you
+speed, and a glibc build on a musl box simply won't start. The reverse case stays quiet:
+a package that only declares two-segment keys landing on ordinary Linux gets no extra noise,
+because that build *is* the one meant for you.
 
-## 你在信任谁，toy 会告诉你
+## toy tells you who you're trusting
 
 ```
-✓ 已签名 · key a3f9… · 索引 community 登记（不代表 github/Derrity 本人）
-· 来源 github.com/Derrity · 未签名       你信的是 GitHub 的账号体系
-⚠ 打包说明来自索引 · 二进制取自作者的 release，但装哪个资产、命令叫什么名字由索引提供
-⚠ 未签名 · 首次安装，已钉住 sha256        你什么都没信，但内容变了会拦下来
+✓ signed · key a3f9… · registered in index community (this is not proof of github/Derrity)
+· source github.com/Derrity · unsigned      you're trusting GitHub's account system
+⚠ packaging instructions from the index · bytes come from the author's release, but which asset and which command name come from the index
+⚠ unsigned · first install, sha256 pinned   you trusted nothing, but a content change gets stopped
 ```
 
-哈希对不上就拒绝安装。公钥或哈希变了会大声警告并停下。模型抄的是 SSH 的 `known_hosts`。
+A checksum mismatch means the install is refused. A changed public key or hash warns loudly
+and stops. The model is copied straight from SSH's `known_hosts`.
 
-**「✓ 已签名」证明的是连续性，不是身份。** 索引谁都能 fork、谁都能提 PR，所以那把
-公钥和 GitHub 账号之间没有任何绑定 —— 一个人完全可以 fork 一份索引、用**自己的**
-密钥给同一个 `id` 重新签一条、把 `source` 指向自己的仓库，第一次安装的人照样看到
-这个勾。它真正保证的是：**你上次从这个 id 装到的东西，和这次是同一个人签的**（公钥
-首次安装即钉住，换了就拒绝安装）。所以那一行永远带着「不代表某某本人」这句尾巴，
-第一次安装时该看的是 `source` 指向哪里，不是有没有勾。
+**"✓ signed" proves continuity, not identity.** Anyone can fork an index, anyone can send a
+PR, so there is no binding whatsoever between that public key and a GitHub account — someone
+can fork an index, re-sign the same `id` with **their own** key, point `source` at their own
+repo, and a first-time installer still sees the check mark. What it actually guarantees is:
+**whatever you installed from this id last time was signed by the same person as this time**
+(the key is pinned on first install; a change is refused). That's why the line always carries
+the "not proof of X" tail. On a first install the thing to read is where `source` points, not
+whether there's a check mark.
 
-**第三档「打包说明来自索引」是什么。** 绝大多数现成的小工具还没有 `toy.toml`，
-所以索引条目可以内联一份（见下面「从哪都能装」）。这时候**字节仍然是作者的** ——
-下载地址由托管方模板 + tag 拼出来，索引说了不算；索引能改的只有「装 release 里的
-哪个资产、软链成什么命令名」。所以它比「托管方账号」低一档、比「什么都没信」高一档，
-而且**永远打不出那个勾**，哪怕这条记录是签过名的：签名者是提交这条记录的人，不是作者。
+**What the third tier, "packaging instructions from the index", means.** Almost none of the
+small tools out there have a `toy.toml` yet, so an index entry may inline one (see
+"Install from anywhere" below). **The bytes are still the author's** — the download URL is
+assembled from the host template plus the tag, and the index has no say in it. All the index
+can change is *which asset from that release gets installed and what the command is symlinked
+as*. So it sits one tier below "host account" and one above "trusted nothing", and it
+**can never earn the check mark**, not even when the entry is signed: the signer is whoever
+submitted that record, not the author.
 
-上游哪天自己加了 `toy.toml`，内联那份立刻让位，toy 会说一句。反过来（上次是作者
-自己的声明、这次变成索引的）算降级，会停下来要你 `--force`。
+The day upstream adds its own `toy.toml`, the inlined copy steps aside immediately and toy
+mentions it. The other direction (last time it was the author's own declaration, this time
+it's the index's) counts as a downgrade and stops for a `--force`.
 
-## 从哪都能装
+## Install from anywhere
 
 ```bash
-toy install Derrity/tinyserve            # 查索引
-toy install github:Derrity/tinyserve     # 跳过索引，直接读仓库
-toy install gitlab:x/y                   # 加三行配置就多支持一家托管方
-toy install https://…/toy.toml           # 完全裸奔
+toy install Derrity/tinyserve            # look it up in the index
+toy install github:Derrity/tinyserve     # skip the index, read the repo directly
+toy install gitlab:x/y                   # three lines of config adds another host
+toy install https://…/toy.toml           # fully bare
 ```
 
-索引里**默认只存一个指向仓库的指针**，**真相永远是那个 git 地址**。
-所以从索引里删掉一条只是"不再被搜到"，装还是装得上 —— 没有人能真的封杀一个包。
+An index entry is **by default just a pointer at a repo**, and **the git URL is always the
+truth**. Deleting an entry only means "no longer searchable" — it still installs. Nobody
+can actually take a package down.
 
-有一个例外：上游仓库还没有 `toy.toml` 时，条目可以内联一份打包说明
-（`toy publish --inline`），这样那几千个现成的小工具不用等作者接入就能被装。
-代价说在明处 —— 这样装的包会降到第三档信任等级，安装时会明说哪一半不是作者写的。
-上游一旦有了自己的 `toy.toml`，内联那份无条件让位。
+One exception: when the upstream repo has no `toy.toml` yet, an entry may inline one
+(`toy publish --inline`), so the thousands of existing small tools are installable without
+waiting for their authors. The cost is stated in the open — a package installed this way
+drops to the third trust tier, and the install says which half wasn't written by the author.
+The moment upstream has its own `toy.toml`, the inlined copy yields unconditionally.
 
-**v1 没有预置任何索引**，因为公共索引还没上线 —— 与其塞一个拉不到的地址让你第一次
-`toy doctor` 就看见一条红叉，不如老实说没有。要开搜就自己加一个（索引就是一个 JSON
-文件，`https://` 和本地路径一样用）：
+**v1 preloads no index at all**, because the public one isn't live yet — better to admit
+that than to ship an address that won't resolve and give you a red X on your very first
+`toy doctor`. Add one yourself to turn search on (an index is just a JSON file; `https://`
+and a local path work the same):
 
 ```bash
-toy index add local ./index/toy-index.json          # 本仓库里那份种子
+toy index add local ./index/toy-index.json          # the seed index in this repo
 toy index add community https://example.com/index.json
-toy index list                                       # 加了哪些
+toy index list                                       # what's configured
 ```
 
-没有索引不影响装东西：`toy install github:owner/repo` 那条路本来就不经过索引。
+Having no index doesn't stop you installing anything: `toy install github:owner/repo` never
+goes through an index in the first place.
 
-托管方是一张配置表不是三份代码，版本发现用的是 `git ls-remote`，
-所以 toy 不依赖任何一家的 API，也就不会被任何一家的限流卡住。
+Hosts are a config table, not three implementations, and version discovery uses
+`git ls-remote` — so toy depends on nobody's API and gets throttled by nobody's rate limit.
 
-## 命令
+## Commands
 
 ```
-toy install [--reinstall] [--force] [--version v] <ref>   装一个包
-toy uninstall <名字>                              卸掉（缓存留着）
-toy update [名字]                                 升级，不带名字就是全部
-toy list                                         已经装了什么
-toy search [--limit n] [--json] <关键词>           在索引里搜（纯本地，不联网搜）
-toy info <ref>                                   装之前先看一眼：平台、命令名、信任状态
-toy init [--dist ./dist] [--name x] [--force]    从 dist 里的资产名反推一份 toy.toml
-toy index add <名字> <地址> | rm <名字> | list       索引管理
-toy keygen                                       生成 ed25519 密钥对
-toy publish [--inline] [--source github:owner/repo] [目录]  签名，输出一条能粘进索引的条目
-toy serve [--addr host:port]                     把本机缓存变成一个镜像
-toy doctor                                       检查 PATH、目录权限、索引可达性
+toy install [--reinstall] [--force] [--version v] <ref>   install a package
+toy uninstall <name>                             remove it (the cache stays)
+toy update [name]                                upgrade; no name means everything
+toy list                                         what's installed
+toy search [--limit n] [--json] <query>          search the indexes (purely local, no network search)
+toy info <ref>                                   look before you install: platforms, command names, trust
+toy init [--dist ./dist] [--name x] [--force]    derive a toy.toml from the asset names in dist
+toy index add <name> <url> | rm <name> | list    index management
+toy keygen                                       generate an ed25519 keypair
+toy publish [--inline] [--source github:owner/repo] [dir]  sign, and print an entry you can paste into an index
+toy serve [--addr host:port]                     turn your local cache into a mirror
+toy doctor                                       check PATH, directory permissions, index reachability
 ```
 
-**选项要写在包名前面**（`toy install --force github:o/r`）—— Go 的 flag 解析
-碰到第一个非选项参数就停了。
+**Flags go before the package name** (`toy install --force github:o/r`) — Go's flag parser
+stops at the first non-flag argument.
 
-`--reinstall` 和 `--force` 是两件事，别混：`--reinstall` 只表示"我知道已经装了这一版，
-再装一次"，它**不放行任何安全检查**；`--force` 才是"我看过了，接受这些变化"
-（哈希变了 / 公钥换了 / 命令名遮蔽 / 信任等级降级 / 来源变了），而且它会逐条打印
-自己放行了什么。一个开关同时干这两件事，等于让"我想重装一下"顺手接受了后面五件。
+`--reinstall` and `--force` are two different things, don't conflate them: `--reinstall`
+only says "I know this version is installed, install it again" and it **waives no safety
+check whatsoever**; `--force` is "I looked, I accept these changes" (hash changed / key
+rotated / command name shadows something / trust tier downgraded / source changed), and it
+prints every single thing it waived. One switch doing both jobs means "let me just reinstall"
+quietly accepts the other five.
 
-`toy serve` 把你本机的缓存变成一个镜像。因为内容是哈希寻址的，
-镜像不需要被信任 —— 谁都可以当，五分钟的事。上游哪天没了，包还活着。
-**真的走了镜像，安装时会明说是从哪拿的** —— 不需要信任不等于不需要知道。
+`toy serve` turns your local cache into a mirror. Because content is addressed by hash, a
+mirror doesn't have to be trusted — anyone can run one, it's five minutes of work. Upstream
+disappears, the package lives on. **If a mirror was actually used, the install says where
+the bytes came from** — not needing to trust it isn't the same as not needing to know.
 
-## 不做的事
+## What we don't do
 
-不做源码构建、不做包间依赖、不做 P2P/DHT、不做 Windows（暂时）。
-每一条都是想清楚之后砍掉的，理由写在 the design notes 里。
+No building from source, no inter-package dependencies, no P2P/DHT, no Windows (for now).
+Every one of those was cut on purpose; the reasoning is in the design notes.
 
-## 装 toy 自己
+## Installing toy itself
 
-**先把话说在前面：第一个包管理器总得靠别的方式装。** toy 存在的理由是让你不必
-`curl | bash`，而它自己没法用 toy 装 —— 这个循环没有出路，凡是说自己解决了的都是
-把它挪了个地方。所以下面两种方式都不完美，区别只在于**你在信任谁**，我们把它写清楚。
+**Let's say the awkward part first: the first package manager always has to arrive some
+other way.** toy exists so you don't have to `curl | bash`, and toy can't install itself —
+there's no way out of that loop, and anyone claiming to have solved it has just moved it
+somewhere else. So neither option below is perfect; the difference is **who you're trusting**,
+and we're spelling it out.
 
-**方式一：`go install`**（有 Go 工具链的话，这是最省事的）
+**Option 1: `go install`** (easiest, if you have a Go toolchain)
 
 ```bash
 go install github.com/Cirraya-LLC/toy/cmd/toy@latest
 ```
 
-你信的是 Go 的模块代理和 checksum database（`sum.golang.org`）—— 一套公开的、
-可审计的透明日志。它比我们自己的任何承诺都强，所以有 Go 就用这个。
+You're trusting Go's module proxy and checksum database (`sum.golang.org`) — a public,
+auditable transparency log. That's stronger than any promise we could make, so use this
+one if you have Go.
 
-**方式二：下载 release 二进制，自己核对哈希**
+**Option 2: download the release binary and verify the checksum yourself**
 
 ```bash
-# 换成你的平台：linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64
+# pick your platform: linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64
 V=1.0.0; P=linux_amd64
 BASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V
 
 curl -fLO $BASE/toy_${V}_${P}.tar.gz
 curl -fLO $BASE/checksums.txt
 
-# 核对哈希。这一步不是可选的 —— 跳过它，你就是在无条件信任那条下载链路。
+# Verify. This step is not optional — skip it and you are trusting that download path unconditionally.
 sha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c
 
 tar -xzf toy_${V}_${P}.tar.gz
-install -m 0755 toy ~/.local/bin/toy           # 或者任何在你 PATH 上的目录
+install -m 0755 toy ~/.local/bin/toy           # or any directory on your PATH
 ```
 
-`checksums.txt` 和二进制来自同一个 release，所以它挡的是"传输过程中被改了"，
-不是"发布的人本身有问题"。**要挡后者只能看 release 页上的签名和这个仓库的历史** ——
-这正是 toy 对每一个包所做的事（哈希首次安装即钉住，之后变了会拦下来），
-而 toy 自己这一次没人替它做。这就是引导悖论的实际形状。
+`checksums.txt` and the binary come from the same release, so it guards against "altered in
+transit", not against "the publisher is the problem". **The only defense against the latter
+is the signature on the release page and this repo's history** — which is exactly what toy
+does for every package it installs (hash pinned on first install, refused if it changes
+later), and exactly what nobody did for toy itself this one time. That's the bootstrap
+paradox in its concrete form.
 
-装完之后：
+After installing:
 
 ```bash
-export PATH="$HOME/.toy/bin:$PATH"   # 写进 ~/.bashrc / ~/.zshrc
+export PATH="$HOME/.toy/bin:$PATH"   # put this in ~/.bashrc / ~/.zshrc
 toy doctor
 ```
 
-`doctor` 会说"没有配索引" —— 那是默认状态不是故障，装东西不受影响。
+`doctor` will say "no index configured" — that's the default state, not a fault, and it
+doesn't affect installing anything.
 
-## 许可
+## License
 
 MIT

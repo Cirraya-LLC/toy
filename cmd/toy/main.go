@@ -1,4 +1,5 @@
-// Command toy 装那些没人给你打包的小工具，装的时候一行脚本都不跑。
+// Command toy installs the small tools nobody packaged for you, and never runs a
+// line of their code while doing it.
 package main
 
 import (
@@ -15,7 +16,7 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
-// Version 由 -ldflags 注入。
+// Version is injected with -ldflags.
 var Version = "dev"
 
 type command struct {
@@ -25,12 +26,14 @@ type command struct {
 	run     func(ctx context.Context, args []string) error
 }
 
-// errUsage 让子命令能要求打印自己的用法而不必自己排版。
+// errUsage lets a subcommand ask for its own usage line without formatting it itself.
 var errUsage = errors.New("usage")
 
-// 用法串里选项一律写在位置参数【前面】：flag 包在第一个非 flag 参数处就停止解析，
-// 所以 `toy install foo --force` 里的 --force 会被当成第二个位置参数（然后 usage）。
-// 这几行是用户唯一会看到的语法说明，写成 `<ref> [--force]` 就是在教一个跑不通的顺序。
+// In these usage strings the options ALWAYS come BEFORE the positional arguments:
+// Go's flag package stops parsing at the first non-flag argument, so the --force in
+// `toy install foo --force` becomes a second positional argument (and then a usage
+// error). These lines are the only syntax reference a user ever sees — writing
+// `<ref> [--force]` here would be teaching an order that does not work.
 func commands() []command {
 	return []command{
 		{"init", "[--dist ./dist] [--name x] [--version v] [--force] [dir]", "write a toy.toml from the asset names in dist", runInit},
@@ -77,8 +80,8 @@ func main() {
 		case err == nil:
 			return
 		case errors.Is(err, errUsage):
-			// 不带参数的子命令（list / doctor / keygen）usage 是空串，
-			// 直接拼会留一个尾随空格。
+			// Subcommands that take no arguments (list / doctor / keygen) have
+			// an empty usage string, and concatenating it leaves a trailing space.
 			fmt.Fprintln(os.Stderr, strings.TrimSpace("usage: toy "+c.name+" "+c.usage))
 			os.Exit(2)
 		case errors.Is(err, context.Canceled):

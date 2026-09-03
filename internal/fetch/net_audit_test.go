@@ -13,13 +13,15 @@ import (
 	"testing"
 )
 
-// 回归：https 被重定向到 http 必须当场拒绝。
+// Regression: an https request redirected to http must be refused on the spot.
 //
-// 原本怀疑：客户端跟着降级到明文，中间人就能替换内容。
-// 复核结论：成立 —— CheckRedirect 原来只数跳数，不看 scheme。已修。
-// 现在这条守的是「https 一旦开始就不许落回 http」。对有 [sha256] 的 artifact
-// 哈希还兜得住，但 GetBytes 拉 toy.toml 和索引时【没有任何哈希】，
-// 而那正是决定"接下来下载什么、拿什么 hash 去比"的东西。
+// Original suspicion: the client follows the downgrade to plaintext, so a man in the middle
+// can swap the content.
+// Verdict after review: it holds -- CheckRedirect only counted hops, it never looked at the
+// scheme. Fixed. What this now guards is "once https has started, it may never fall back to
+// http". For an artifact with a [sha256] the hash still catches it, but when GetBytes fetches
+// toy.toml and the index there is NO HASH AT ALL -- and those are precisely what decides
+// "what do we download next, and which hash do we compare against".
 func TestRedirectHTTPSToHTTPIsRefused(t *testing.T) {
 	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("payload-from-plaintext"))
@@ -38,17 +40,18 @@ func TestRedirectHTTPSToHTTPIsRefused(t *testing.T) {
 
 	b, err := GetBytes(context.Background(), tlsSrv.URL+"/toy.toml", Options{})
 	if err == nil {
-		t.Fatalf("https 被静默降级到 %s，取回 %q", plain.URL, b)
+		t.Fatalf("https was silently downgraded to %s, and it fetched %q", plain.URL, b)
 	}
-	// 报错必须说清楚是降级，不能只是一句光秃秃的"拿不到"——
-	// 用户没法从后者推出"你的上游把我踢到明文上了"。
+	// The error must spell out that this is a downgrade, not just a bare "could not fetch" --
+	// nobody can infer "your upstream kicked me onto plaintext" from the latter.
 	if !strings.Contains(err.Error(), "downgrades") {
-		t.Errorf("报错没说清是降级：%v", err)
+		t.Errorf("the error does not say this is a downgrade: %v", err)
 	}
 }
 
-// 回归：反过来（http → https）是升级，必须放行。
-// 一条把所有跨 scheme 重定向都拒掉的规则会打死 http→https 这种到处都是的正常配置。
+// Regression: the other direction (http -> https) is an upgrade and must be allowed.
+// A rule that rejects every cross-scheme redirect would break http->https, which is a
+// perfectly ordinary configuration everywhere.
 func TestRedirectHTTPToHTTPSIsAllowed(t *testing.T) {
 	upgraded := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("secure"))
@@ -66,16 +69,17 @@ func TestRedirectHTTPToHTTPSIsAllowed(t *testing.T) {
 
 	b, err := GetBytes(context.Background(), plain.URL+"/toy.toml", Options{})
 	if err != nil {
-		t.Fatalf("http→https 是升级，不该被拒：%v", err)
+		t.Fatalf("http->https is an upgrade and must not be refused: %v", err)
 	}
 	if string(b) != "secure" {
-		t.Fatalf("拿到 %q", b)
+		t.Fatalf("got %q", b)
 	}
 }
 
-// 回归：中间跳过一次 https 之后再落回 http，同样要拒。
-// 只比"上一跳"的实现会漏掉这条 —— 链路的安全性取决于最弱的那一段，
-// 字节在中间那一跳上已经可以被换掉了。
+// Regression: passing through https in the middle and then falling back to http must be
+// refused as well. An implementation that only compares against the PREVIOUS hop misses
+// this one -- a chain is only as safe as its weakest segment, and the bytes could already
+// have been swapped on that middle hop.
 func TestRedirectDowngradeMidChainIsRefused(t *testing.T) {
 	plain2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("payload-from-plaintext"))
@@ -96,16 +100,17 @@ func TestRedirectDowngradeMidChainIsRefused(t *testing.T) {
 	defer func() { client = old }()
 
 	if b, err := GetBytes(context.Background(), plain1.URL+"/toy.toml", Options{}); err == nil {
-		t.Fatalf("http→https→http 被放过了，取回 %q", b)
+		t.Fatalf("http->https->http was let through, and it fetched %q", b)
 	}
 }
 
-// 回归：URL 里的密码不许出现在 error 对象里。
+// Regression: a password in the URL must never end up inside an error value.
 //
-// 原本怀疑：凭据原样进报错。复核结论：成立。
-// ui 那一层的 SafeURL 是兜底，不是修复 —— error 会进日志、进 `--json`、
-// 进任何不经过 ui 的路径，所以必须在 fetch 拼错误的那一刻就抹掉。
-// 用户名留着：只有密码是秘密，抹掉用户名反而让人对不上自己写的地址。
+// Original suspicion: credentials go into errors verbatim. Verdict after review: it holds.
+// SafeURL in the ui layer is a backstop, not a fix -- an error goes into logs, into `--json`,
+// into every path that never touches ui, so it has to be scrubbed at the moment fetch builds
+// the error. The user name stays: only the password is a secret, and blanking the user name
+// just leaves people unable to recognise the address they typed.
 func TestCredentialsNeverReachErrors(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusNotFound)
@@ -126,20 +131,20 @@ func TestCredentialsNeverReachErrors(t *testing.T) {
 	} {
 		err := tc.call()
 		if err == nil {
-			t.Fatalf("%s：应该失败", tc.name)
+			t.Fatalf("%s: should have failed", tc.name)
 		}
 		if strings.Contains(err.Error(), "hunter2") {
-			t.Errorf("%s：密码进了报错信息：%v", tc.name, err)
+			t.Errorf("%s: the password reached the error message: %v", tc.name, err)
 		}
 		if !strings.Contains(err.Error(), "alice") {
-			t.Errorf("%s：用户名也被抹了，用户对不上自己写的地址：%v", tc.name, err)
+			t.Errorf("%s: the user name was scrubbed too, so nobody can recognise the address they typed: %v", tc.name, err)
 		}
 	}
 }
 
-// 回归：重定向的降级报错里同样不许带凭据。
-// 这条错误是 fetch 自己拼的（不是 net/http 那个已经抹过的 *url.Error），
-// 所以它是独立的一条泄漏路径。
+// Regression: the downgrade error must not carry credentials either.
+// fetch builds this error itself (it is not one of net/http's already-scrubbed *url.Error
+// values), so it is an independent leak path.
 func TestDowngradeErrorHasNoCredentials(t *testing.T) {
 	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("x"))
@@ -157,17 +162,19 @@ func TestDowngradeErrorHasNoCredentials(t *testing.T) {
 
 	_, err := GetBytes(context.Background(), tlsSrv.URL+"/toy.toml", Options{})
 	if err == nil {
-		t.Fatal("应该被拒")
+		t.Fatal("this should be refused")
 	}
 	if strings.Contains(err.Error(), "s3cr3t") {
-		t.Errorf("重定向目标里的密码进了报错：%v", err)
+		t.Errorf("the password in the redirect target reached the error: %v", err)
 	}
 }
 
-// Result.Source 是【原样】地址，故意不抹：install 要拿它和请求的原始 URL 做等值
-// 比较来判断"这份字节是不是来自镜像"，抹掉一边就永远不相等、每次都误报走了镜像。
-// 抹在两个出口上（ui 打印、store 存清单），这里钉住这个契约，免得有人好心把它
-// 一起 redact 掉、把镜像提示变成永远为真。
+// Result.Source is the VERBATIM address and is deliberately not scrubbed: install compares
+// it against the originally requested URL to decide "did these bytes come from a mirror?",
+// and scrubbing one side means they never match, so every install would falsely report a
+// mirror. Scrubbing happens at the two exits instead (ui printing, store writing the
+// manifest). This pins that contract, so nobody helpfully redacts it here and turns the
+// mirror notice into something that is always true.
 func TestResultSourceStaysVerbatimForMirrorComparison(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("x"))
@@ -180,17 +187,18 @@ func TestResultSourceStaysVerbatimForMirrorComparison(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Source != u {
-		t.Fatalf("Source = %q，想要和请求地址一字不差的 %q", res.Source, u)
+		t.Fatalf("Source = %q, wanted the requested address character for character: %q", res.Source, u)
 	}
 }
 
-// 回归：跨主机重定向不许把 Authorization 带过去。
+// Regression: a cross-host redirect must not carry Authorization along.
 //
-// 原本怀疑：凭据跟着重定向去了第二台机器。
-// 复核结论：不成立 —— net/http 的 makeHeadersCopier 在换主机时会丢掉敏感头，
-// URL userinfo 派生的那个 Authorization 也在内。所以这里不是修复，是【钉住标准库
-// 这个行为】：它一旦变了（或者哪天我们自己开始手写 Authorization 头），
-// 用户写在地址里的密码就会被送给一台完全不相干的服务器。
+// Original suspicion: credentials followed the redirect to a second machine.
+// Verdict after review: does not hold -- net/http's makeHeadersCopier drops sensitive headers
+// when the host changes, including the Authorization derived from the URL userinfo. So this is
+// not a fix, it PINS THAT STANDARD LIBRARY BEHAVIOUR: if it ever changes (or if we ever start
+// writing the Authorization header ourselves), the password the user put in the address gets
+// handed to a completely unrelated server.
 func TestCredentialsDoNotSurviveCrossHostRedirect(t *testing.T) {
 	var seen string
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -208,29 +216,32 @@ func TestCredentialsDoNotSurviveCrossHostRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	if seen != "" {
-		t.Errorf("凭据跟着重定向去了第二台机器：%q", seen)
+		t.Errorf("credentials followed the redirect to the second machine: %q", seen)
 	}
 }
 
-// 回归：artifact 下载有体积上限，判据是【实际写进来的字节】。
+// Regression: artifact downloads are capped, and the test is the BYTES ACTUALLY WRITTEN.
 //
-// 原本怀疑：Get 没有任何上限，服务器分块吐多少就写多少，能把用户的盘写满。
-// 复核结论：成立（GetBytes 有 maxBytes 挡着，Get 什么都没有）。已修：
-// Options.MaxBytes，默认 DefaultMaxBytes = 2 GiB，和 archive.MaxTotalBytes 对齐。
+// Original suspicion: Get had no cap at all, so it wrote whatever the server chose to stream
+// and could fill up the user's disk.
+// Verdict after review: it holds (GetBytes had maxBytes, Get had nothing). Fixed with
+// Options.MaxBytes, default DefaultMaxBytes = 2 GiB, lined up with archive.MaxTotalBytes.
 //
-// 两个子用例覆盖服务器自报长度的两种不可信形态：压根不报（chunked）和报一个很大的数。
-// 反方向（声明得比实际小）不用测，因为它根本溢不出来 —— net/http 读响应体时本来
-// 就以 Content-Length 为上限，多写的字节客户端看都看不到。真正危险的是"没有长度"
-// 和"长度大得离谱"，而这两种都只能靠数真正落盘的字节来挡。
+// The two subcases cover both untrustworthy shapes of a server's self-reported length: none
+// at all (chunked) and an absurdly large one. The opposite direction (declaring less than it
+// sends) needs no test because it cannot overflow -- net/http already treats Content-Length
+// as the ceiling when reading the body, so the client never even sees the extra bytes. The
+// dangerous cases are "no length" and "an absurd length", and both can only be stopped by
+// counting the bytes that really land on disk.
 func TestArtifactDownloadIsCapped(t *testing.T) {
 	const limit = 1 << 20
 
 	for _, tc := range []struct {
 		name    string
-		declare bool // 老老实实声明一个 8 MiB 的 Content-Length
+		declare bool // honestly declare an 8 MiB Content-Length
 	}{
-		{"chunked 不报长度", false},
-		{"Content-Length 声明得很大", true},
+		{"chunked, no length", false},
+		{"Content-Length declared very large", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var sent atomic.Int64
@@ -256,33 +267,34 @@ func TestArtifactDownloadIsCapped(t *testing.T) {
 				MaxBytes: limit,
 			})
 			if err == nil {
-				t.Fatal("超过上限居然成功了")
+				t.Fatal("going over the cap somehow succeeded")
 			}
 			if !strings.Contains(err.Error(), "size limit") {
-				t.Errorf("报错没说是体积上限：%v", err)
+				t.Errorf("the error does not say this is the size cap: %v", err)
 			}
-			// 允许多冲几个缓冲区：LimitReader 卡在 limit+1 上，但服务器那边可能
-			// 已经把几块写进了内核缓冲。要的是"有界"，不是"一个字节不差"。
+			// A few buffers of overshoot are fine: LimitReader stops at limit+1, but the
+			// server may already have pushed some blocks into kernel buffers. What we want
+			// is "bounded", not "not one byte more".
 			if got := sent.Load(); got > 4*limit {
-				t.Errorf("服务器吐出 %d 字节才停，上限是 %d —— 没有真的挡住", got, limit)
+				t.Errorf("the server streamed %d bytes before stopping, cap is %d -- nothing actually stopped it", got, limit)
 			}
-			// 半截文件不许留下：铁律 4 那条"不留残骸"对体积上限同样成立，
-			// 否则一次攻击就能在缓存目录里留下上限那么大的垃圾。
+			// No half-written file may survive: rule 4's "leave no wreckage" applies to the
+			// size cap too, or one attack leaves cap-sized garbage in the cache directory.
 			ents, _ := os.ReadDir(dir)
 			for _, e := range ents {
-				t.Errorf("缓存目录里留下了半截文件 %q", e.Name())
+				t.Errorf("the cache directory was left holding a half-written file %q", e.Name())
 			}
 		})
 	}
 }
 
-// 回归：没设 MaxBytes 时用默认上限，正常大小的包必须照旧装得上。
-// 一条把所有人都挡住的上限不是上限，是故障。
+// Regression: with no MaxBytes set the default cap applies, and a normally sized package
+// must still install. A cap that stops everyone is not a cap, it is an outage.
 func TestDefaultCapLetsNormalDownloadsThrough(t *testing.T) {
 	if DefaultMaxBytes != 2<<30 {
-		t.Fatalf("DefaultMaxBytes = %d，规格里说的是和 archive.MaxTotalBytes 一样的 2 GiB", DefaultMaxBytes)
+		t.Fatalf("DefaultMaxBytes = %d, the spec says it matches archive.MaxTotalBytes at 2 GiB", DefaultMaxBytes)
 	}
-	body := strings.Repeat("z", 3<<20) // 3 MiB，比 GetBytes 的 32 MiB 小、比 1 MiB 大
+	body := strings.Repeat("z", 3<<20) // 3 MiB: under GetBytes's 32 MiB, over 1 MiB
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(w, strings.NewReader(body))
 	}))
@@ -290,31 +302,32 @@ func TestDefaultCapLetsNormalDownloadsThrough(t *testing.T) {
 
 	res, err := Get(context.Background(), srv.URL+"/x.tar.gz", Options{CacheDir: t.TempDir()})
 	if err != nil {
-		t.Fatalf("默认上限把一个 3 MiB 的包挡住了：%v", err)
+		t.Fatalf("the default cap blocked a 3 MiB package: %v", err)
 	}
 	st, err := os.Stat(res.Path)
 	if err != nil || st.Size() != int64(len(body)) {
-		t.Fatalf("落地大小 %v（err %v），想要 %d", st, err, len(body))
+		t.Fatalf("landed at size %v (err %v), wanted %d", st, err, len(body))
 	}
 }
 
-// 回归：HTTP 重定向跳不到 file:// 之类的别的 scheme 上。
+// Regression: an HTTP redirect cannot hop to file:// or any other scheme.
 //
-// 原本怀疑：一个远端 302 就能让我们去读本地文件。
-// 复核结论：不成立 —— Transport 上没注册 file 协议，跳过去只会拿到
-// "unsupported protocol scheme"。这里钉住它，因为哪天有人给 Transport
-// 注册 RegisterProtocol("file", …) 图方便，这个洞就真的开了。
+// Original suspicion: a remote 302 is enough to make us read a local file.
+// Verdict after review: does not hold -- the Transport has no file protocol registered, so
+// hopping there only yields "unsupported protocol scheme". This pins it, because the day
+// someone registers RegisterProtocol("file", ...) on the Transport for convenience, the hole
+// is genuinely open.
 func TestRedirectCannotJumpToFileScheme(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "file:///etc/passwd", http.StatusFound)
 	}))
 	defer srv.Close()
 	if b, err := GetBytes(context.Background(), srv.URL+"/toy.toml", Options{}); err == nil {
-		t.Errorf("重定向跳到了 file://，取回 %q", b)
+		t.Errorf("the redirect hopped to file:// and fetched %q", b)
 	}
 }
 
-// 回归：重定向次数有上限，死循环不会把客户端挂在那儿。
+// Regression: redirects are bounded, so a loop cannot leave the client hanging.
 func TestRedirectLoopIsBounded(t *testing.T) {
 	n := 0
 	var srv *httptest.Server
@@ -324,9 +337,9 @@ func TestRedirectLoopIsBounded(t *testing.T) {
 	}))
 	defer srv.Close()
 	if _, err := GetBytes(context.Background(), srv.URL+"/toy.toml", Options{}); err == nil {
-		t.Fatal("死循环重定向居然成功了")
+		t.Fatal("a redirect loop somehow succeeded")
 	}
 	if n > maxRedirects+1 {
-		t.Errorf("跟了 %d 次重定向，上限是 %d", n, maxRedirects)
+		t.Errorf("followed %d redirects, the cap is %d", n, maxRedirects)
 	}
 }

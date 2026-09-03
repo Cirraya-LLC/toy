@@ -1,133 +1,158 @@
-# 索引
+# The index
 
-一个 JSON 文件，客户端整份下载后**本地搜索**。里面只存指针，不存实质内容 ——
-`source` 那个 git 地址永远是真相。
+One JSON file. The client downloads the whole thing and **searches locally**. It
+holds pointers, never substance — the git address in `source` is always the truth.
 
-v1 就用文件，而且 **toy 一个索引都不预置** —— 想搜就自己加一条：
+v1 just uses a file, and **toy preconfigures no index at all** — if you want search,
+add one yourself:
 
 ```bash
-toy index add local ./index/toy-index.json     # 裸路径会自动补成 file:///绝对路径
-toy index add local file:///绝对路径/index/toy-index.json   # 写全了也行
+toy index add local ./index/toy-index.json     # a bare path is expanded to file:///absolute/path
+toy index add local file:///absolute/path/index/toy-index.json   # spelling it out works too
 ```
 
-以后传到任何静态托管（对象存储、GitHub raw、自己的服务器）只要改一行 URL，
-**客户端代码一个字节都不用动** —— 因为它从头到尾只认识"一个 URL"。
-真要把它变成所有人的默认索引，改的就是 `internal/store/store.go` 里那个
-`DefaultIndexURL` 常量，别处一行都不用碰。
+Hosting it on any static host later (object storage, GitHub raw, your own server)
+means changing one URL and **not a single byte of client code** — all it has ever
+known is "a URL". To make it everyone's default index, the thing you change is the
+`DefaultIndexURL` constant in `internal/store/store.go`. Nothing else.
 
-条目里的 `source` 只能是托管方形态（`github:owner/repo`）或者 **`https://`** 的裸地址：
-索引是远端内容，放行 `file://` 等于让任何一份索引指使客户端去读本机的文件，
-放行明文 `http://` 等于把它指向 `169.254.169.254` 这种只在受害者机器上才有意义的地址。
-不合规的条目会被静默跳过并计数（`toy search` 会警告有几条被跳过）。
+An entry's `source` may only be a host form (`github:owner/repo`) or an **`https://`**
+bare URL. The index is remote content: allowing `file://` would let any index order
+the client to read local files, and allowing plaintext `http://` would let it point
+at things like `169.254.169.254`, which only mean something on the victim's machine.
+Non-conforming entries are skipped silently and counted (`toy search` warns how many
+were skipped).
 
-## 条目长什么样
+## What an entry looks like
 
 ```json
 {
   "id":       "Derrity/tinyserve",
   "source":   "github:Derrity/tinyserve",
-  "desc":     "一个很小的静态文件服务器",
+  "desc":     "a very small static file server",
   "tags":     ["web", "server"],
   "key":      "a3f9…",
   "installs": 0
 }
 ```
 
-`key` 是作者的 ed25519 公钥，跑过 `toy keygen` 认领之后才有。没有它也能被搜到、被装上。
+`key` is the author's ed25519 public key, present only after they ran `toy keygen`
+to claim the name. A package with no key is still findable and still installable.
 
-`sig`（`toy publish` 一起生成）是作者对 `id + source + 那一份 toy.toml 原文` 的签名。
-**光有 key 不算已签名** —— 这个文件谁都能 fork、谁都能提 PR，抄一把公钥是零成本的。
-客户端验过 `sig` 才会打「✓ 已签名」，验不过就降级成「来源 …」并说明原因。
+`sig` (generated alongside it by `toy publish`) is the author's signature over
+`id + source + that exact toy.toml`. **A key alone does not count as signed** —
+anyone can fork this file, anyone can open a PR, and copying a public key costs
+nothing. The client prints `✓ signed` only after verifying `sig`; if verification
+fails it downgrades to "from …" and says why.
 
-## 加一条
-
-```bash
-cd 你的项目 && toy publish     # 输出一条可以直接粘进来的条目
-```
-
-## 我们怎么维护这个索引
-
-### 批量生成条目
-
-`cmd/toy-index` 是维护者用的生成器：喂一个 `owner/repo` 列表，产出可以直接进
-这个 JSON 的**内联条目**（§5.1）。它是**独立二进制、不是 `toy` 的子命令** ——
-`toy` 客户端永远不用托管方的 REST API（规格 §2），而离线批处理可以（理由见
-The design notes §14.11）。
+## Adding one
 
 ```bash
-make index-gen ARGS="--repos index/repos.txt"            # 只补新条目
-make index-gen ARGS="--repos index/repos.txt --update"   # 已有的也刷新
-make index-gen ARGS="--repos index/repos.txt --probe"    # 顺便解开真包定死 [bin]
-export GITHUB_TOKEN=...   # 不带 token 只有 60 次/小时，很快就撞限流
+cd your-project && toy publish     # prints an entry you can paste straight in
 ```
 
-列表一行一个 `owner/repo`，`#` 是注释（`index/repos.txt` 还不存在，自己建一个 ——
-冷启动的来源是扒 awesome-list，那些列表本来就是这个格式，见 the design notes §11）。
-跑完**一定要读那份报告**，尤其最后那一栏「这批条目会往 PATH 上放这些命令名」。
+## How we maintain this index
 
-两件它**故意不做**的事，别去掉：
+### Generating entries in bulk
 
-- **不写 `[sha256]`。** 内联条目跟着上游最新的 tag 走，钉死某一版的字节会让
-  上游一发新版就变成「哈希对不上，拒绝安装」—— 读起来完全像投毒警告，而实际上
-  只是作者正常发了个版。首次安装仍有 TOFU 钉住。
-- **不动签过名的条目、不动指针条目。** 前者重新生成会让签名失效（把一个「✓」
-  悄悄弄没），后者是上游自己有 `toy.toml`，换成内联是降档不是刷新。`--update`
-  也不放行这两种。
-
-### 收录别人的软件：三条政策
-
-绝大多数条目指的是**别人的**仓库，作者根本不知道我们收录了他。所以：
-
-1. **不暗示背书。** 收录只说明"这个包装得上"，不说明我们审计过它的代码、
-   也不说明作者和我们有任何关系。生成出来的条目一律是内联档，客户端显示的是
-   「打包说明来自索引」的**降档**标识，不是「✓ 已签名」—— 那个勾只属于拿自己的
-   钥匙签过的作者本人（§14.3）。desc 原样抄上游的，我们不替它写推荐语。
-2. **维护者要求下架就下架，不问理由。** 删掉一条只是不再被搜到 ——
-   `toy install github:owner/repo` 照样装得上，任何人 fork 这个文件就是一个完整的
-   平行索引。既然下架的代价这么低，就没有任何理由跟人争。
-3. **收录时人工过一眼 `[bin]` 左边那个命令名。** 这是整条流水线上唯一不能自动化
-   的一步：`reservedLinkNames` 挡住了 `git`、PATH 遮蔽检查挡住了这台机器上已经
-   存在的命令，但一个 PATH 上**还不存在**的名字是能被占的（§14.1 那条 critical
-   就是这个形状）。生成器的报告最后会把这批名字单独列一遍，就是为了让人看这一眼。
-
-### 条目会烂，所以有回归检查
-
-上游改一次资产命名习惯，那条条目就装不上了 —— 而我们这边一行代码都没动。
-`scripts/index-check.sh` 把每一条**真的装一遍、跑一遍、卸一遍**，CI 里每天跑一次
-（`index-check.yml`），PR 上只测 diff 里动过的那几条。
+`cmd/toy-index` is the maintainer's generator: feed it a list of `owner/repo` and it
+produces **inlined entries** (§5.1) ready to drop into this JSON. It is a
+**separate binary, not a `toy` subcommand** — the `toy` client never uses a host's
+REST API (spec §2), while an offline batch job may (reasoning in the design notes §14.11).
 
 ```bash
-make index-check                             # 全量（要联网，会真的下载）
-make index-check ARGS="--only owner/repo"    # 只测一条
+make index-gen ARGS="--repos index/repos.txt"            # only add new entries
+make index-gen ARGS="--repos index/repos.txt --update"   # refresh existing ones too
+make index-gen ARGS="--repos index/repos.txt --probe"    # also unpack real archives to nail down [bin]
+export GITHUB_TOKEN=...   # without a token you get 60 requests/hour and hit the limit fast
 ```
 
-失败分三类，处理完全不同：**条目** = 改这个 JSON 里那一条；**网络** = 重试，
-别动索引；**运行** = 装上了但跑不起来（上游那个 release 坏了，或 `[bin]` 右边的
-包内路径猜错了）。
+One `owner/repo` per line, `#` starts a comment (`index/repos.txt` doesn't exist yet
+— make your own; the cold-start source is scraped awesome-lists, which are already
+in exactly this format, see the design notes §11). When it finishes, **read the report**,
+especially the last section: the command names this batch will put on PATH.
 
-## 这份索引里现在有什么（2026-09-01 验的）
+Two things it **deliberately does not do**. Don't remove them:
 
-**19 条，全部是内联条目。** 候选是 20 个仓库（`index/repos.txt`），跑的是
-`toy-index gen --repos index/repos.txt --probe`，然后**每一条都过了两关**：
+- **It never writes `[sha256]`.** An inlined entry follows upstream's newest tag, so
+  pinning one version's bytes turns the next upstream release into "checksum
+  mismatch, refusing to install" — which reads exactly like a poisoning warning when
+  all that happened is the author shipped a normal release. First installs are still
+  pinned by TOFU.
+- **It never touches signed entries or pointer entries.** Regenerating a signed one
+  would invalidate the signature (quietly removing a `✓`); a pointer entry means
+  upstream has its own `toy.toml`, and replacing that with an inlined one is a
+  downgrade, not a refresh. `--update` does not override either.
 
-1. **地址**：按 toy 真正的拼法（host 的 release 模板 + `git ls-remote --tags` 挑出的
-   最高 semver tag + 展开 `{version}`/`{tag}`）算出每个平台的下载地址，逐个
-   `curl -sSIL` 打过 —— **122 个地址全部 200**。
-   拼法必须和客户端一字不差，否则这个检查证明不了什么：**semver 挑版本时要跟着
-   客户端一起忽略预发布版**（`semver.Max` 的默认），不然会去 HEAD 一个客户端根本
-   不会装的 tag —— tstack/lnav 的最高 semver tag 就是 `v0.14.1-rc1`，而客户端装的
-   是 `v0.14.0`。
-2. **真的装**：`scripts/index-check.sh` 在 linux/amd64（glibc）上把 19 条**逐条
-   装一遍、跑一遍、卸一遍** —— **19 通过 / 0 失败**。
+### Listing other people's software: three policies
 
-这一轮同时是 §14.13（剥顶层目录）、§3.1（glibc 兜底 musl）和 i686 那三样东西的
-真机验收：ripgrep / fd / bat / delta / eza / zoxide 这批 cargo-dist 项目上一轮
-还全部收不了，这一轮**在一台 glibc 机器上装的是 musl 构建、剥掉了那层
-`ripgrep-15.2.0-x86_64-unknown-linux-musl/` 目录**，`rg --version` 真的跑起来了。
+The overwhelming majority of entries point at **someone else's** repo, and the
+author has no idea we listed them. Therefore:
 
-### 收进来的 19 条
+1. **Imply no endorsement.** Listing something says only "this package installs".
+   It does not say we audited its code, and it does not say the author has any
+   relationship with us. Generated entries are always inlined, so what the client
+   displays is the **downgraded** "packaging instructions come from the index"
+   marker, never `✓ signed` — that checkmark belongs only to an author who signed
+   with their own key (§14.3). We copy `desc` verbatim from upstream; we don't write
+   a recommendation on its behalf.
+2. **If a maintainer asks to be delisted, delist them. No questions.** Deleting an
+   entry only means it stops being findable — `toy install github:owner/repo` still
+   installs it, and anyone who forks this file has a complete parallel index. When
+   delisting costs that little, there is never a reason to argue with anyone.
+3. **When listing, a human reads the command name on the left of `[bin]`.** This is
+   the one step in the whole pipeline that cannot be automated: `reservedLinkNames`
+   blocks `git`, and the PATH shadow check blocks commands that already exist on
+   this machine — but a name that does **not yet** exist on PATH can be claimed
+   (that is exactly the shape of the critical finding in §14.1). The generator's
+   report lists this batch's names separately at the end, precisely so a human takes
+   that look.
 
-| 仓库 | 命令 | 平台数 | 本机装/跑 |
+### Entries rot, so there's a regression check
+
+Upstream changes its asset naming habits once and that entry stops installing —
+without us touching a line of code. `scripts/index-check.sh` **actually installs,
+runs, and uninstalls** every single entry. CI runs it daily (`index-check.yml`), and
+on a PR it only tests the entries the diff touched.
+
+```bash
+make index-check                             # everything (needs network, really downloads)
+make index-check ARGS="--only owner/repo"    # just one
+```
+
+Failures come in three kinds and are handled completely differently: **entry** =
+fix that entry in this JSON; **network** = retry, don't touch the index; **run** =
+it installed but won't run (upstream's release is broken, or the in-package path on
+the right of `[bin]` was guessed wrong).
+
+## What's in this index right now (verified 2026-09-01)
+
+**19 entries, all inlined.** The candidates were 20 repos (`index/repos.txt`), run
+through `toy-index gen --repos index/repos.txt --probe`, and then **every entry
+passed two gates**:
+
+1. **URLs**: compute each platform's download URL exactly the way toy does (the
+   host's release template + the highest semver tag from `git ls-remote --tags` +
+   expanding `{version}`/`{tag}`) and `curl -sSIL` every one of them —
+   **all 122 URLs returned 200**.
+   The computation has to match the client character for character or this check
+   proves nothing: **semver selection must ignore prereleases the same way the
+   client does** (`semver.Max`'s default), or you end up HEAD-ing a tag the client
+   would never install — tstack/lnav's highest semver tag is `v0.14.1-rc1`, while
+   the client installs `v0.14.0`.
+2. **Actually installing**: `scripts/index-check.sh` installed, ran, and uninstalled
+   all 19 on linux/amd64 (glibc) — **19 passed / 0 failed**.
+
+This round doubled as real-hardware acceptance for three things: §14.13 (stripping
+the top-level directory), §3.1 (glibc falling back to musl), and i686. The
+cargo-dist projects — ripgrep / fd / bat / delta / eza / zoxide — were all
+uninstallable last round; this round, **on a glibc machine, we installed the musl
+build and stripped that `ripgrep-15.2.0-x86_64-unknown-linux-musl/` layer**, and
+`rg --version` actually ran.
+
+### The 19 entries
+
+| Repo | Command | Platforms | Installed/ran locally |
 | --- | --- | --- | --- |
 | BurntSushi/ripgrep | `rg` | 6 | ✅ |
 | ClementTsang/bottom | `btm` | 9 | ✅ |
@@ -149,60 +174,72 @@ make index-check ARGS="--only owner/repo"    # 只测一条
 | tstack/lnav | `lnav` | 3 | ✅ |
 | wagoodman/dive | `dive` | 4 | ✅ |
 
-### 没收的：XAMPPRocky/tokei
+### Not listed: XAMPPRocky/tokei
 
-最新 release `v14.0.0` **一个资产都没有**（纯源码 release）。GitHub 自动附的源码包
-不算资产，而 toy 不从源码构建（铁律 2），所以这个仓库现在收不了 —— 等它哪天恢复发
-二进制再跑一次生成器就行，不用改代码。
+The latest release `v14.0.0` **has no assets at all** (a source-only release).
+GitHub's auto-attached source tarballs don't count as assets, and toy doesn't build
+from source (iron law 2), so this repo can't be listed right now — when it ships
+binaries again, rerun the generator. No code change needed.
 
-### `[bin]` 左边那些名字：人过了一眼（§14.9 第 2 条）
+### The names on the left of `[bin]`: a human looked (§14.9, item 2)
 
-`reservedLinkNames` 挡住了 `git`，PATH 遮蔽检查挡住了这台机器上**已经存在**的命令。
-剩下要人看的是「名字太泛」和「和别的项目重名」，机器判不了。看下来四类：
+`reservedLinkNames` blocks `git`, and the PATH shadow check blocks commands that
+**already exist** on this machine. What's left for a human is "the name is too
+generic" and "it collides with another project" — neither of which a machine can
+judge. Four categories came out of the review:
 
-**一、和一个【完全不同的程序】同名 —— 最值得记一句的**
+**1. Same name as a completely different program — the one worth writing down**
 
-- **`delta`**：Debian 里就有一个 `delta` 包，是「heuristic minimizer of interesting
-  files」，跟 git-delta 毫无关系。装了那个包的机器上遮蔽检查会拦住我们（对的），
-  但两边的用户会以为是同一个东西。
-- **`yq`**：另有一个同名的 `yq`（kislyuk 的 Python 实现，jq 的 YAML 包装），命令行
-  语法完全不同。索引里这条是 mikefarah 的 Go 实现。
+- **`delta`**: Debian already has a `delta` package, a "heuristic minimizer of
+  interesting files", with nothing to do with git-delta. On a machine that has it,
+  the shadow check stops us (correctly), but users on both sides will assume they're
+  the same thing.
+- **`yq`**: there is another `yq` (kislyuk's Python implementation, a YAML wrapper
+  around jq) with completely different command-line syntax. The entry here is
+  mikefarah's Go implementation.
 
-**二、上游自己就因为撞名被发行版改过名**
+**2. Upstream itself got renamed by distributions over a collision**
 
-Debian 的包描述里写得很直白：`fd` 被改成 `fdfind`、`bat` 被改成 `batcat`，
-理由都是 “because of a file name clash”。也就是说 **`fd` 和 `bat` 这两个名字在
-真实世界里确实会撞**，只是撞的对象未必在每台机器上都装着 —— 遮蔽检查只在装着的
-时候才响。
+Debian's package descriptions say it outright: `fd` became `fdfind` and `bat` became
+`batcat`, both "because of a file name clash". Which means **`fd` and `bat` really
+do collide in the real world** — just not necessarily with something installed on
+every machine, and the shadow check only fires when it is.
 
-**三、名字太泛（不撞，但值得记着）**
+**3. Too generic (no collision, but worth remembering)**
 
-`sd`（两个字母）、`dust`、`procs`、`dive`、`glow` 都是很普通的词。它们现在不和
-任何常见命令冲突，但**先到先得**：谁先装谁占住这个名字。`lsd` 离 `ls` 只差一个
-字母，敲错会落到另一个程序上。
+`sd` (two letters), `dust`, `procs`, `dive`, `glow` are all very ordinary words.
+They don't conflict with any common command today, but **first come, first served**:
+whoever installs first claims the name. `lsd` is one letter away from `ls`, so a
+typo lands you in a different program.
 
-**四、命令名和仓库名对不上（不是问题，是发现性问题）**
+**4. Command name doesn't match repo name (not a problem — a discoverability one)**
 
-`ClementTsang/bottom → btm`、`BurntSushi/ripgrep → rg`。搜 “bottom” 的人拿到的
-命令叫 `btm`。这两条正是 `--probe` 修出来的：**没有 `--probe` 时命令名取自资产名
-前缀**（`ripgrep-15.2.0-….tar.gz` → `ripgrep`），而包里那个文件叫 `rg` ——
-写出来就是 `[bin] ripgrep = "rg"`，装完能跑，只是 PATH 上那个名字全世界的文档里
-都没有（没有人写过 `ripgrep --version`）。现在探到了就以探到的文件基名为准。
+`ClementTsang/bottom → btm`, `BurntSushi/ripgrep → rg`. Someone searching for
+"bottom" gets a command called `btm`. These two are exactly what `--probe` fixed:
+**without `--probe` the command name comes from the asset name's prefix**
+(`ripgrep-15.2.0-….tar.gz` → `ripgrep`), while the file inside the package is called
+`rg` — which writes out as `[bin] ripgrep = "rg"`. It installs and it runs, but the
+name it puts on PATH appears in nobody's documentation on earth (nobody has ever
+written `ripgrep --version`). Now that we probe, the basename we find wins.
 
-### 已知的坑：裸二进制形态的 `[bin]` 只对一个平台成立
+### Known pitfall: a bare binary's `[bin]` only held for one platform
 
-**裸二进制形态已经修好了（2026-09-01）。** 之前 install 把没有压缩后缀的资产
-**按原资产名**落进包目录，而资产名每个平台都不一样（`yq_linux_amd64` /
-`yq_darwin_arm64`），`[bin]` 却只有一行、不按平台变 —— 于是除了 `[bin]` 恰好写对的
-那一个平台，其余每个平台都会软链到一个不存在的文件，**而且是在下载和校验都成功
-之后才炸**。`mikefarah/yq` 就是这么在 6 个平台里坏了 5 个，而收录时只在
-linux/amd64 上验过，所以没看出来。
+**Bare binaries are fixed as of 2026-09-01.** Before that, install dropped an asset
+with no compression suffix into the package directory **under its original asset
+name** — and asset names differ per platform (`yq_linux_amd64` /
+`yq_darwin_arm64`), while `[bin]` is a single line that doesn't vary by platform.
+So on every platform except the one `[bin]` happened to be right for, the symlink
+pointed at a file that didn't exist — **and it blew up only after the download and
+the checksum had both succeeded**. `mikefarah/yq` was broken on 5 of its 6 platforms
+exactly this way, and listing had only verified it on linux/amd64, so nobody saw it.
 
-现在 `insUnpack` 把单文件落成 `[bin]` 右边那个路径（`yq = "yq"`），每个平台都成立。
-生成器那边对应的特判也拆掉了。教训写在 the design notes §14.14。
+`insUnpack` now drops a single file at the path on the right of `[bin]`
+(`yq = "yq"`), which holds on every platform. The generator's matching special case
+is gone. The lesson is written up in the design notes §14.14.
 
 
-## 删一条会怎样
+## What deleting an entry does
 
-**只是不再被搜到。** `toy install github:owner/repo` 照样装得上。
-任何人 fork 这个文件就是一个完整的平行索引 —— 没有人能真的封杀一个包，包括我们。
+**It stops being findable. That's all.** `toy install github:owner/repo` still
+installs it. Anyone who forks this file has a complete parallel index — nobody can
+truly kill a package, including us.

@@ -7,14 +7,16 @@ import (
 	"testing"
 )
 
-// 语料是**真的**：`testdata/real-assets.txt` 是从 GitHub 上 9 个知名仓库的最新
-// release 抓下来的资产名，每个仓库带它自己的 TAG=。
+// The corpus is REAL: `testdata/real-assets.txt` holds asset names scraped from
+// the latest release of 9 well-known GitHub repositories, each with its own TAG=.
 //
-// 这个文件存在的理由是：我们自己编的测试数据（`tool_1.2.0_linux_amd64.tar.gz`，
-// 版本号后面紧跟一个 `_`）**永远碰不到真实世界里最常见的那个形状** ——
-// `ripgrep-15.2.0-aarch64-apple-darwin.tar.gz`，版本号后面跟的是 `-` 加一个
-// 架构名。就是这一个形状让 4 个真仓库里 3 个的 [artifact] 指向了不存在的文件，
-// 而全部单元测试是绿的。**加新规则之前先往语料里加一行真的资产名。**
+// This file exists because the fixtures we invent ourselves
+// (`tool_1.2.0_linux_amd64.tar.gz`, version followed immediately by `_`) CAN
+// NEVER HIT the shape that is most common in the real world —
+// `ripgrep-15.2.0-aarch64-apple-darwin.tar.gz`, where the version is followed by
+// `-` and an architecture name. That one shape pointed the [artifact] section of
+// 3 out of 4 real repositories at files that do not exist, with every unit test
+// green. ADD A REAL ASSET NAME TO THE CORPUS BEFORE YOU ADD A NEW RULE.
 
 type corpusRepo struct {
 	Repo, Tag string
@@ -25,7 +27,7 @@ func loadCorpus(t *testing.T) map[string]corpusRepo {
 	t.Helper()
 	data, err := os.ReadFile("testdata/real-assets.txt")
 	if err != nil {
-		t.Fatalf("读不了语料：%v", err)
+		t.Fatalf("cannot read the corpus: %v", err)
 	}
 	out := map[string]corpusRepo{}
 	cur := ""
@@ -45,7 +47,7 @@ func loadCorpus(t *testing.T) map[string]corpusRepo {
 		}
 	}
 	if len(out) == 0 {
-		t.Fatal("语料是空的")
+		t.Fatal("the corpus is empty")
 	}
 	return out
 }
@@ -54,20 +56,22 @@ func inferRepo(t *testing.T, repo string) Result {
 	t.Helper()
 	r, ok := loadCorpus(t)[repo]
 	if !ok {
-		t.Fatalf("语料里没有 %s", repo)
+		t.Fatalf("the corpus has no %s", repo)
 	}
 	return InferTag(r.Files, r.Tag)
 }
 
-// 每一条都钉住整个模板，不只钉住"有没有 {version}"：这个 bug 的症状恰恰是
-// 模板里有 {version}、看起来一切正常，只是中间少了一段架构名。
+// Every case pins the whole template, not just "does it have {version}": the
+// symptom of this bug is precisely a template that does have {version} and looks
+// perfectly fine, only with an architecture segment missing from the middle.
 func TestCorpusArtifacts(t *testing.T) {
 	cases := []struct {
 		repo string
 		want map[string]string
 	}{{
-		// Rust 的 target triple + 版本号后面紧跟 `-aarch64`：就是这一条把
-		// `15.2.0-aarch64` 整个当成了版本号，替换完 aarch64 就没了。
+		// Rust target triple with `-aarch64` right after the version: this is the
+		// case that swallowed `15.2.0-aarch64` as the whole version, and after
+		// substitution the aarch64 was gone.
 		repo: "BurntSushi/ripgrep",
 		want: map[string]string{
 			"darwin/amd64":     "ripgrep-{version}-x86_64-apple-darwin.tar.gz",
@@ -78,7 +82,7 @@ func TestCorpusArtifacts(t *testing.T) {
 			"linux/armv7":      "ripgrep-{version}-armv7-unknown-linux-gnueabihf.tar.gz",
 		},
 	}, {
-		// goreleaser 的 `-` 连 `_` 混排：丢的是 `linux` 那一段。
+		// goreleaser mixing `-` and `_`: the segment that goes missing is `linux`.
 		repo: "junegunn/fzf",
 		want: map[string]string{
 			"linux/amd64":  "fzf-{version}-linux_amd64.tar.gz",
@@ -89,8 +93,9 @@ func TestCorpusArtifacts(t *testing.T) {
 			"darwin/arm64": "fzf-{version}-darwin_arm64.tar.gz",
 		},
 	}, {
-		// `fd-v10.5.0-` 这种 `-v` 连写：v 必须留在模板里（{version} 不带 v），
-		// 而且不能被当成工具名的一部分（见下面 TestCorpusNames）。
+		// The run-together `-v` in `fd-v10.5.0-`: the v has to stay in the template
+		// ({version} carries no v) and must not be taken for part of the tool name
+		// (see TestCorpusNames below).
 		repo: "sharkdp/fd",
 		want: map[string]string{
 			"darwin/amd64":     "fd-v{version}-x86_64-apple-darwin.tar.gz",
@@ -100,13 +105,15 @@ func TestCorpusArtifacts(t *testing.T) {
 			"linux/arm64/gnu":  "fd-v{version}-aarch64-unknown-linux-gnu.tar.gz",
 			"linux/arm64/musl": "fd-v{version}-aarch64-unknown-linux-musl.tar.gz",
 			"linux/arm":        "fd-v{version}-arm-unknown-linux-gnueabihf.tar.gz",
-			// i686 = 32 位 Linux。少了 archWords 里那一行，这两条会被静默丢掉。
+			// i686 = 32-bit Linux. Without that line in archWords, these two get
+			// silently dropped.
 			"linux/386/gnu":  "fd-v{version}-i686-unknown-linux-gnu.tar.gz",
 			"linux/386/musl": "fd-v{version}-i686-unknown-linux-musl.tar.gz",
 		},
 	}, {
-		// 资产名里**本来就没有版本号**（cargo-dist 那类，yq 也是这个形状）：
-		// 不产出 {version} 是对的，模板跨版本天然稳定。
+		// The asset names carry NO VERSION AT ALL (the cargo-dist shape; yq looks
+		// like this too): producing no {version} is correct, and the template is
+		// naturally stable across releases.
 		repo: "eza-community/eza",
 		want: map[string]string{
 			"linux/amd64/gnu":  "eza_x86_64-unknown-linux-gnu.tar.gz",
@@ -115,11 +122,13 @@ func TestCorpusArtifacts(t *testing.T) {
 			"linux/arm":        "eza_arm-unknown-linux-gnueabihf.tar.gz",
 		},
 	}, {
-		// **Android 陷阱**：`aarch64-linux-android` / `armv7-linux-androideabi`
-		// 里有 `linux` 这个词，先到先得就会被认成 linux/arm64、linux/armv7 ——
-		// 而 armv7 那个 key 上本该是 armv7-unknown-linux-musleabihf，
-		// 也就是说一个 bionic 构建**抢走了真正 Linux 构建的位置**。
-		// 症状是下载地址 200、字节完好、跑起来 Exec format error。
+		// THE ANDROID TRAP: `aarch64-linux-android` /
+		// `armv7-linux-androideabi` contain the word `linux`, and
+		// first-match-wins calls them linux/arm64 and linux/armv7 — while the
+		// armv7 key should hold armv7-unknown-linux-musleabihf. That is a bionic
+		// build STEALING THE REAL LINUX BUILD'S SLOT. The symptom is a download
+		// URL that returns 200, bytes that are intact, and Exec format error at
+		// run time.
 		repo: "ajeetdsouza/zoxide",
 		want: map[string]string{
 			"darwin/amd64":     "zoxide-{version}-x86_64-apple-darwin.tar.gz",
@@ -131,16 +140,18 @@ func TestCorpusArtifacts(t *testing.T) {
 			"linux/386/musl":   "zoxide-{version}-i686-unknown-linux-musl.tar.gz",
 		},
 	}, {
-		// **裸二进制**（没有压缩后缀）。install 支持单文件形态，所以这些要认。
-		// 同一个 release 里的 `jq-1.8.2.tar.gz` 是**源码**，没有 os/arch 词，
-		// 不会被认成资产 —— 把一个源码包装进 PATH 是灾难。
+		// BARE BINARIES (no archive suffix). install supports the single-file
+		// form, so these have to be recognized. `jq-1.8.2.tar.gz` in the same
+		// release is SOURCE CODE: it carries no os/arch word, so it is never
+		// taken for an asset — putting a source tarball on PATH would be a
+		// disaster.
 		repo: "jqlang/jq",
 		want: map[string]string{
 			"linux/amd64":  "jq-linux-amd64",
 			"linux/arm64":  "jq-linux-arm64",
 			"linux/armv7":  "jq-linux-armhf",
 			"linux/386":    "jq-linux-i386",
-			"darwin/amd64": "jq-macos-amd64", // macos 别名
+			"darwin/amd64": "jq-macos-amd64", // the macos alias
 			"darwin/arm64": "jq-macos-arm64",
 		},
 	}}
@@ -149,32 +160,37 @@ func TestCorpusArtifacts(t *testing.T) {
 		res := inferRepo(t, c.repo)
 		for plat, want := range c.want {
 			if got := res.Artifact[plat]; got != want {
-				t.Errorf("%s [%s] = %q，想要 %q", c.repo, plat, got, want)
+				t.Errorf("%s [%s] = %q, want %q", c.repo, plat, got, want)
 			}
 		}
 		for plat, got := range res.Artifact {
 			if _, ok := c.want[plat]; !ok {
-				t.Errorf("%s 多出一个平台 [%s] = %q", c.repo, plat, got)
+				t.Errorf("%s has an extra platform [%s] = %q", c.repo, plat, got)
 			}
 		}
 	}
 }
 
-// 源码包混在同一个 release 里（jq-1.8.2.tar.gz / .zip）。它们没有 os/arch 词，
-// 所以本来就进不了 [artifact] —— 这条断言是防止以后为了认裸二进制把它们一起放进来。
+// Source tarballs sit in the same release (jq-1.8.2.tar.gz / .zip). They carry
+// no os/arch word, so they cannot enter [artifact] to begin with — this
+// assertion is here to stop some future change to bare-binary recognition from
+// letting them in.
 func TestCorpusNeverInstallsASourceTarball(t *testing.T) {
 	res := inferRepo(t, "jqlang/jq")
 	for plat, tmpl := range res.Artifact {
 		if strings.HasPrefix(tmpl, "jq-1.8.2") {
-			t.Errorf("[%s] 指向源码包 %q", plat, tmpl)
+			t.Errorf("[%s] points at the source tarball %q", plat, tmpl)
 		}
 	}
 }
 
-// 伴生文件（校验和、签名、.deb/.rpm、各家安装器、证明文件）和真资产同名同前缀，
-// os/arch 词一个不少 —— 认平台之前不挑掉的话，它们会去和真资产抢同一个平台 key
-// （.deb 常常排在 .tar.gz 前面，抢赢了就是一条装下来是个 deb 包的条目），
-// 抢不赢也会各报一行把真正该看的那条淹掉。
+// Companion files (checksums, signatures, .deb/.rpm, third-party installers,
+// attestations) share a name and prefix with the real asset and contain every
+// os/arch word it does. Fail to filter them out BEFORE platform detection and
+// they compete with the real asset for the same platform key (.deb often sorts
+// before .tar.gz, and winning means an entry that installs a deb package);
+// even when they lose, each one reports a line that drowns out the one worth
+// reading.
 func TestCorpusIgnoresCompanionFiles(t *testing.T) {
 	noisy := []string{".sha256", ".deb", ".rpm", ".msi", ".pkg", "attestation.json", "checksums.txt", "sha256sum.txt"}
 	for repo, r := range loadCorpus(t) {
@@ -184,46 +200,49 @@ func TestCorpusIgnoresCompanionFiles(t *testing.T) {
 			seen = append(seen, a.File)
 		}
 		for _, s := range res.Skipped {
-			seen = append(seen, "（报了一行）"+s.File)
+			seen = append(seen, "(reported) "+s.File)
 		}
 		for _, f := range seen {
 			for _, n := range noisy {
-				if strings.HasSuffix(strings.ToLower(strings.TrimPrefix(f, "（报了一行）")), n) {
-					t.Errorf("%s：伴生文件 %s 不该出现在结果里", repo, f)
+				if strings.HasSuffix(strings.ToLower(strings.TrimPrefix(f, "(reported) ")), n) {
+					t.Errorf("%s: companion file %s must not show up in the result", repo, f)
 				}
 			}
 		}
 	}
 }
 
-// 语料里的资产名带版本号时，模板里就不能再留着它 —— 留着就是一条钉死在这一版、
-// 上游一发新版就 404 的条目。反过来，本来就不带版本号的（eza）不许被报成异常。
+// When a corpus asset name carries a version, the template must not keep it —
+// keeping it means an entry pinned to this one release that 404s the moment
+// upstream ships a new one. Conversely, names that never carried a version
+// (eza) must not be reported as anomalies.
 func TestCorpusLeavesNoVersionBehind(t *testing.T) {
 	for repo, r := range loadCorpus(t) {
 		res := InferTag(r.Files, r.Tag)
 		if res.Unreplaced != "" {
-			t.Errorf("%s 的模板里还留着版本号 %q", repo, res.Unreplaced)
+			t.Errorf("%s left the version %q in its templates", repo, res.Unreplaced)
 		}
 		for _, a := range res.Assets {
 			if res.Version != "" && strings.Contains(a.Template, res.Version) {
-				t.Errorf("%s：%q 里还留着 %q", repo, a.Template, res.Version)
+				t.Errorf("%s: %q still contains %q", repo, a.Template, res.Version)
 			}
 		}
 	}
-	// eza 的资产名里没有版本号，所以既不该有 {version}，也不该有任何抱怨。
+	// eza's asset names carry no version, so there should be neither a {version}
+	// nor any complaint.
 	eza := inferRepo(t, "eza-community/eza")
 	if eza.Unreplaced != "" {
-		t.Errorf("eza 的资产名里本来就没版本号，不该报 %q", eza.Unreplaced)
+		t.Errorf("eza's asset names never had a version; reporting %q is wrong", eza.Unreplaced)
 	}
 	for _, a := range eza.Assets {
 		if strings.Contains(a.Template, "{version}") {
-			t.Errorf("eza 不该产出 {version}：%q", a.Template)
+			t.Errorf("eza must not produce {version}: %q", a.Template)
 		}
 	}
 }
 
-// 工具名是 [bin] 左边那个命令名 —— 认成 `fd-v` 的话，装完 PATH 上多出来的
-// 是一条叫 fd-v 的命令。
+// The tool name is the command name on the left of [bin] — get it wrong as
+// `fd-v` and what lands on PATH after install is a command called fd-v.
 func TestCorpusNames(t *testing.T) {
 	for repo, want := range map[string]string{
 		"BurntSushi/ripgrep": "ripgrep",
@@ -234,17 +253,20 @@ func TestCorpusNames(t *testing.T) {
 		"jqlang/jq":          "jq",
 	} {
 		if got := inferRepo(t, repo).Name; got != want {
-			t.Errorf("%s 的名字 = %q，想要 %q", repo, got, want)
+			t.Errorf("%s name = %q, want %q", repo, got, want)
 		}
 	}
 }
 
-// tag 是已知答案，正则只是猜 —— 已知答案的时候不该去猜。
+// The tag is the known answer; the regex is only a guess — do not guess when
+// the answer is known.
 //
-// 这一条单靠语料测不出来（语料里正则收紧之后也能给出对的版本），所以用一个
-// 正则**注定**猜错的形状：`-alpha` 是个合法的预发布标签写法，但这批资产的
-// tag 是 v1.2.3，`alpha` 是文件名里的一段。正则会把 `1.2.3-alpha` 整个当成
-// 版本号，于是模板里丢掉 `-alpha`，install 展开 {version} = 1.2.3 之后 404。
+// The corpus alone cannot test this (with the regex tightened it produces the
+// right version there too), so this uses a shape the regex is GUARANTEED to get
+// wrong: `-alpha` is a legitimate prerelease spelling, but this batch's tag is
+// v1.2.3 and `alpha` is just a segment of the filename. The regex swallows
+// `1.2.3-alpha` as the whole version, the template loses `-alpha`, and install
+// expanding {version} = 1.2.3 gets a 404.
 func TestKnownTagBeatsTheRegex(t *testing.T) {
 	files := []string{
 		"tool-1.2.3-alpha-x86_64-unknown-linux-gnu.tar.gz",
@@ -252,77 +274,82 @@ func TestKnownTagBeatsTheRegex(t *testing.T) {
 	}
 	got := InferTag(files, "v1.2.3").Artifact["linux/amd64/gnu"]
 	if want := "tool-{version}-alpha-x86_64-unknown-linux-gnu.tar.gz"; got != want {
-		t.Errorf("模板 = %q，想要 %q", got, want)
+		t.Errorf("template = %q, want %q", got, want)
 	}
 	if v := InferTag(files, "v1.2.3").Version; v != "1.2.3" {
-		t.Errorf("版本 = %q，想要 1.2.3（tag 说了算）", v)
+		t.Errorf("version = %q, want 1.2.3 (the tag wins)", v)
 	}
 }
 
-// tag 只有在【作为一个完整的数字段】出现时才拿来做字面替换。
-// tag `v2.0` 会在 `tool-2.0.1-…` 里命中，替换出来的
-// `tool-{version}.1-…` 是一条谁都装不上的模板。
+// A tag is only substituted literally when it appears AS A WHOLE NUMERIC
+// SEGMENT. The tag `v2.0` matches inside `tool-2.0.1-…`, and the resulting
+// `tool-{version}.1-…` is a template nobody can install.
 func TestKnownTagNeedsAWholeMatch(t *testing.T) {
 	files := []string{"tool-2.0.1-x86_64-unknown-linux-gnu.tar.gz"}
 	got := InferTag(files, "v2.0").Artifact["linux/amd64/gnu"]
 	if want := "tool-{version}-x86_64-unknown-linux-gnu.tar.gz"; got != want {
-		t.Errorf("模板 = %q，想要 %q（该由正则认出 2.0.1，不是拿 2.0 咬进去）", got, want)
+		t.Errorf("template = %q, want %q (the regex should find 2.0.1, not let 2.0 bite in)", got, want)
 	}
 }
 
-// 带包名前缀的 tag（jq-1.8.2）不能拿去做字面替换：install 那边 {version}
-// 展开的是 `TrimPrefix(tag,"v")`，替换回来就少了 `jq-` 那一截。
+// A package-name-prefixed tag (jq-1.8.2) must not be substituted literally:
+// install expands {version} to `TrimPrefix(tag,"v")`, so substituting back
+// would lose the `jq-` part.
 func TestKnownTagRejectsAPackageNamePrefix(t *testing.T) {
 	res := inferRepo(t, "jqlang/jq")
 	for _, a := range res.Assets {
 		if strings.Contains(a.Template, "{version}") {
-			t.Errorf("jq-1.8.2 这种 tag 不该被拿来替换：%q", a.Template)
+			t.Errorf("a tag like jq-1.8.2 must not be used for substitution: %q", a.Template)
 		}
 	}
 }
 
-// 预发布标签和架构名长得一模一样，判据是白名单（preWords），不是"排除 os/arch 词"。
+// Prerelease tags and architecture names look identical; the test is an
+// allowlist (preWords), not "exclude the os/arch words".
 func TestTrimFalsePre(t *testing.T) {
 	for in, want := range map[string]string{
 		"15.2.0-aarch64": "15.2.0",
 		"0.74.3-linux":   "0.74.3",
 		"0.10.0-riscv64": "0.10.0",
 		"15.2.0-s390x":   "15.2.0",
-		"15.2.0-x86":     "15.2.0", // x86_64 被 '_' 切开之后剩下的
+		"15.2.0-x86":     "15.2.0", // what is left of x86_64 after '_' splits it
 		"1.0.0-rc.1":     "1.0.0-rc.1",
 		"1.0.0-rc1":      "1.0.0-rc1",
 		"1.0.0-beta.2":   "1.0.0-beta.2",
 		"1.0.0-alpha":    "1.0.0-alpha",
-		"1.2.3+20240101": "1.2.3+20240101", // 构建元数据是 tag 的一部分，不能削
+		"1.2.3+20240101": "1.2.3+20240101", // build metadata is part of the tag; do not trim
 		"1.2.3":          "1.2.3",
 	} {
 		if got := trimFalsePre(in); got != want {
-			t.Errorf("trimFalsePre(%q) = %q，想要 %q", in, got, want)
+			t.Errorf("trimFalsePre(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
-// 语料里每个仓库都要真的产出点东西 —— 一个"认出 0 个平台"的仓库等于收录不了。
+// Every repository in the corpus has to actually produce something — one that
+// recognizes 0 platforms is one we cannot index.
 func TestCorpusEveryRepoYieldsSomething(t *testing.T) {
 	for repo, r := range loadCorpus(t) {
 		res := InferTag(r.Files, r.Tag)
 		if len(res.Artifact) == 0 {
-			t.Errorf("%s 一个平台都没认出来", repo)
+			t.Errorf("%s recognized no platform at all", repo)
 		}
 		plats := make([]string, 0, len(res.Artifact))
 		for p := range res.Artifact {
 			plats = append(plats, p)
 		}
 		sort.Strings(plats)
-		t.Logf("%s（%s）→ %s", repo, r.Tag, strings.Join(plats, " "))
+		t.Logf("%s (%s) -> %s", repo, r.Tag, strings.Join(plats, " "))
 	}
 }
 
-// Unreplaced 是那条「上游一发新版就 404」的警告的判据 —— 它必须真的会响。
-// 场景：给的版本号和资产名里的对不上（--version 敲错，或者 tag 和资产名不一致）。
+// Unreplaced is what drives the "404 the moment upstream ships a new version"
+// warning — it has to actually fire. The scenario: the version given does not
+// match the one in the asset names (a typo in --version, or a tag that
+// disagrees with the asset names).
 func TestUnreplacedFiresWhenAVersionIsLeftBehind(t *testing.T) {
 	res := Infer([]string{"tool-1.2.3-x86_64-unknown-linux-gnu.tar.gz"}, "9.9.9")
 	if res.Unreplaced != "1.2.3" {
-		t.Fatalf("Unreplaced = %q，想要 1.2.3", res.Unreplaced)
+		t.Fatalf("Unreplaced = %q, want 1.2.3", res.Unreplaced)
 	}
 }

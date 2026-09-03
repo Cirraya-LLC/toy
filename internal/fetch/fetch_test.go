@@ -24,7 +24,7 @@ func sum(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-// serve 起一个只认几条固定路径的测试服务器，路径 → 内容。
+// serve starts a test server that knows a handful of fixed paths: path -> content.
 func serve(t *testing.T, files map[string]string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -41,7 +41,7 @@ func serve(t *testing.T, files map[string]string) *httptest.Server {
 	return srv
 }
 
-// recordSink 记下回调，用来确认 Sink 真的被喂了东西。
+// recordSink records the callbacks, so we can confirm the Sink really was fed.
 type recordSink struct {
 	starts int
 	total  int64
@@ -65,45 +65,45 @@ func TestGet(t *testing.T) {
 		wantErr error
 		wantOK  bool
 	}{
-		{name: "无 hash 也能装", path: "/ok", wantOK: true},
-		{name: "hash 对得上", path: "/ok", sha: sum([]byte(payload)), wantOK: true},
-		{name: "hash 对不上", path: "/ok", sha: sum([]byte("别的东西")), wantErr: ErrChecksum},
+		{name: "installs fine without a hash", path: "/ok", wantOK: true},
+		{name: "hash matches", path: "/ok", sha: sum([]byte(payload)), wantOK: true},
+		{name: "hash does not match", path: "/ok", sha: sum([]byte("something else")), wantErr: ErrChecksum},
 		{name: "404", path: "/nope", wantErr: ErrAllFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cache := t.TempDir()
-			// Sink 为 nil 必须全程不崩
+			// A nil Sink must never panic anywhere along the way.
 			res, err := Get(context.Background(), srv.URL+tc.path, Options{SHA256: tc.sha, CacheDir: cache})
 			if tc.wantOK {
 				if err != nil {
-					t.Fatalf("想成功，却是 %v", err)
+					t.Fatalf("wanted success, got %v", err)
 				}
 				if res.SHA256 != sum([]byte(payload)) {
-					t.Fatalf("hash 不对：%s", res.SHA256)
+					t.Fatalf("wrong hash: %s", res.SHA256)
 				}
 				if res.FromCache {
-					t.Fatal("第一次下载不该说是缓存命中")
+					t.Fatal("a first download must not claim to be a cache hit")
 				}
 				if res.Source != srv.URL+tc.path {
-					t.Fatalf("Source 该是实际成功的地址，却是 %q", res.Source)
+					t.Fatalf("Source should be the address that actually succeeded, got %q", res.Source)
 				}
 				got, _ := os.ReadFile(res.Path)
 				if string(got) != payload {
-					t.Fatalf("内容不对：%q", got)
+					t.Fatalf("wrong content: %q", got)
 				}
 				if filepath.Base(res.Path) != res.SHA256 {
-					t.Fatalf("缓存里的文件名必须是内容 hash，却是 %q", filepath.Base(res.Path))
+					t.Fatalf("a cached file must be named after its content hash, got %q", filepath.Base(res.Path))
 				}
 				return
 			}
 			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("想要 %v，却是 %v", tc.wantErr, err)
+				t.Fatalf("wanted %v, got %v", tc.wantErr, err)
 			}
-			// 失败时缓存目录必须是空的：绝不能留半个文件或临时文件
+			// On failure the cache directory must be empty: never leave half a file or a temp file behind.
 			ents, _ := os.ReadDir(cache)
 			if len(ents) != 0 {
-				t.Fatalf("失败后缓存目录不干净：%v", ents)
+				t.Fatalf("cache directory is not clean after a failure: %v", ents)
 			}
 		})
 	}
@@ -130,14 +130,14 @@ func TestGetCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !second.FromCache || second.Path != first.Path {
-		t.Fatalf("第二次该命中缓存：%+v", second)
+		t.Fatalf("the second call should hit the cache: %+v", second)
 	}
 	if hits != 1 {
-		t.Fatalf("命中缓存不该再请求，实际请求了 %d 次", hits)
+		t.Fatalf("a cache hit must not hit the network again, but there were %d requests", hits)
 	}
 
-	// 缓存文件被改坏 → 重新算的 hash 对不上 → 不算命中，重新下载
-	if err := os.WriteFile(first.Path, []byte("坏掉的缓存"), 0o644); err != nil {
+	// Corrupt the cached file -> rehashing no longer matches -> not a hit, download again.
+	if err := os.WriteFile(first.Path, []byte("corrupted cache"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	third, err := Get(context.Background(), srv.URL+"/x", opt)
@@ -145,13 +145,13 @@ func TestGetCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	if third.FromCache {
-		t.Fatal("内容对不上的缓存文件不该算命中")
+		t.Fatal("a cached file whose content no longer matches must not count as a hit")
 	}
 	if hits != 2 {
-		t.Fatalf("该重新下载一次，实际请求了 %d 次", hits)
+		t.Fatalf("it should have downloaded again, but there were %d requests", hits)
 	}
 	if got, _ := os.ReadFile(third.Path); string(got) != string(payload) {
-		t.Fatalf("缓存没被修好：%q", got)
+		t.Fatalf("the cache was not repaired: %q", got)
 	}
 }
 
@@ -168,13 +168,13 @@ func TestGetMirror(t *testing.T) {
 		case "/m/" + want:
 			w.Write(payload)
 		default:
-			w.Write([]byte("镜像上放的是别的东西"))
+			w.Write([]byte("the mirror is serving something else"))
 		}
 	}))
 	defer mirror.Close()
 	origin := serve(t, map[string]string{"/have": string(payload)})
 
-	t.Run("原始地址挂了就走镜像", func(t *testing.T) {
+	t.Run("falls back to the mirror when the original is gone", func(t *testing.T) {
 		atomic.StoreInt32(&mirrorHits, 0)
 		res, err := Get(context.Background(), origin.URL+"/gone", Options{
 			SHA256: want, Mirrors: []string{mirror.URL + "/m/"}, CacheDir: t.TempDir(),
@@ -182,38 +182,38 @@ func TestGetMirror(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// 镜像地址 = base 去掉尾斜杠 + "/" + sha256
+		// A mirror URL is base with the trailing slash stripped + "/" + sha256.
 		if gotPath != "/m/"+want {
-			t.Fatalf("镜像地址拼错了：%q", gotPath)
+			t.Fatalf("mirror URL was built wrong: %q", gotPath)
 		}
 		if res.Source != mirror.URL+"/m/"+want {
-			t.Fatalf("Source 该指向真正成功的镜像，却是 %q", res.Source)
+			t.Fatalf("Source should point at the mirror that actually succeeded, got %q", res.Source)
 		}
 	})
 
-	t.Run("镜像内容不对一样拒绝", func(t *testing.T) {
+	t.Run("a mirror with the wrong content is refused too", func(t *testing.T) {
 		cache := t.TempDir()
 		_, err := Get(context.Background(), origin.URL+"/gone", Options{
-			SHA256: sum([]byte("谁都没有的内容")), Mirrors: []string{mirror.URL + "/m"}, CacheDir: cache,
+			SHA256: sum([]byte("content nobody has")), Mirrors: []string{mirror.URL + "/m"}, CacheDir: cache,
 		})
 		if !errors.Is(err, ErrAllFailed) || !errors.Is(err, ErrChecksum) {
-			t.Fatalf("镜像内容要独立验一次 hash，得到 %v", err)
+			t.Fatalf("mirror content must be hashed independently, got %v", err)
 		}
 		if ents, _ := os.ReadDir(cache); len(ents) != 0 {
-			t.Fatalf("缓存目录该是空的：%v", ents)
+			t.Fatalf("the cache directory should be empty: %v", ents)
 		}
 	})
 
-	t.Run("没有 hash 就不碰镜像", func(t *testing.T) {
+	t.Run("no hash means no mirrors", func(t *testing.T) {
 		atomic.StoreInt32(&mirrorHits, 0)
 		_, err := Get(context.Background(), origin.URL+"/gone", Options{
 			Mirrors: []string{mirror.URL + "/m/"}, CacheDir: t.TempDir(),
 		})
 		if !errors.Is(err, ErrAllFailed) {
-			t.Fatalf("想要 ErrAllFailed，得到 %v", err)
+			t.Fatalf("wanted ErrAllFailed, got %v", err)
 		}
 		if mirrorHits != 0 {
-			t.Fatalf("没有 hash 就无法验证镜像内容，不该去请求它（请求了 %d 次）", mirrorHits)
+			t.Fatalf("without a hash there is no way to verify mirror content, so it must not be requested (it was, %d times)", mirrorHits)
 		}
 	})
 }
@@ -227,14 +227,14 @@ func TestGetNoCacheDir(t *testing.T) {
 	}
 	defer os.Remove(res.Path)
 	if got, _ := os.ReadFile(res.Path); string(got) != string(payload) {
-		t.Fatalf("内容不对：%q", got)
+		t.Fatalf("wrong content: %q", got)
 	}
 }
 
 func TestGetFileScheme(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "payload.bin")
-	payload := []byte("本地文件也走同一条路")
+	payload := []byte("local files take the same path")
 	if err := os.WriteFile(src, payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -244,15 +244,15 @@ func TestGetFileScheme(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.SHA256 != sum(payload) {
-		t.Fatalf("hash 不对：%s", res.SHA256)
+		t.Fatalf("wrong hash: %s", res.SHA256)
 	}
-	if _, err := Get(context.Background(), "file://"+dir+"/没有这个文件", Options{CacheDir: cache}); !errors.Is(err, ErrAllFailed) {
-		t.Fatalf("想要 ErrAllFailed，得到 %v", err)
+	if _, err := Get(context.Background(), "file://"+dir+"/no-such-file", Options{CacheDir: cache}); !errors.Is(err, ErrAllFailed) {
+		t.Fatalf("wanted ErrAllFailed, got %v", err)
 	}
 }
 
 func TestGetSink(t *testing.T) {
-	payload := []byte("给进度条看的内容")
+	payload := []byte("content for the progress bar")
 	srv := serve(t, map[string]string{"/x": string(payload)})
 
 	s := &recordSink{}
@@ -260,39 +260,39 @@ func TestGetSink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.starts != 1 || s.dones != 1 || s.lastEr != nil {
-		t.Fatalf("Sink 回调不对：%+v", s)
+		t.Fatalf("wrong Sink callbacks: %+v", s)
 	}
 	if s.added != int64(len(payload)) || s.total != int64(len(payload)) {
-		t.Fatalf("字节数不对：added=%d total=%d", s.added, s.total)
+		t.Fatalf("wrong byte counts: added=%d total=%d", s.added, s.total)
 	}
 
 	bad := &recordSink{}
-	_, err := Get(context.Background(), srv.URL+"/x", Options{Sink: bad, SHA256: sum([]byte("别的")), CacheDir: t.TempDir()})
+	_, err := Get(context.Background(), srv.URL+"/x", Options{Sink: bad, SHA256: sum([]byte("other")), CacheDir: t.TempDir()})
 	if err == nil || bad.dones != 1 || bad.lastEr == nil {
-		t.Fatalf("失败也要 Done(err)：%+v", bad)
+		t.Fatalf("a failure must call Done(err) too: %+v", bad)
 	}
 }
 
 func TestBadSHA256Format(t *testing.T) {
-	// sha256 会被当成缓存里的文件名，畸形值必须在下载之前就被拒
+	// The sha256 is used as a file name inside the cache, so a malformed value must be refused before any download.
 	for _, bad := range []string{"../../etc/passwd", "abc", strings.Repeat("z", 64)} {
 		if _, err := Get(context.Background(), "http://example.invalid/x", Options{SHA256: bad, CacheDir: t.TempDir()}); err == nil {
-			t.Fatalf("%q 该被拒", bad)
+			t.Fatalf("%q should be refused", bad)
 		}
 		if _, err := GetBytes(context.Background(), "http://example.invalid/x", Options{SHA256: bad}); err == nil {
-			t.Fatalf("%q 该被拒", bad)
+			t.Fatalf("%q should be refused", bad)
 		}
 	}
-	// 大写和空白要被容忍，不能当成校验失败
-	payload := []byte("大写 hash")
+	// Uppercase and surrounding whitespace must be tolerated, never read as a checksum failure.
+	payload := []byte("uppercase hash")
 	srv := serve(t, map[string]string{"/x": string(payload)})
 	if _, err := Get(context.Background(), srv.URL+"/x", Options{SHA256: " " + strings.ToUpper(sum(payload)) + " ", CacheDir: t.TempDir()}); err != nil {
-		t.Fatalf("大写/带空白的 hash 该照样通过：%v", err)
+		t.Fatalf("an uppercase/padded hash must still pass: %v", err)
 	}
 }
 
 func TestRedirect(t *testing.T) {
-	payload := []byte("跳一次就到")
+	payload := []byte("one hop and we are there")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/real", http.StatusFound)
@@ -308,14 +308,14 @@ func TestRedirect(t *testing.T) {
 	defer srv.Close()
 
 	if _, err := Get(context.Background(), srv.URL+"/start", Options{SHA256: sum(payload), CacheDir: t.TempDir()}); err != nil {
-		t.Fatalf("正常重定向该跟随：%v", err)
+		t.Fatalf("an ordinary redirect should be followed: %v", err)
 	}
 	cache := t.TempDir()
 	if _, err := Get(context.Background(), srv.URL+"/loop", Options{CacheDir: cache}); !errors.Is(err, ErrAllFailed) {
-		t.Fatalf("死循环重定向该失败，得到 %v", err)
+		t.Fatalf("a redirect loop should fail, got %v", err)
 	}
 	if ents, _ := os.ReadDir(cache); len(ents) != 0 {
-		t.Fatalf("缓存目录该是空的：%v", ents)
+		t.Fatalf("the cache directory should be empty: %v", ents)
 	}
 }
 
@@ -349,25 +349,25 @@ func TestGetBytes(t *testing.T) {
 		url     string
 		sha     string
 		wantErr error
-		wantAny bool // 只要求出错，不指定哨兵
+		wantAny bool // only requires an error, no particular sentinel
 	}{
 		{name: "https", url: srv.URL + "/toy.toml"},
 		{name: "file://", url: "file://" + local},
-		{name: "hash 对得上", url: srv.URL + "/toy.toml", sha: sum([]byte(payload))},
-		{name: "hash 对不上", url: srv.URL + "/toy.toml", sha: sum([]byte("x")), wantErr: ErrChecksum},
+		{name: "hash matches", url: srv.URL + "/toy.toml", sha: sum([]byte(payload))},
+		{name: "hash does not match", url: srv.URL + "/toy.toml", sha: sum([]byte("x")), wantErr: ErrChecksum},
 		{name: "404", url: srv.URL + "/nope", wantErr: ErrAllFailed},
-		{name: "超过上限", url: srv.URL + "/huge", wantErr: ErrAllFailed, wantAny: true},
-		{name: "file:// 不存在", url: "file://" + dir + "/nope", wantErr: ErrAllFailed},
+		{name: "over the cap", url: srv.URL + "/huge", wantErr: ErrAllFailed, wantAny: true},
+		{name: "file:// missing", url: "file://" + dir + "/nope", wantErr: ErrAllFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := GetBytes(context.Background(), tc.url, Options{SHA256: tc.sha})
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("想要 %v，得到 %v", tc.wantErr, err)
+					t.Fatalf("wanted %v, got %v", tc.wantErr, err)
 				}
 				if tc.wantAny && !strings.Contains(err.Error(), "size limit") {
-					t.Fatalf("报错该说清楚是超了上限：%v", err)
+					t.Fatalf("the error should spell out that the cap was exceeded: %v", err)
 				}
 				return
 			}
@@ -375,7 +375,7 @@ func TestGetBytes(t *testing.T) {
 				t.Fatal(err)
 			}
 			if string(b) != payload {
-				t.Fatalf("内容不对：%q", b)
+				t.Fatalf("wrong content: %q", b)
 			}
 		})
 	}
@@ -392,31 +392,33 @@ func TestSumFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := sum([]byte("hello")); got != want {
-		t.Fatalf("想要 %s，得到 %s", want, got)
+		t.Fatalf("wanted %s, got %s", want, got)
 	}
-	if _, err := SumFile(filepath.Join(dir, "没有")); err == nil {
-		t.Fatal("不存在的文件该报错")
+	if _, err := SumFile(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("a file that does not exist should error")
 	}
 }
 
 func TestCancelledContext(t *testing.T) {
-	srv := serve(t, map[string]string{"/x": "内容"})
+	srv := serve(t, map[string]string{"/x": "content"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cache := t.TempDir()
 	if _, err := Get(ctx, srv.URL+"/x", Options{CacheDir: cache}); err == nil {
-		t.Fatal("已取消的 ctx 该失败")
+		t.Fatal("an already-cancelled ctx should fail")
 	}
 	if ents, _ := os.ReadDir(cache); len(ents) != 0 {
-		t.Fatalf("缓存目录该是空的：%v", ents)
+		t.Fatalf("the cache directory should be empty: %v", ents)
 	}
 }
 
-// 服务器带 Content-Encoding: gzip 时，落地和 hash 的必须是线上的原始字节。
-// Go 的 transport 默认会自己加 Accept-Encoding: gzip 再自己解开，那样算出来的
-// hash 是解压后的内容，跟发布者对着 release 资产算的 hash 永远对不上。
+// When the server sends Content-Encoding: gzip, what lands on disk and what we hash
+// must both be the bytes on the wire. Go's transport would otherwise add
+// Accept-Encoding: gzip on its own and decompress transparently, and the resulting hash
+// would be of the decompressed content -- never matching what the publisher computed
+// over the release asset.
 func TestHashesTheBytesOnTheWire(t *testing.T) {
-	raw := []byte("release 资产的真实字节")
+	raw := []byte("the real bytes of the release asset")
 	var wire bytes.Buffer
 	gz := gzip.NewWriter(&wire)
 	if _, err := gz.Write(raw); err != nil {
@@ -426,72 +428,74 @@ func TestHashesTheBytesOnTheWire(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ae := r.Header.Get("Accept-Encoding"); strings.Contains(ae, "gzip") {
-			t.Errorf("不该主动要 gzip，却发了 Accept-Encoding: %q", ae)
+			t.Errorf("we must not ask for gzip, but sent Accept-Encoding: %q", ae)
 		}
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Write(wire.Bytes())
 	}))
 	defer srv.Close()
 
-	// 有 sha256（发布者对着线上文件算的）时必须验得过
+	// With a sha256 (computed by the publisher over the file on the wire) it must verify.
 	res, err := Get(context.Background(), srv.URL+"/x", Options{
 		SHA256: sum(wire.Bytes()), CacheDir: t.TempDir(),
 	})
 	if err != nil {
-		t.Fatalf("发布者的 hash 是对着线上字节算的，该通过：%v", err)
+		t.Fatalf("the publisher's hash is over the bytes on the wire, so this must pass: %v", err)
 	}
 	got, _ := os.ReadFile(res.Path)
 	if !bytes.Equal(got, wire.Bytes()) {
-		t.Fatalf("落地的不是线上字节（被透明解压了）：%d 字节", len(got))
+		t.Fatalf("what landed is not the bytes on the wire (transparently decompressed): %d bytes", len(got))
 	}
 
-	// 没有 sha256 的 TOFU 路径同样不能钉住解压后的 hash
+	// The TOFU path (no sha256) must not pin the decompressed hash either.
 	res2, err := Get(context.Background(), srv.URL+"/x", Options{CacheDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res2.SHA256 != sum(wire.Bytes()) {
-		t.Fatalf("TOFU 钉住的 hash 不是线上字节的：%s", res2.SHA256)
+		t.Fatalf("TOFU pinned a hash that is not of the bytes on the wire: %s", res2.SHA256)
 	}
 }
 
-// file:// 里的 ? 和 # 会被 url.Parse 切掉，导致静默打开另一个文件。宁可报错也不猜。
+// A ? or # in a file:// URL gets cut off by url.Parse and would silently open a different
+// file. Refuse rather than guess.
 func TestFileURLRefusesQueryAndFragment(t *testing.T) {
 	dir := t.TempDir()
-	// 陷阱：a 和 a#b 同时存在，要 a#b 绝不能拿到 a 的内容
-	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("别的文件"), 0o644); err != nil {
+	// The trap: "a" and "a#b" both exist; asking for a#b must never return a's content.
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("the other file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "a#b"), []byte("我要的文件"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "a#b"), []byte("the file I asked for"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a#b", "a?b"} {
 		b, err := GetBytes(context.Background(), "file://"+filepath.Join(dir, name), Options{})
 		if err == nil {
-			t.Fatalf("%q 该被拒，却读到了 %q", name, b)
+			t.Fatalf("%q should be refused, but it read %q", name, b)
 		}
 		if !strings.Contains(err.Error(), "?") {
-			t.Fatalf("报错该说清楚是 ? / # 的事：%v", err)
+			t.Fatalf("the error should spell out that this is about ? / #: %v", err)
 		}
 	}
 }
 
-// 下载到一半断线 / 被取消 / 非 200：一律不能在缓存目录里留下任何东西。
+// Connection dropped mid-download, cancelled, or a non-200: none of them may leave
+// anything at all in the cache directory.
 func TestNothingLeftBehindOnFailure(t *testing.T) {
-	t.Run("响应被截断", func(t *testing.T) {
+	t.Run("truncated response", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Length", "1000")
-			w.Write([]byte("只发五个字"))
+			w.Write([]byte("only a few bytes"))
 		}))
 		defer srv.Close()
 		cache := t.TempDir()
 		if _, err := Get(context.Background(), srv.URL+"/x", Options{CacheDir: cache}); err == nil {
-			t.Fatal("截断的响应不该算成功")
+			t.Fatal("a truncated response must not count as success")
 		}
 		assertEmptyDir(t, cache)
 	})
 
-	t.Run("下载中途取消", func(t *testing.T) {
+	t.Run("cancelled mid-download", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			for i := 0; i < 200; i++ {
 				if _, err := w.Write(make([]byte, 4096)); err != nil {
@@ -507,25 +511,25 @@ func TestNothingLeftBehindOnFailure(t *testing.T) {
 		defer cancel()
 		s := &recordSink{}
 		if _, err := Get(ctx, srv.URL+"/x", Options{CacheDir: cache, Sink: s}); err == nil {
-			t.Fatal("取消了该失败")
+			t.Fatal("a cancelled download should fail")
 		}
 		if s.starts != s.dones || s.lastEr == nil {
-			t.Fatalf("中途取消也要 Done(err)：%+v", s)
+			t.Fatalf("cancelling mid-download must still call Done(err): %+v", s)
 		}
 		assertEmptyDir(t, cache)
 	})
 
-	// 只有 200 算数：204/206 有 body，直接当成功会装上一个半截文件
+	// Only 200 counts: 204/206 carry a body, and treating them as success installs half a file.
 	for _, code := range []int{204, 206, 301, 403, 500} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(code)
-				w.Write([]byte("这不是包"))
+				w.Write([]byte("this is not a package"))
 			}))
 			defer srv.Close()
 			cache := t.TempDir()
 			if _, err := Get(context.Background(), srv.URL+"/x", Options{CacheDir: cache}); !errors.Is(err, ErrAllFailed) {
-				t.Fatalf("HTTP %d 该失败，得到 %v", code, err)
+				t.Fatalf("HTTP %d should fail, got %v", code, err)
 			}
 			assertEmptyDir(t, cache)
 		})
@@ -539,20 +543,21 @@ func assertEmptyDir(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	for _, e := range ents {
-		t.Errorf("留下了残骸 %q（临时文件也算：cache 目录会被 toy serve 当镜像发出去）", e.Name())
+		t.Errorf("left wreckage behind: %q (temp files count too: the cache directory is what toy serve hands out as a mirror)", e.Name())
 	}
 }
 
-// 原始地址被投毒（200 但内容不对）时，镜像必须能把这次安装救回来，
-// 而且 Sink 的 Start/Done 要成对 —— ui 的进度条靠这个收尾。
+// When the original address is poisoned (200 but the wrong content), a mirror must be able
+// to rescue the install -- and the Sink's Start/Done must stay paired, because that is how
+// ui's progress bar finishes.
 func TestPoisonedOriginFallsBackToMirror(t *testing.T) {
-	payload := []byte("真的包")
+	payload := []byte("the real package")
 	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write(payload)
 	}))
 	defer mirror.Close()
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("投毒内容"))
+		w.Write([]byte("poisoned content"))
 	}))
 	defer origin.Close()
 
@@ -561,23 +566,24 @@ func TestPoisonedOriginFallsBackToMirror(t *testing.T) {
 		SHA256: sum(payload), Mirrors: []string{mirror.URL}, CacheDir: t.TempDir(), Sink: s,
 	})
 	if err != nil {
-		t.Fatalf("镜像上有对的内容，该救回来：%v", err)
+		t.Fatalf("the mirror has the right content, so this should be rescued: %v", err)
 	}
 	if res.Source != mirror.URL+"/"+sum(payload) {
-		t.Fatalf("Source 必须如实说是镜像救的（铁律 8），却是 %q", res.Source)
+		t.Fatalf("Source must say truthfully that a mirror rescued this (rule 8), got %q", res.Source)
 	}
 	if got, _ := os.ReadFile(res.Path); !bytes.Equal(got, payload) {
-		t.Fatalf("装上去的是投毒内容：%q", got)
+		t.Fatalf("the poisoned content got installed: %q", got)
 	}
 	if s.starts != s.dones || s.starts != 2 {
-		t.Fatalf("两次尝试就该有两对 Start/Done：%+v", s)
+		t.Fatalf("two attempts should produce two Start/Done pairs: %+v", s)
 	}
 	if s.lastEr != nil {
-		t.Fatalf("最后一次是成功的，Done 不该带 err：%v", s.lastEr)
+		t.Fatalf("the last attempt succeeded, so Done must not carry an err: %v", s.lastEr)
 	}
 }
 
-// 同一个包被并发装多次：缓存里只能有一个文件，且每个调用方拿到的内容都是完整的。
+// The same package installed concurrently: the cache may hold exactly one file, and every
+// caller must get complete content.
 func TestConcurrentGetSharesOneCache(t *testing.T) {
 	payload := bytes.Repeat([]byte("x"), 1<<16)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -594,12 +600,12 @@ func TestConcurrentGetSharesOneCache(t *testing.T) {
 			defer wg.Done()
 			res, err := Get(context.Background(), srv.URL+"/x", opt)
 			if err != nil {
-				t.Errorf("并发下失败：%v", err)
+				t.Errorf("failed under concurrency: %v", err)
 				return
 			}
 			got, err := os.ReadFile(res.Path)
 			if err != nil || !bytes.Equal(got, payload) {
-				t.Errorf("并发下读到半个文件：%d 字节 %v", len(got), err)
+				t.Errorf("read half a file under concurrency: %d bytes %v", len(got), err)
 			}
 		}()
 	}
@@ -607,15 +613,15 @@ func TestConcurrentGetSharesOneCache(t *testing.T) {
 
 	ents, _ := os.ReadDir(cache)
 	if len(ents) != 1 || ents[0].Name() != sum(payload) {
-		t.Fatalf("缓存里该只有一个以 hash 命名的文件，实际 %v", ents)
+		t.Fatalf("the cache should hold exactly one file named after the hash, got %v", ents)
 	}
 }
 
-// file:// 指向目录不能被当成一个包。
+// A file:// URL pointing at a directory must not be treated as a package.
 func TestFileURLDirectory(t *testing.T) {
 	cache := t.TempDir()
 	if _, err := Get(context.Background(), "file://"+t.TempDir(), Options{CacheDir: cache}); !errors.Is(err, ErrAllFailed) {
-		t.Fatalf("file:// 指向目录该失败，得到 %v", err)
+		t.Fatalf("file:// pointing at a directory should fail, got %v", err)
 	}
 	assertEmptyDir(t, cache)
 }

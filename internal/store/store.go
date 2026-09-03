@@ -1,4 +1,5 @@
-// Package store 管 ~/.toy 的一切：目录布局、config.toml、安装清单、软链。规格 §6。
+// Package store owns everything under ~/.toy: the directory layout, config.toml,
+// install manifests, and the symlinks. Spec §6.
 package store
 
 import (
@@ -25,25 +26,33 @@ var (
 	ErrLinkExists   = errors.New("store: a link with that name already exists")
 )
 
-// Trust 等级，如实打给用户看（铁律 8）。
+// Trust levels. These get printed to the user verbatim (iron law 8).
 const (
-	TrustSigned = "signed" // 索引 + 作者签名
-	TrustHost   = "host"   // 托管方的账号体系
-	// TrustIndexed 是「二进制来自作者的 release，但打包说明来自索引」：
-	// 上游仓库没有 toy.toml，装哪个资产、命令叫什么名字是索引条目内联那一份说的。
-	// 它比 TrustHost 低一档（那份声明不是作者写的），比 TrustUnverified 高一档
-	// （字节仍然来自作者自己那个 release，地址由 host 模板拼，索引说了不算）。
-	// **内联的 toyfile 永远到不了 TrustSigned**：签名者是提交索引记录的人，
-	// 不是作者，那个勾会说过头（§14.3、index.Entry.Toyfile 第 2 条）。
+	TrustSigned = "signed" // index entry + author signature
+	TrustHost   = "host"   // the host's own account system
+	// TrustIndexed means "the bytes come from the author's release, but the
+	// packaging instructions come from the index": the upstream repo has no
+	// toy.toml, so which asset to install and what to call the command is what
+	// the index entry's inlined toyfile says. It ranks below TrustHost (that
+	// declaration was not written by the author) and above TrustUnverified (the
+	// bytes still come from the author's own release; the URL is built from the
+	// host template, not from anything the index says).
+	//
+	// AN INLINED TOYFILE CAN NEVER REACH TrustSigned: the signer is whoever
+	// submitted the index record, not the author, so that checkmark would claim
+	// more than it can (§14.3, and rule 2 on index.Entry.Toyfile).
 	TrustIndexed    = "index-toyfile"
-	TrustUnverified = "unverified" // 裸 URL
+	TrustUnverified = "unverified" // bare URL
 )
 
-// TrustRank 把信任等级排成一条线，越大越可信。降档判断和显示都比这个，
-// 不要再各处硬编码「等于 TrustSigned 就算高」—— 加一档的时候那些地方
-// 一个都不会报错，只会静默地把新档位算到错的一边（这一档就是这么加进来的）。
+// TrustRank puts the trust levels on one line, higher is more trusted.
+// Downgrade checks and display both compare through this. Never hardcode
+// "equals TrustSigned means high" anywhere again: when a level gets added, not
+// one of those sites errors out, they just silently file the new level on the
+// wrong side of the line. That is exactly how TrustIndexed got added.
 //
-// 认不出的等级排在最低：铁律 8 说不许静默成功，说不清就不能当成安全的那一档。
+// An unrecognized level ranks lowest. Iron law 8 forbids silent success, so
+// anything we cannot explain does not get to count as the safe end.
 func TrustRank(level string) int {
 	switch level {
 	case TrustSigned:
@@ -59,20 +68,22 @@ func TrustRank(level string) int {
 	}
 }
 
-// DefaultIndexURL 是内置索引的地址。**这就是那一个常量** —— 索引真的传上线之后，
-// 把地址填在这里就是全部改动，别处一个字都不用动（规格 §5：索引来源「实现上就是
-// 一个 URL」，file:// 和 https:// 走的是同一条代码路径）。
+// DefaultIndexURL is the address of the built-in index. THIS IS THE ONE
+// CONSTANT: once the index is actually hosted somewhere, filling in the address
+// here is the entire change, nothing else moves (spec §5: an index source "is
+// just a URL"; file:// and https:// take the same code path).
 //
-// 现在是空串，表示【不预置任何索引】。v1 的索引就是仓库里那个本地文件
-// （index/toy-index.json），还没传到任何静态托管上 —— 预置一个 404 的地址，
-// 等于每个新用户第一次 `toy doctor` / `toy search` 就吃一条红叉，而那不是他的
-// 问题（铁律 8：不许把我们自己的状态说成用户的错）。没有索引是合法状态：
-// `toy install github:owner/repo` 那条路从头到尾就不经过索引。
+// It is empty right now, meaning NO INDEX IS PRECONFIGURED. The v1 index is the
+// local file in this repo (index/toy-index.json) and it has not been uploaded to
+// any static host yet. Shipping an address that 404s would hand every new user a
+// red cross on their first `toy doctor` / `toy search`, and that is not their
+// problem (iron law 8: never report our own state as the user's fault). Having no
+// index is a legal state: `toy install github:owner/repo` never touches an index.
 const DefaultIndexURL = ""
 
 const defaultIndexName = "default"
 
-// ~/.toy 下的一级目录。规格 §6。
+// Top-level directories under ~/.toy. Spec §6.
 const (
 	dirBin       = "bin"
 	dirPkg       = "pkg"
@@ -84,19 +95,20 @@ const (
 	configName   = "config.toml"
 )
 
-// Config 是 ~/.toy/config.toml。
+// Config is ~/.toy/config.toml.
 type Config struct {
 	Indexes []IndexRef           `toml:"index"`
 	Mirrors []string             `toml:"mirrors"`
-	Hosts   map[string]host.Host `toml:"hosts"` // 覆盖/新增托管方，加三行就多支持一家
+	Hosts   map[string]host.Host `toml:"hosts"` // override or add a host; three lines supports one more
 }
 
 type IndexRef struct {
 	Name string `toml:"name"`
-	URL  string `toml:"url"` // file:// 或 https://，v1 用 file:// 就够，以后改一行
+	URL  string `toml:"url"` // file:// or https://; file:// is enough for v1, one line to change later
 }
 
-// DefaultConfig 返回内置默认：DefaultIndexURL 非空时预置那一个索引，否则一个都不预置。
+// DefaultConfig returns the built-in defaults: the one index when
+// DefaultIndexURL is set, and no index at all when it is empty.
 func DefaultConfig() Config {
 	c := Config{Indexes: []IndexRef{}, Mirrors: []string{}, Hosts: map[string]host.Host{}}
 	if DefaultIndexURL != "" {
@@ -107,8 +119,8 @@ func DefaultConfig() Config {
 
 type Store struct{ Root string }
 
-// Open 打开（必要时创建）store。root 为空时用 ~/.toy，
-// 受 TOY_HOME 环境变量覆盖（测试要靠它）。
+// Open opens (and creates if needed) the store. An empty root means ~/.toy,
+// overridden by the TOY_HOME environment variable, which the tests rely on.
 func Open(root string) (*Store, error) {
 	if root == "" {
 		root = os.Getenv("TOY_HOME")
@@ -127,7 +139,7 @@ func Open(root string) (*Store, error) {
 	}
 	s := &Store{Root: abs}
 
-	// keys/ 里是私钥，只给自己看。其余目录 0755。
+	// keys/ holds private keys, so it is owner-only. Everything else is 0755.
 	for _, d := range []string{dirBin, dirPkg, dirCache, dirInstalled, dirKnown, dirIndex} {
 		if err := os.MkdirAll(filepath.Join(abs, d), 0o755); err != nil {
 			return nil, fmt.Errorf("store: cannot create directory %s: %w", filepath.Join(abs, d), err)
@@ -136,8 +148,9 @@ func Open(root string) (*Store, error) {
 	if err := os.MkdirAll(s.KeysDir(), 0o700); err != nil {
 		return nil, fmt.Errorf("store: cannot create directory %s: %w", s.KeysDir(), err)
 	}
-	// MkdirAll 对已经存在的目录是空操作 —— 一个之前被建成 0755 的 keys/ 会一直
-	// 松着，而里面是私钥。收紧失败就报错，不能装作没看见（铁律 8）。
+	// MkdirAll is a no-op on a directory that already exists, so a keys/ that was
+	// created 0755 at some point stays wide open, with private keys in it. If
+	// tightening fails, say so; do not look the other way (iron law 8).
 	if fi, err := os.Stat(s.KeysDir()); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		if err := os.Chmod(s.KeysDir(), 0o700); err != nil {
 			return nil, fmt.Errorf("store: %s is mode %o, so other users can read the private keys "+
@@ -153,11 +166,13 @@ func (s *Store) KeysDir() string  { return filepath.Join(s.Root, dirKeys) }
 func (s *Store) KnownDir() string { return filepath.Join(s.Root, dirKnown) }
 func (s *Store) IndexDir() string { return filepath.Join(s.Root, dirIndex) }
 
-// PkgDir 是 pkg/<host>/<owner>/<name>/<version>/
+// PkgDir is pkg/<host>/<owner>/<name>/<version>/
 //
-// 每一段都过一次 safeSeg：这些值一路来自 toy.toml 和用户输入，
-// 一个 "../.." 就能把解压目标挪到 ~/.toy 外面去（铁律 7 的同一类问题），
-// 而两个不同的段转义成同一个名字会让两个包共用一个安装目录。
+// Every segment goes through safeSeg. These values come straight from toy.toml
+// and from user input, so a single "../.." would move the extraction target
+// outside ~/.toy (the same class of hole as iron law 7's path traversal), and two
+// different segments escaping to the same name would make two packages share one
+// install directory.
 func (s *Store) PkgDir(hostName, owner, name, version string) string {
 	return filepath.Join(s.Root, dirPkg,
 		safeSeg(hostName), safeSeg(owner), safeSeg(name), safeSeg(version))
@@ -165,7 +180,8 @@ func (s *Store) PkgDir(hostName, owner, name, version string) string {
 
 func (s *Store) configPath() string { return filepath.Join(s.Root, configName) }
 
-// LoadConfig 读 config.toml。文件不存在就是全新的 store，返回内置默认。
+// LoadConfig reads config.toml. A missing file means a brand-new store, so the
+// built-in defaults come back.
 func (s *Store) LoadConfig() (Config, error) {
 	data, err := os.ReadFile(s.configPath())
 	if errors.Is(err, os.ErrNotExist) {
@@ -184,8 +200,9 @@ func (s *Store) LoadConfig() (Config, error) {
 	if c.Hosts == nil {
 		c.Hosts = map[string]host.Host{}
 	}
-	// Host.Name 是 `toml:"-"`：名字是表头那一段（[hosts.github]），不在表里面，
-	// 所以解出来是空的，这里补回去。Lookup 拿它报错时要说出是哪一家。
+	// Host.Name is `toml:"-"`: the name lives in the table header ([hosts.github]),
+	// not inside the table, so it decodes as empty. Fill it back in here. Lookup
+	// needs it to name the host in its errors.
 	for name, h := range c.Hosts {
 		h.Name = name
 		c.Hosts[name] = h
@@ -204,7 +221,7 @@ func (s *Store) SaveConfig(c Config) error {
 	return nil
 }
 
-// encodeTOML 把 v 编码成 TOML，顶上加一行给人看的注释。
+// encodeTOML encodes v as TOML with one human-readable comment on top.
 func encodeTOML(header string, v any) ([]byte, error) {
 	body, err := toml.Marshal(v)
 	if err != nil {
@@ -213,12 +230,15 @@ func encodeTOML(header string, v any) ([]byte, error) {
 	return append([]byte(header+"\n\n"), body...), nil
 }
 
-// Manifest 是一次安装的完整记录。没有它就没法 uninstall 和 update。
+// Manifest is the full record of one install. Without it there is no uninstall
+// and no update.
 type Manifest struct {
 	ID string `toml:"id"` // "github:Derrity/tinyserve"
-	// IndexID 是这个包在索引里的 id（"Derrity/tinyserve"），经索引装的才有。
-	// 没有它，`toy update` 只能拿 ID 走托管方那条路，于是作者的签名在第一次
-	// 升级之后就永远消失了 —— 一个升一次级就掉一档信任的包管理器（铁律 8）。
+	// IndexID is this package's id in the index ("Derrity/tinyserve"), set only
+	// when it was installed through an index. Without it `toy update` can only
+	// take ID down the host path, so the author's signature disappears forever
+	// after the first upgrade: a package manager that drops a trust level every
+	// time you update (iron law 8).
 	IndexID     string   `toml:"index_id"`
 	Name        string   `toml:"name"`
 	Version     string   `toml:"version"`
@@ -226,20 +246,22 @@ type Manifest struct {
 	Host        string   `toml:"host"`
 	Owner       string   `toml:"owner"`
 	Repo        string   `toml:"repo"`
-	Trust       string   `toml:"trust"`  // 上面四个 Trust* 常量之一
-	Signer      string   `toml:"signer"` // 公钥指纹，未签名为空
+	Trust       string   `toml:"trust"`  // one of the four Trust* constants above
+	Signer      string   `toml:"signer"` // public key fingerprint, empty when unsigned
 	SHA256      string   `toml:"sha256"`
-	Source      string   `toml:"source"` // 实际下载成功的 URL
+	Source      string   `toml:"source"` // the URL the download actually succeeded from
 	PkgDir      string   `toml:"pkg_dir"`
-	Links       []string `toml:"links"`        // 创建的软链绝对路径
+	Links       []string `toml:"links"`        // absolute paths of the symlinks we created
 	InstalledAt string   `toml:"installed_at"` // RFC3339
 }
 
-// manifestPath 把 id 变成 installed/ 下的一个文件名。
+// manifestPath turns an id into one filename under installed/.
 //
-// id 长成 "github:Derrity/tinyserve"，里面的 : 和 / 直接当文件名会写到别的
-// 目录里去，所以先把非白名单字符换成 _，再缀上 id 的 sha256 前 8 位 ——
-// 转义是多对一的（a/b 和 a:b 会撞），hash 后缀把唯一性还回来。
+// An id looks like "github:Derrity/tinyserve", and using its : and / directly as
+// a filename would write into some other directory. So: replace everything
+// outside the whitelist with _, then append the first 8 hex of the id's sha256.
+// The escaping is many-to-one (a/b and a:b collide); the hash suffix hands
+// uniqueness back.
 func (s *Store) manifestPath(id string) (string, error) {
 	if strings.TrimSpace(id) == "" {
 		return "", fmt.Errorf("store: package id is empty, cannot locate its install manifest")
@@ -249,14 +271,17 @@ func (s *Store) manifestPath(id string) (string, error) {
 	return filepath.Join(s.Root, dirInstalled, file), nil
 }
 
-// safeSlug 把一段任意文本变成能安全当文件名/目录名的形式。
-// 白名单之外一律换成 _，所以 / : .. 都跑不出当前目录。
+// safeSlug turns arbitrary text into something safe to use as a file or
+// directory name. Anything outside the whitelist becomes _, so / and : and ..
+// cannot escape the current directory.
 //
-// 大写字母也一律折成小写：macOS 默认的 APFS 大小写不敏感，"Foo" 和 "foo"
-// 在那里是【同一个目录】—— 不折的话 Derrity/tinyserve 和 derrity/TinySERVE
-// 会得到两个看起来不同、实际是同一个的 pkg 目录，两个包共用一份文件，
-// 卸掉其中一个会把另一个的可执行文件一起删掉。折叠和转义一样是多对一的，
-// 唯一性由调用方缀上的原串 hash 还回来（见 safeSeg 和 manifestPath）。
+// Uppercase is folded to lowercase too, because APFS on macOS is case-insensitive
+// by default: "Foo" and "foo" are THE SAME DIRECTORY there. Without folding,
+// Derrity/tinyserve and derrity/TinySERVE would get two pkg directories that look
+// different and are actually one, two packages sharing one set of files, and
+// uninstalling either would delete the other's executable. Folding is many-to-one
+// just like escaping is; the caller hands uniqueness back by appending a hash of
+// the original string (see safeSeg and manifestPath).
 func safeSlug(s string) string {
 	if s == "" {
 		return "_"
@@ -273,25 +298,27 @@ func safeSlug(s string) string {
 			b = append(b, '_')
 		}
 	}
-	// 全是点（"." ".."）在文件系统里有特殊含义，换掉。
+	// All-dots ("." and "..") mean something special to the filesystem. Replace it.
 	if strings.Trim(string(b), ".") == "" {
 		b = []byte(strings.Repeat("_", len(b)))
 	}
-	const maxName = 96 // 留出 hash 后缀和扩展名的余量；全是 ASCII，截断不会切碎字符
+	const maxName = 96 // room for the hash suffix and extension; all ASCII, so truncation cannot split a character
 	if len(b) > maxName {
 		b = b[:maxName]
 	}
 	return string(b)
 }
 
-// safeSeg 是 safeSlug 加上「动过就缀 hash」。
+// safeSeg is safeSlug plus "append a hash if anything changed".
 //
-// 转义和小写折叠都是多对一的：owner "a/b" 和 "a:b" 都变成 "a_b"，"Foo" 和
-// "foo" 都变成 "foo"，超过 maxName 的两个名字截断后也一样 —— 两个不同的包
-// 于是共用一个安装目录，装后一个会盖掉前一个的文件，卸后一个会把前一个的
-// 可执行文件一起删掉。manifestPath 早就是这么解决的（见那里的注释），
-// 这里用同一招：slug 和原串一字不差才原样保留，所以常规路径仍然是
-// pkg/github/derrity-1f0a3c7d/tinyserve/1.2.3 这种还读得懂的样子。
+// Escaping and case folding are both many-to-one: owners "a/b" and "a:b" both
+// become "a_b", "Foo" and "foo" both become "foo", and two names longer than
+// maxName are identical once truncated. Two different packages would then share
+// one install directory: installing the second overwrites the first's files, and
+// uninstalling the second deletes the first's executable. manifestPath has solved
+// this all along (see the comment there); same trick here. A slug that matches the
+// original byte for byte is kept as-is, so ordinary paths still read like
+// pkg/github/derrity-1f0a3c7d/tinyserve/1.2.3.
 func safeSeg(s string) string {
 	slug := safeSlug(s)
 	if slug == s {
@@ -301,15 +328,18 @@ func safeSeg(s string) string {
 	return slug + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// redactURL 把 URL 里的密码换成 xxxxx（用标准库的 URL.Redacted）。
+// redactURL replaces the password in a URL with xxxxx (via the stdlib's
+// URL.Redacted).
 //
-// 用户完全可以写 `toy install https://u:hunter2@example.com/toy.toml`，
-// fetch 需要原样的 URL 去认证，但清单是长期躺在磁盘上、还会被打印出来的东西 ——
-// 一个装一次就把密码写进 ~/.toy/installed/*.toml 的包管理器不能叫安全边界。
-// 不是 URL（解析不了、或者压根没有密码）就原样返回。
+// A user is perfectly free to type `toy install https://u:hunter2@example.com/toy.toml`.
+// fetch needs the URL verbatim to authenticate, but a manifest is a file that sits
+// on disk long-term and gets printed. A package manager that writes your password
+// into ~/.toy/installed/*.toml on one install does not get to call itself a
+// security boundary. Anything that is not a URL (unparseable, or simply has no
+// password) comes back untouched.
 func redactURL(s string) string {
 	if !strings.Contains(s, "@") || !strings.Contains(s, "://") {
-		return s // 绝大多数地址没有凭据，不必解析
+		return s // the vast majority of URLs carry no credentials, no need to parse
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.User == nil {
@@ -326,8 +356,9 @@ func (s *Store) SaveManifest(m Manifest) error {
 	if err != nil {
 		return err
 	}
-	// 落盘之前把 URL 里的密码抹掉：清单是一个长期躺在磁盘上、还会被 `toy list`
-	// 打出来的文件，而 fetch 用的是内存里那份原样的 URL，不受影响。
+	// Strip the password before it hits disk: the manifest is a file that lives on
+	// disk and gets printed by `toy list`, while fetch uses the verbatim URL that
+	// is still in memory and is unaffected.
 	m.Source = redactURL(m.Source)
 	data, err := encodeTOML("# toy install manifest, generated. Delete it and this package can no longer be uninstalled or updated.", m)
 	if err != nil {
@@ -363,8 +394,9 @@ func readManifest(path string) (Manifest, error) {
 	return m, nil
 }
 
-// ListManifests 按 id 排序返回全部安装清单。
-// 读不动的清单直接报错而不是跳过 —— 静默跳过等于让那个包变成卸不掉的。
+// ListManifests returns every install manifest, sorted by id. A manifest we
+// cannot read is an error, not a skip: skipping it silently makes that package
+// impossible to uninstall.
 func (s *Store) ListManifests() ([]Manifest, error) {
 	dir := filepath.Join(s.Root, dirInstalled)
 	entries, err := os.ReadDir(dir)
@@ -404,8 +436,9 @@ func (s *Store) RemoveManifest(id string) error {
 	return nil
 }
 
-// FindByName 按命令名或包名找已装的包，用于 `toy uninstall tinyserve`。
-// 命中多个时返回 error 并列出候选，让用户写全 id。
+// FindByName looks up an installed package by command name or package name, for
+// `toy uninstall tinyserve`. On more than one hit it returns an error listing the
+// candidates so the user can retype the full id.
 func (s *Store) FindByName(name string) (Manifest, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -418,7 +451,7 @@ func (s *Store) FindByName(name string) (Manifest, error) {
 
 	var hits []Manifest
 	for _, m := range all {
-		// id 是唯一的，写全了就没有歧义可言，直接命中。
+		// An id is unique, so spelling it out leaves no ambiguity. Direct hit.
 		if m.ID == name {
 			return m, nil
 		}
@@ -442,7 +475,7 @@ func (s *Store) FindByName(name string) (Manifest, error) {
 	}
 }
 
-// manifestMatches：包名、仓库名，或者它建的任何一个软链的文件名。
+// manifestMatches: package name, repo name, or the basename of any symlink it created.
 func manifestMatches(m Manifest, name string) bool {
 	if m.Name == name || m.Repo == name {
 		return true
@@ -455,9 +488,10 @@ func manifestMatches(m Manifest, name string) bool {
 	return false
 }
 
-// Link 在 BinDir 里建一个指向 target 的软链。
-// 铁律 5：如果 name 已经存在于 PATH 上（且不是我们自己 BinDir 里的），
-// 返回 ErrShadow，除非 force。这一条堵掉 bin = "sudo" 这类提权。
+// Link creates a symlink in BinDir pointing at target.
+// Iron law 5: if name already exists on PATH (and is not one of ours in BinDir),
+// return ErrShadow unless force. This is what closes off bin = "sudo" and the
+// rest of that privilege-escalation family.
 func (s *Store) Link(name, target string, force bool) (string, error) {
 	if err := validLinkName(name); err != nil {
 		return "", err
@@ -466,14 +500,16 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("store: cannot resolve link target %q to an absolute path: %w", target, err)
 	}
-	// 相对目标会相对 bin/ 解析，几乎永远不是作者想要的；顺手确认它真的存在，
-	// 免得建出一条断链、用户运行时才看到「命令找不到」。
+	// A relative target resolves against bin/, which is essentially never what the
+	// author meant. While we are here, confirm it actually exists, so we do not
+	// create a dangling link the user only discovers as "command not found".
 	fi, err := os.Stat(absTarget)
 	if err != nil {
 		return "", fmt.Errorf("store: link target %s is unusable — the package may not contain that file; "+
 			"check the relative path on the right of toy.toml's [bin]: %w", absTarget, err)
 	}
-	// 链到一个目录上会造出一个「存在但跑不了」的命令，和断链是同一种坏法。
+	// Linking to a directory produces a command that exists but cannot run, which
+	// is broken the same way a dangling link is.
 	if fi.IsDir() {
 		return "", fmt.Errorf("store: link target %s is a directory, not an executable — "+
 			"toy.toml's [bin] must point at a file", absTarget)
@@ -482,12 +518,15 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 	binDir := s.BinDir()
 	linkPath := filepath.Join(binDir, name)
 
-	// 遮蔽检查放在「已存在」之前：它是安全判断，是那个必须让用户亲手 --force 的。
+	// The shadow check comes before the exists check: it is the security verdict,
+	// the one the user has to waive by hand with --force.
 	if !force {
-		// exec.LookPath 找到的东西落在一个相对 PATH 项里时（"." 或者最常见的
-		// PATH 里那个空项），Go 1.19 起会连同 exec.ErrDot 一起返回 —— 只判
-		// err == nil 的话，整条 PATH 的遮蔽检查会被这一个相对项静默关掉，
-		// 而 PATH="…:" 这种写法到处都是。它照样是 PATH 上一个同名的程序，算遮蔽。
+		// When exec.LookPath finds something inside a relative PATH entry ("." or,
+		// far more common, the empty entry in PATH), Go 1.19+ returns it together
+		// with exec.ErrDot. Checking only err == nil lets that one relative entry
+		// silently switch off the shadow check for the whole of PATH, and
+		// PATH="…:" is written like that everywhere. It is still a program of the
+		// same name on PATH, so it still counts as shadowing.
 		if found, err := exec.LookPath(name); err == nil || errors.Is(err, exec.ErrDot) {
 			if abs, aerr := filepath.Abs(found); aerr == nil {
 				found = abs
@@ -503,11 +542,13 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 		}
 	}
 
-	// 顶掉一条已经存在的软链 = 这个名字换了主人。别的包的清单里可能还记着它，
-	// 而那条记录会在 `toy uninstall 那个包` 时被当成「删我自己的链」执行掉 ——
-	// 删掉的其实是现在这个包的命令，新包的清单一个字没动，`toy list` 照样说它
-	// 装着，doctor 也看不出来（那不是悬空软链，是根本不存在）。所以在建链之前
-	// 先把过期的记录摘掉。放在建链【之前】：失败时什么都还没动。
+	// Replacing an existing symlink means this name changed owner. Another
+	// package's manifest may still list it, and `toy uninstall that-package` will
+	// act on that record as "delete my own link" — deleting the current package's
+	// command instead. The new package's manifest is untouched, `toy list` keeps
+	// claiming it is installed, and doctor cannot see it either (that is not a
+	// dangling symlink, it is nothing at all). So drop the stale record before
+	// creating the link. BEFORE, so that a failure here has changed nothing.
 	if _, err := os.Lstat(linkPath); err == nil {
 		if err := s.disownLink(linkPath, absTarget); err != nil {
 			return "", err
@@ -520,8 +561,9 @@ func (s *Store) Link(name, target string, force bool) (string, error) {
 	return linkPath, nil
 }
 
-// disownLink 把 linkPath 从所有「已经不再拥有它」的安装清单里删掉。
-// 拥有者的判据是软链此刻指向谁：目标落在哪个包的 PkgDir 里，这个名字就是谁的。
+// disownLink removes linkPath from every install manifest that no longer owns it.
+// Ownership is decided by where the symlink points right now: whichever package's
+// PkgDir the target falls inside is the package that owns the name.
 func (s *Store) disownLink(linkPath, newTarget string) error {
 	all, err := s.ListManifests()
 	if err != nil {
@@ -529,7 +571,7 @@ func (s *Store) disownLink(linkPath, newTarget string) error {
 	}
 	for _, m := range all {
 		if withinDir(m.PkgDir, newTarget) {
-			continue // 就是这个包自己在重装/升级，记录没过期
+			continue // this package is reinstalling/upgrading itself, the record is current
 		}
 		kept := make([]string, 0, len(m.Links))
 		for _, l := range m.Links {
@@ -549,7 +591,8 @@ func (s *Store) disownLink(linkPath, newTarget string) error {
 	return nil
 }
 
-// sameFile 比两条路径是不是同一个文件名（软链本身不解引用，它可能是断的）。
+// sameFile compares two paths for being the same filename. It does not
+// dereference the symlink itself, which may well be dangling.
 func sameFile(a, b string) bool {
 	if absA, err := filepath.Abs(a); err == nil {
 		a = absA
@@ -560,7 +603,8 @@ func sameFile(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
 }
 
-// withinDir 报告 path 是否在 dir 里面（或者就是 dir）。dir 为空一律 false。
+// withinDir reports whether path is inside dir (or is dir). An empty dir is
+// always false.
 func withinDir(dir, path string) bool {
 	if strings.TrimSpace(dir) == "" {
 		return false
@@ -575,24 +619,28 @@ func withinDir(dir, path string) bool {
 	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
 }
 
-// reservedLinkNames 是 toy 自己会按【名字】从 PATH 上 exec 的程序。
+// reservedLinkNames are the programs toy itself execs BY NAME off PATH.
 //
-// 遮蔽检查只挡「PATH 上已经存在」的同名程序（LookPath 找得到才算），所以在一台
-// 还没装 git 的机器上（macOS 没装 Xcode CLT、slim 容器、CI 基础镜像都是这样，
-// 而裸地址那条安装路径压根不需要 git），一个 toy.toml 写 [bin] git = "payload"
-// 就能干干净净地把 bin/git 占下来 —— 而 bin/ 正是 doctor 教用户放在 PATH 最前面
-// 的目录。装的那一刻确实一行都没跑（铁律 1 的字面意思成立），但下一条
-// `toy install github:…` / `toy update` / `toy publish` / `toy doctor` 就把它当
-// git 执行了，执行只是推迟了一条命令。
+// The shadow check only blocks a program of the same name that ALREADY EXISTS on
+// PATH (LookPath has to find it). So on a machine with no git installed — macOS
+// without the Xcode CLT, a slim container, a CI base image, all common, and the
+// bare-URL install path does not need git at all — a toy.toml with
+// [bin] git = "payload" claims bin/git cleanly. And bin/ is exactly the directory
+// doctor tells the user to put FIRST on PATH. Not one line ran at install time
+// (iron law 1 holds, literally), but the very next `toy install github:…` /
+// `toy update` / `toy publish` / `toy doctor` execs it as git. Execution was only
+// deferred by one command.
 //
-// --force 不放行：这跟 bin = "sudo" 不是一类风险，用户对着「确认要覆盖再加
-// --force」判断不出后果 —— 一个包没有任何正当理由要占住 toy 自己的工具链名字。
-// 以后 toy 多 exec 一个程序，这里就要多一行。
+// --force DOES NOT WAIVE THIS. It is not the same class of risk as
+// bin = "sudo": staring at "pass --force if you really mean it", a user cannot
+// work out the consequence, and no package has a legitimate reason to claim a
+// name out of toy's own toolchain. Every program toy learns to exec adds a line
+// here.
 var reservedLinkNames = map[string]bool{"git": true}
 
 func validLinkName(name string) error {
-	// 折成小写再比：macOS 的 APFS 和 Windows 都大小写不敏感，bin/GIT 在那里
-	// 就是 bin/git。
+	// Fold to lowercase before comparing: APFS on macOS and Windows are both
+	// case-insensitive, where bin/GIT simply is bin/git.
 	if reservedLinkNames[strings.ToLower(name)] {
 		return fmt.Errorf("store: command name %q is a program toy itself executes — letting it land in %s "+
 			"means the next toy command runs a file out of this package. --force does not waive this one", name, dirBin)
@@ -605,8 +653,9 @@ func validLinkName(name string) error {
 	case strings.ContainsRune(name, os.PathSeparator), strings.ContainsRune(name, '/'):
 		return fmt.Errorf("store: command name %q cannot contain a slash — it is a name on PATH, not a path", name)
 	case strings.TrimSpace(name) != name:
-		// 首尾空白的名字在 shell 里根本敲不出来，而它长得跟正常名字一模一样：
-		// "sudo " 既装得上又逃过遮蔽检查（LookPath("sudo ") 什么都找不到）。
+		// A name with leading or trailing whitespace cannot be typed in a shell,
+		// and it looks exactly like an ordinary name: "sudo " both installs and
+		// slips past the shadow check (LookPath("sudo ") finds nothing).
 		return fmt.Errorf("store: command name %q has leading or trailing whitespace — nobody can type that name", name)
 	}
 	for _, r := range name {
@@ -617,9 +666,10 @@ func validLinkName(name string) error {
 	return nil
 }
 
-// symlinkAtomic 先建一个临时名再 rename 顶上去。
-// 不用 remove-then-symlink：那中间有一段时间这个命令是不存在的，
-// 而这个名字很可能正被别的进程（或另一个 toy）用着。
+// symlinkAtomic creates a temp name first, then renames it into place.
+// Not remove-then-symlink: that leaves a window where the command does not
+// exist, and this name is quite possibly in use by another process (or another
+// toy) right then.
 func symlinkAtomic(target, linkPath string) error {
 	dir := filepath.Dir(linkPath)
 	var tmp string
@@ -644,9 +694,10 @@ func symlinkAtomic(target, linkPath string) error {
 	return nil
 }
 
-// Unlink 删掉一条我们建的软链。
-// 只删 BinDir 里面的东西：清单是磁盘上的文件，坏掉的清单不能变成
-// 「删 /usr/bin/sudo」的授权。已经不在了当成删过（uninstall 要可重入）。
+// Unlink deletes a symlink we created.
+// It only ever deletes things inside BinDir: a manifest is a file on disk, and a
+// corrupt manifest must not become authorization to "delete /usr/bin/sudo".
+// Already gone counts as deleted, because uninstall has to be re-runnable.
 func (s *Store) Unlink(path string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -663,14 +714,14 @@ func (s *Store) Unlink(path string) error {
 	return nil
 }
 
-// InPath 报告 BinDir 是否已经在用户的 PATH 里，toy doctor 用。
+// InPath reports whether BinDir is already on the user's PATH. Used by toy doctor.
 func (s *Store) InPath() bool { return onPath(s.BinDir(), os.Getenv("PATH")) }
 
 func onPath(dir, pathEnv string) bool {
 	want := canonDir(dir)
 	for _, e := range filepath.SplitList(pathEnv) {
 		if e == "" {
-			e = "." // POSIX：PATH 里的空项就是当前目录
+			e = "." // POSIX: an empty entry in PATH means the current directory
 		}
 		if canonDir(e) == want {
 			return true
@@ -681,8 +732,9 @@ func onPath(dir, pathEnv string) bool {
 
 func sameDir(a, b string) bool { return canonDir(a) == canonDir(b) }
 
-// canonDir 尽力把一个目录名规范化：先转绝对路径（PATH 里允许写相对项），
-// 再解符号链接（/usr/bin 常常是 /bin 的软链）。解不动就退回纯字符串比较。
+// canonDir normalizes a directory name as best it can: absolute first (PATH is
+// allowed to contain relative entries), then resolve symlinks (/usr/bin is
+// frequently a symlink to /bin). If that fails, fall back to string comparison.
 func canonDir(p string) string {
 	if abs, err := filepath.Abs(p); err == nil {
 		p = abs
@@ -693,7 +745,8 @@ func canonDir(p string) string {
 	return filepath.Clean(p)
 }
 
-// writeFileAtomic 同目录临时文件 + rename，避免写到一半断电留下半个清单。
+// writeFileAtomic writes a temp file in the same directory and renames it, so a
+// power cut mid-write cannot leave half a manifest behind.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -704,7 +757,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp) // rename 成功之后这一下是空操作
+	defer os.Remove(tmp) // a no-op once the rename has succeeded
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		return err
@@ -713,8 +766,9 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		f.Close()
 		return err
 	}
-	// rename 只保证元数据原子，不保证内容已经落盘 —— 少了这一下，断电后
-	// 可能留下一个长度为 0 的清单，而那正是这个函数说要防的事。
+	// rename only makes the metadata atomic, it does not guarantee the contents
+	// reached disk. Without this fsync a power cut can leave a zero-length
+	// manifest behind, which is precisely what this function claims to prevent.
 	if err := f.Sync(); err != nil {
 		f.Close()
 		return err

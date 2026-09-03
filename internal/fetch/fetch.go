@@ -1,4 +1,4 @@
-// Package fetch 下载、校验、缓存。规格 §8 的镜像回退也在这里。
+// Package fetch downloads, verifies and caches. The mirror fallback from spec §8 lives here too.
 package fetch
 
 import (
@@ -21,7 +21,8 @@ var (
 	ErrAllFailed = errors.New("fetch: could not fetch from the original URL or any mirror")
 )
 
-// Sink 是进度回调。定义在这里而不是依赖 ui，是为了让依赖方向朝下。
+// Sink is the progress callback. It is declared here rather than taken from ui
+// so that dependencies only ever point downward.
 type Sink interface {
 	Start(name string, total int64)
 	Add(n int64)
@@ -29,75 +30,86 @@ type Sink interface {
 }
 
 type Options struct {
-	SHA256   string   // 非空则强制校验，对不上返回 ErrChecksum 并删掉临时文件（铁律 4）
-	Mirrors  []string // 镜像 base；镜像地址 = base + "/" + sha256（只在有 SHA256 时可用）
-	CacheDir string   // 空表示不缓存
-	Sink     Sink     // 可为 nil
-	Name     string   // 显示用
-	// MaxBytes 是 Get 落盘的字节上限，<=0 取 DefaultMaxBytes。
-	// 判据是【实际写进来的字节数】，不是 Content-Length —— 声明 1 KiB 然后 chunked
-	// 吐到天亮的服务器正是这条上限要挡的东西，信它自报的长度等于没有上限。
-	// GetBytes 不看这个字段，它有自己更小的固定上限（maxBytes）。
+	SHA256   string   // non-empty means verification is mandatory; a mismatch returns ErrChecksum and deletes the temp file (rule 4)
+	Mirrors  []string // mirror bases; a mirror URL is base + "/" + sha256 (only usable when SHA256 is set)
+	CacheDir string   // empty means no caching
+	Sink     Sink     // may be nil
+	Name     string   // for display
+	// MaxBytes caps what Get writes to disk; <=0 means DefaultMaxBytes.
+	// The test is the number of bytes ACTUALLY WRITTEN, never Content-Length -- a server
+	// that declares 1 KiB and then streams chunked until morning is exactly what this cap
+	// is here to stop, and trusting its self-reported length is the same as having no cap.
+	// GetBytes ignores this field; it has its own, much smaller fixed cap (maxBytes).
 	MaxBytes int64
 }
 
 type Result struct {
-	Path      string // 落地的文件路径（缓存里或临时目录里）
-	SHA256    string // 实际算出来的
+	Path      string // where the file landed (in the cache or in a temp dir)
+	SHA256    string // what we actually computed
 	FromCache bool
-	// Source 是实际成功的那个 URL，用于如实告知用户（铁律 8）。
+	// Source is the URL that actually succeeded, so we can tell the user the truth (rule 8).
 	//
-	// 它是【原样】的地址，可能带着用户自己写在 URL 里的凭据
-	// （`toy install https://u:p@host/toy.toml` 之后 ResolveReference 会把 userinfo
-	// 带到 artifact 地址上）。这里故意不 redact：调用方要拿它和请求的原始 URL 做
-	// 等值比较来判断"这份字节是不是来自镜像"，抹掉一边就永远不相等了。
-	// 打印和落盘各自在出口处抹（ui 的 redactURLs、store 存清单时的 redactURL）。
-	// fetch 自己拼的每一条【错误信息】里的地址则一律是抹过的，见 redactURL。
+	// It is the VERBATIM address, possibly still carrying credentials the user wrote into
+	// the URL themselves (after `toy install https://u:p@host/toy.toml`, ResolveReference
+	// carries the userinfo over to the artifact URL). Redacting here is deliberately NOT
+	// done: the caller compares this against the originally requested URL to decide
+	// "did these bytes come from a mirror?", and redacting one side means they never match
+	// again. Redaction happens at each exit instead (ui's redactURLs, store's redactURL
+	// when writing the manifest).
+	// Every ERROR MESSAGE fetch builds itself always carries a redacted address; see redactURL.
 	Source string
 }
 
 const (
-	// maxBytes 是 GetBytes 的上限。这条路只用来取 toy.toml 和索引 JSON，
-	// 32 MiB 足够有余，同时挡住一个坏 URL 把内存吃光。
+	// maxBytes caps GetBytes. This path only fetches toy.toml and index JSON, so
+	// 32 MiB is plenty of headroom while still stopping a bad URL from eating all memory.
 	maxBytes = 32 << 20
-	// maxRedirects 跟随重定向但不无限跟，避免转圈。
+	// maxRedirects follows redirects but not forever, so we never spin in a loop.
 	maxRedirects = 10
-	// DefaultMaxBytes 是 Get（artifact 下载）默认的落盘上限，Options.MaxBytes 可以覆盖。
+	// DefaultMaxBytes is the default on-disk cap for Get (artifact downloads); Options.MaxBytes overrides it.
 	//
-	// 取 2 GiB 是为了和 archive.MaxTotalBytes 对齐：解压【之后】的总字节都不许超过
-	// 这个数，那么压缩包本身再大也没有意义 —— 多下来的字节唯一的用途就是把用户的盘
-	// 写满。这里不 import archive 拿那个常量，是为了不让 fetch 依赖它（依赖方向朝下，
-	// 和 Sink 不依赖 ui 是同一个理由）；两处写死同一个数并互相注明。
+	// 2 GiB lines up with archive.MaxTotalBytes: the total AFTER extraction may not exceed
+	// that number, so a larger archive buys nothing -- the only use for those extra bytes
+	// is filling up the user's disk. We deliberately do not import archive for the constant,
+	// to keep fetch from depending on it (dependencies point downward, same reason Sink does
+	// not depend on ui); both sides hardcode the same number and point at each other.
 	DefaultMaxBytes = 2 << 30
 )
 
 var client = &http.Client{
-	// 整次下载的兜底上限。真正的"服务器没反应"由 ResponseHeaderTimeout 更快地发现。
+	// Backstop for the whole download. "The server went silent" is caught much sooner
+	// by ResponseHeaderTimeout.
 	Timeout: 30 * time.Minute,
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
-		// 必须关掉透明压缩：Go 会自己加 Accept-Encoding: gzip 再自己解开，
-		// 那样我们算的 hash 是【解压后】的字节，而发布者算的是 release 资产文件本身。
-		// 后果一是有 [sha256] 的包全部误报"校验失败"，二是没有 hash 的 TOFU 路径会把
-		// 错的字节以错的 hash 钉住并存进 cache/<hash> —— 而那个目录就是 toy serve 的镜像源（规格 §6/§8）。
-		// 规矩：算 hash 的字节必须就是线上的字节。
+		// Transparent compression MUST stay off: Go would add Accept-Encoding: gzip on its
+		// own and transparently decompress, so the hash we compute would be of the
+		// DECOMPRESSED bytes while the publisher hashed the release asset file itself.
+		// Consequence one: every package with a [sha256] reports a bogus "checksum mismatch".
+		// Consequence two: on the TOFU path (no hash) we would pin the wrong bytes under the
+		// wrong hash and store them at cache/<hash> -- and that directory is exactly what
+		// toy serve hands out as a mirror (spec §6/§8).
+		// The rule: the bytes we hash must be the bytes on the wire.
 		DisableCompression: true,
 	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
 			return fmt.Errorf("more than %d redirects; this looks like a redirect loop", maxRedirects)
 		}
-		// https 一旦被重定向到 http 就当场拒绝（反过来是升级，放行）。
-		// 明文链路上任何人都能改字节：对有 [sha256] 的 artifact 哈希还兜得住，
-		// 但 GetBytes 拉 toy.toml 和索引的时候【没有任何哈希】—— 而那两样东西
-		// 恰恰决定了"接下来去下载什么、拿什么 hash 去比"。降级发生在那里，
-		// 后面所有的校验都是在校验攻击者说了算的那份清单。
+		// Once we are on https, a redirect down to http is refused on the spot (the other
+		// direction is an upgrade, so it is allowed).
+		// Anyone on a plaintext hop can rewrite the bytes: for an artifact with a [sha256]
+		// the hash still catches it, but when GetBytes fetches toy.toml and the index there
+		// is NO HASH AT ALL -- and those two are precisely what decides "what do we download
+		// next, and which hash do we compare against". A downgrade there means every check
+		// afterwards is validating a manifest the attacker wrote.
 		//
-		// 扫整条 via 而不是只看上一跳：http→https→http 的中间那一跳会让
-		// "只比上一跳"漏掉，而链路的安全性取决于最弱的一段。
+		// Scan the whole via chain, not just the previous hop: http->https->http would slip
+		// past a "compare with the last hop" check, and a chain is only as safe as its
+		// weakest segment.
 		if req.URL.Scheme != "https" {
 			for _, prev := range via {
 				if prev.URL.Scheme == "https" {
@@ -111,14 +123,14 @@ var client = &http.Client{
 	},
 }
 
-// nopSink 让 Options.Sink 为 nil 时不用到处判空。
+// nopSink saves every call site from a nil check when Options.Sink is unset.
 type nopSink struct{}
 
 func (nopSink) Start(string, int64) {}
 func (nopSink) Add(int64)           {}
 func (nopSink) Done(error)          {}
 
-// sinkWriter 把写入的字节数转成进度。
+// sinkWriter turns bytes written into progress.
 type sinkWriter struct{ s Sink }
 
 func (w sinkWriter) Write(p []byte) (int, error) {
@@ -126,9 +138,10 @@ func (w sinkWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// normalize 统一可选字段，顺便挡住畸形的 sha256。
-// sha256 会被当成缓存里的文件名和镜像 URL 的路径段，而它来自网络上的 toy.toml ——
-// 不校验格式的话，一个 "../../x" 就能写到缓存目录外面去。
+// normalize settles the optional fields and rejects a malformed sha256 along the way.
+// That sha256 becomes a file name inside the cache and a path segment in mirror URLs,
+// and it arrives from a toy.toml somewhere on the network -- without a format check,
+// a single "../../x" writes outside the cache directory.
 func normalize(opt *Options) error {
 	if opt.Sink == nil {
 		opt.Sink = nopSink{}
@@ -146,19 +159,22 @@ func normalize(opt *Options) error {
 	return nil
 }
 
-// redactURL 把地址里的密码换成 xxxxx（标准库的 URL.Redacted），用户名留着 ——
-// 只有用户名不是秘密，抹掉反而让人对不上自己写的地址。
+// redactURL replaces the password in an address with xxxxx (the standard library's
+// URL.Redacted) and keeps the user name -- only the password is a secret, and blanking
+// the user name just leaves people unable to recognise the address they typed.
 //
-// 必须在【拼错误信息的这一刻】就抹，不能只靠 ui 那一层兜底：error 对象本身会
-// 进日志、进 `--json`、进任何不经过 ui 的路径，而 `toy install
-// https://u:hunter2@host/toy.toml` 是一个完全正常的用法。net/http 返回的 *url.Error
-// 【大多】已经抹过了（stripPassword），唯独 CheckRedirect 失败那条路没有 —— 见 open。
+// It has to happen AT THE MOMENT the error message is built; leaning on the ui layer as a
+// backstop is not enough. The error value itself goes into logs, into `--json`, into every
+// path that never touches ui -- and `toy install https://u:hunter2@host/toy.toml` is a
+// perfectly ordinary thing to do. The *url.Error values net/http returns are MOSTLY already
+// redacted (stripPassword); the one path that is not is a CheckRedirect failure -- see open.
 //
-// 解析不了或者压根没有 userinfo 就原样返回：这条路上的"地址"也可能是 file://
-// 或者一段本来就不是 URL 的东西，不认识就别乱动。
+// If it does not parse, or there is no userinfo at all, return it untouched: an "address"
+// on this path may well be a file:// URL or something that was never a URL to begin with,
+// and we do not mangle what we do not recognise.
 func redactURL(s string) string {
 	if !strings.Contains(s, "@") {
-		return s // 绝大多数地址里没有凭据，不进 url.Parse
+		return s // the vast majority of addresses carry no credentials; skip url.Parse
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.User == nil {
@@ -167,8 +183,9 @@ func redactURL(s string) string {
 	return u.Redacted()
 }
 
-// sources 返回按顺序尝试的地址：原始地址在前，镜像在后。
-// 没有 sha256 就不给镜像 —— 拿不到 hash 就无法验证镜像的内容，那时候用镜像等于信任陌生人（规格 §8）。
+// sources returns the addresses to try, in order: the original first, mirrors after.
+// No sha256 means no mirrors -- without a hash there is no way to verify what a mirror
+// hands back, and using one at that point is simply trusting a stranger (spec §8).
 func sources(u string, opt Options) []string {
 	out := []string{u}
 	if opt.SHA256 == "" {
@@ -183,8 +200,8 @@ func sources(u string, opt Options) []string {
 	return out
 }
 
-// open 打开一个来源，返回内容流和已知长度（未知是 -1）。
-// file:// 走 os.Open，不塞给 http.Client。
+// open opens one source and returns the content stream plus the known length (-1 if unknown).
+// file:// goes through os.Open; it never reaches http.Client.
 func open(ctx context.Context, src string) (io.ReadCloser, int64, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
@@ -210,11 +227,11 @@ func open(ctx context.Context, src string) (io.ReadCloser, int64, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		// net/http 自己填进 url.Error 的地址是抹过密码的（stripPassword），
-		// 唯独 CheckRedirect 失败这一条路上它把 Location 头【原样】塞回去
-		// （client.go 里那句 `ue.(*url.Error).URL = loc`）—— 于是一个把你
-		// 重定向到 https://u:p@… 的上游，能借这条路把凭据写进我们的错误里。
-		// 在这里就地抹掉，这样出 fetch 的每一个 error 都是干净的。
+		// The address net/http puts into url.Error is password-stripped (stripPassword)
+		// on every path but one: when CheckRedirect fails it stuffs the Location header
+		// back VERBATIM (that `ue.(*url.Error).URL = loc` line in client.go). So an upstream
+		// that redirects you to https://u:p@... can use that path to write credentials into
+		// our error. Scrub it right here, so every error leaving fetch is clean.
 		var ue *url.Error
 		if errors.As(err, &ue) {
 			ue.URL = redactURL(ue.URL)
@@ -223,13 +240,15 @@ func open(ctx context.Context, src string) (io.ReadCloser, int64, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		// 404 要能被调用方【按类型】认出来，不能让它去匹配错误文本：resp.Status
-		// 里的原因短语是服务器原样发来的，一台上游随便回一句
-		// `HTTP/1.1 500 HTTP 404 Not Found` 就能让任何 strings.Contains("HTTP 404")
-		// 的判断当成"不存在"。谁把 404 当成一个决策（比如"上游确实没有 toy.toml，
-		// 可以退到索引内联那份"），谁就必须拿到状态码本身。
-		// 复用 fs.ErrNotExist 而不是自造哨兵：file:// 那条路上 os.Open 给的就是它，
-		// 两条路合成同一个判断，调用方只写一个 errors.Is。
+		// A 404 must be recognisable BY TYPE; callers must never have to match on error
+		// text. The reason phrase in resp.Status is whatever the server chose to send, so
+		// one upstream answering `HTTP/1.1 500 HTTP 404 Not Found` is enough to make any
+		// strings.Contains("HTTP 404") check read a server failure as "does not exist".
+		// Anyone turning a 404 into a decision (say, "upstream really has no toy.toml, so
+		// fall back to the index's inline copy") must get the status code itself.
+		// We reuse fs.ErrNotExist instead of inventing a sentinel: on the file:// path that
+		// is exactly what os.Open returns, so both paths collapse into a single check and
+		// the caller writes one errors.Is.
 		err := fmt.Errorf("HTTP %s", resp.Status)
 		if resp.StatusCode == http.StatusNotFound {
 			err = fmt.Errorf("%w: %w", os.ErrNotExist, err)
@@ -250,27 +269,29 @@ func filePath(src string) (string, error) {
 	if u.Path == "" {
 		return "", fmt.Errorf("file:// URL %q has no path", src)
 	}
-	// 调用方一般是 "file://" + 路径拼出来的。路径里只要有 ? 或 #，url.Parse 会把它
-	// 之后的部分切成 query/fragment，于是我们【静默地打开另一个文件】——
-	// file:///x/a#b 会去开 /x/a。文件地址不该有这两样，宁可报错也不猜（铁律 8）。
+	// Callers usually build these by concatenating "file://" with a path. A ? or # anywhere
+	// in that path makes url.Parse cut everything after it into query/fragment, and we would
+	// then SILENTLY OPEN A DIFFERENT FILE -- file:///x/a#b would read /x/a. A file address
+	// has no business carrying either; refuse rather than guess (rule 8).
 	if u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("file:// URL %q contains ? or #; those get parsed as query/fragment and would silently open a different file. If the name really contains them, escape as %%3F / %%23", src)
 	}
 	return filepath.FromSlash(u.Path), nil
 }
 
-// Get 下载到本地文件。有 CacheDir 且 SHA256 命中缓存时直接返回。
-// 原始地址失败（网络错、4xx、5xx、校验不过）就按顺序试 Mirrors，
-// 每一个镜像的内容一律重新验 hash —— 所以镜像不需要被信任。
+// Get downloads to a local file. With a CacheDir set and a SHA256 that hits the cache,
+// it returns immediately. If the original address fails (network error, 4xx, 5xx, bad
+// checksum) it walks Mirrors in order, and every mirror's content is hashed again from
+// scratch -- which is why a mirror never has to be trusted.
 //
-// CacheDir 为空时结果落在系统临时目录里，那个文件归调用方处置。
+// With an empty CacheDir the result lands in the system temp directory and belongs to the caller.
 func Get(ctx context.Context, u string, opt Options) (Result, error) {
 	if err := normalize(&opt); err != nil {
 		return Result{}, err
 	}
 
-	// 命中的判据是"文件在 且 重新算一遍对得上"。只看文件在不在的话，
-	// 一个被截断或被改过的缓存文件会被当成好的直接装上去。
+	// A hit means "the file is there AND rehashing it still matches". Checking only that
+	// the file exists would let a truncated or tampered cache file be installed as-is.
 	if opt.CacheDir != "" && opt.SHA256 != "" {
 		p := filepath.Join(opt.CacheDir, opt.SHA256)
 		if sum, err := SumFile(p); err == nil && sum == opt.SHA256 {
@@ -289,13 +310,15 @@ func Get(ctx context.Context, u string, opt Options) (Result, error) {
 			break
 		}
 	}
-	// 每条子错误自己已经带上了是哪个地址，这里不再重复一遍 u ——
-	// 没有镜像的时候那就是同一个地址连写两次，读起来像出了两次错。
+	// Each sub-error already names its own address, so we do not repeat u here --
+	// with no mirrors configured that would print the same address twice and read
+	// like two separate failures.
 	return Result{}, fmt.Errorf("%w: %w", ErrAllFailed, errors.Join(errs...))
 }
 
-// fetchOne 从一个来源取到本地：先写临时文件，边写边算 hash，验过了才原子 rename
-// 进缓存。所以缓存目录里永远不会出现半个文件。
+// fetchOne pulls one source to disk: write a temp file, hash while writing, and only
+// rename it atomically into the cache once it verifies. So the cache directory never
+// contains half a file.
 func fetchOne(ctx context.Context, src string, opt Options) (res Result, err error) {
 	dir := opt.CacheDir
 	if dir != "" {
@@ -303,7 +326,8 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 			return Result{}, fmt.Errorf("cannot create cache directory %s: %w", dir, err)
 		}
 	}
-	// 临时文件和最终位置必须在同一个目录里，跨文件系统的 rename 不是原子的（而且会直接失败）。
+	// The temp file and the final location must sit in the same directory; a rename across
+	// file systems is not atomic (and simply fails).
 	tmp, err := os.CreateTemp(dir, ".toy-tmp-*")
 	if err != nil {
 		return Result{}, fmt.Errorf("cannot create temp file: %w", err)
@@ -313,7 +337,7 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 	defer func() {
 		tmp.Close()
 		if !placed {
-			// 校验不过、中途断了、写盘失败 —— 一律不留残骸（铁律 4）。
+			// Bad checksum, connection dropped, write failed -- leave no wreckage, ever (rule 4).
 			os.Remove(tmpName)
 		}
 		if started {
@@ -334,14 +358,15 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 	if limit <= 0 {
 		limit = DefaultMaxBytes
 	}
-	// 多读一个字节，好区分"正好到上限"和"超了"。
+	// Read one extra byte so "exactly at the limit" and "over it" stay distinguishable.
 	n, err := io.Copy(io.MultiWriter(tmp, h, sinkWriter{opt.Sink}), io.LimitReader(body, limit+1))
 	if err != nil {
 		return Result{}, fmt.Errorf("download interrupted: %w", err)
 	}
-	// 判据是【真正写进来的字节数】，不是 total —— 那只是服务器自己说的 Content-Length，
-	// chunked 响应压根没有这个头，而报一个大得离谱的数也不要钱。半截文件由上面的
-	// defer 删掉（placed 还是 false），所以缓存目录里不会留下残骸（铁律 4 那条同样成立）。
+	// The test is the BYTES ACTUALLY WRITTEN, not total -- that is just the Content-Length
+	// the server claimed, a chunked response has no such header at all, and reporting an
+	// absurdly large number costs nothing. The partial file is removed by the defer above
+	// (placed is still false), so no wreckage is left in the cache (rule 4 holds here too).
 	if n > limit {
 		err = fmt.Errorf("download exceeded the %d MiB size limit; aborted and the partial file was deleted. "+
 			"The count is the bytes actually written, not the length the server claimed. "+
@@ -360,7 +385,8 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 
 	path := tmpName
 	if opt.CacheDir != "" {
-		// 缓存文件名就是内容 hash，所以缓存目录天然可以直接当镜像目录用（规格 §8）。
+		// The cache file name is the content hash, which is what makes the cache directory
+		// usable as a mirror directory with no extra work (spec §8).
 		if err = os.Chmod(tmpName, 0o644); err != nil {
 			return Result{}, err
 		}
@@ -373,8 +399,8 @@ func fetchOne(ctx context.Context, src string, opt Options) (res Result, err err
 	return Result{Path: path, SHA256: sum, Source: src}, nil
 }
 
-// GetBytes 用于小文件（toy.toml、索引 JSON）。支持 file:// 和 https://。
-// 必须有大小上限，防止一个坏 URL 把内存吃光。
+// GetBytes is for small files (toy.toml, index JSON). It supports file:// and https://.
+// A size cap is mandatory here, so that a bad URL cannot eat all available memory.
 func GetBytes(ctx context.Context, u string, opt Options) ([]byte, error) {
 	if err := normalize(&opt); err != nil {
 		return nil, err
@@ -400,7 +426,7 @@ func getBytesOne(ctx context.Context, src string, opt Options) ([]byte, error) {
 	}
 	defer body.Close()
 
-	// 多读一个字节，好区分"正好到上限"和"超了"。
+	// Read one extra byte so "exactly at the limit" and "over it" stay distinguishable.
 	b, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
 	if err != nil {
 		return nil, err
@@ -417,7 +443,7 @@ func getBytesOne(ctx context.Context, src string, opt Options) ([]byte, error) {
 	return b, nil
 }
 
-// SumFile 算一个已有文件的 sha256（hex）。
+// SumFile computes the sha256 (hex) of an existing file.
 func SumFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

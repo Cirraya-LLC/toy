@@ -1,7 +1,8 @@
 package main
 
-// GitHub 的仓库/发布信息。**只有这个二进制会碰托管方的 REST API**，
-// 理由见 main.go 的包注释（规格 §2：客户端那一侧一条都不许有）。
+// Repo/release facts from GitHub. THIS BINARY IS THE ONLY ONE THAT TOUCHES A HOST'S
+// REST API -- the reasoning is in main.go's package comment (spec §2: not one call
+// allowed on the client side).
 
 import (
 	"context"
@@ -15,50 +16,56 @@ import (
 	"time"
 )
 
-// 三种「这个仓库产不出条目」的失败各自要说不同的人话，所以是三个哨兵而不是
-// 一句 error string。分类判断一律走 errors.Is，绝不按错误文本匹配 ——
-// 那段文本里有服务器原样发来的内容（同规格 §5.1 第 3 条、§14.10 第 1 条）。
+// The three flavours of "this repo cannot produce an entry" each need to say something
+// different in plain words, so they are three sentinels rather than one error string.
+// Classification always goes through errors.Is, NEVER by matching error text -- that
+// text carries content the server wrote verbatim (same as spec §5.1 rule 3 and §14.10
+// point 1).
 var (
 	errNoRepo      = errors.New("repo does not exist, or is private and invisible to this token")
 	errNoRelease   = errors.New("this repo has never published a release")
 	errRateLimited = errors.New("host API rate limit")
 )
 
-// ghMaxBody 是单次 API 响应的读取上限。响应是远端内容，不设上限等于让上游
-// 决定我们的内存用量；一个仓库的 release 元数据几十 KB 就够了，4 MiB 极宽松。
+// ghMaxBody caps how much of one API response we read. The response is remote content,
+// and no cap means upstream decides our memory use; a repo's release metadata is tens of
+// KB, so 4 MiB is wildly generous.
 const ghMaxBody = 4 << 20
 
-// repoInfo 是一个仓库产出一条索引条目所需要的全部远端事实。
+// repoInfo is every remote fact needed to produce one index entry for a repo.
 //
-// Assets 只有**文件名**，故意不带下载地址：地址由 host 模板 + tag 拼
-// （规格 §5.1 —— 索引能改的是「装哪个」，不是「从哪装」）。把 API 给的
-// browser_download_url 记下来会让这条边界多一个可以被绕过的地方。
+// Assets holds FILENAMES ONLY, deliberately without download URLs: the URL is built from
+// the host template plus the tag (spec §5.1 -- what the index can change is WHICH asset,
+// not WHERE it comes from). Recording the browser_download_url the API hands us would
+// give that boundary one more place to be bypassed.
 type repoInfo struct {
 	Desc     string
 	Homepage string
 	License  string
 	Stars    int
-	Tag      string   // 最新 release 的 tag，原样（通常带 v）
-	Assets   []string // 资产文件名
+	Tag      string   // the latest release's tag, verbatim (usually with a v)
+	Assets   []string // asset filenames
 }
 
-// provider 是「从一个托管方读一个仓库的发布事实」。
+// provider is "read one repo's release facts from one host".
 //
-// 现在只有 GitHub 一个实现。留这个形状是因为 GitLab 的 releases API
-// （GET /projects/:id/releases，资产在 assets.links[].name）字段名完全不同，
-// 接第二家的时候要动的只有这一个方法，gen 那条流水线一个字都不用改。
+// GitHub is the only implementation today. The shape stays because GitLab's releases API
+// (GET /projects/:id/releases, assets under assets.links[].name) uses entirely different
+// field names: adding a second host means touching this one method and nothing in the
+// gen pipeline.
 type provider interface {
 	Fetch(ctx context.Context, owner, repo string) (repoInfo, error)
-	// Quota 是最近一次请求之后剩下的配额，给报告结尾用。还不知道就返回空串。
+	// Quota is the quota left after the most recent request, for the end of the report.
+	// Returns an empty string when it is not known yet.
 	Quota() string
 }
 
 type ghClient struct {
-	base  string // API 根，测试用 httptest 替掉
+	base  string // API root; tests swap in an httptest server
 	token string
 	hc    *http.Client
 
-	remaining int // -1 表示还不知道
+	remaining int // -1 means not known yet
 	limit     int
 	reset     time.Time
 }
@@ -117,8 +124,8 @@ func (c *ghClient) Fetch(ctx context.Context, owner, repo string) (repoInfo, err
 	}
 	if err := c.get(ctx, "/repos/"+owner+"/"+repo+"/releases/latest", &rel); err != nil {
 		if errors.Is(err, errNoRepo) {
-			// 这条路上的 404 说的是「没有 release」而不是「没有这个仓库」——
-			// 上面那次请求已经证明仓库在。
+			// A 404 on this path means "no release", not "no such repo" -- the request
+			// above already proved the repo is there.
 			return repoInfo{}, errNoRelease
 		}
 		return repoInfo{}, err
@@ -134,8 +141,9 @@ func (c *ghClient) Fetch(ctx context.Context, owner, repo string) (repoInfo, err
 		Stars:    meta.Stars,
 		Tag:      rel.Tag,
 	}
-	// GitHub 对没有 license 的仓库给的是 "NOASSERTION"，那不是一个 SPDX 标识符，
-	// 写进 toy.toml 只会让读的人以为是某种许可证。
+	// GitHub reports "NOASSERTION" for repos with no license. That is not an SPDX
+	// identifier, and writing it into toy.toml only makes readers think it names some
+	// kind of licence.
 	if info.License == "NOASSERTION" {
 		info.License = ""
 	}
@@ -152,7 +160,7 @@ func (c *ghClient) get(ctx context.Context, path string, v any) error {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "toy-index") // GitHub 没有 UA 一律 403
+	req.Header.Set("User-Agent", "toy-index") // GitHub 403s anything without a UA
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -168,8 +176,9 @@ func (c *ghClient) get(ctx context.Context, path string, v any) error {
 	case resp.StatusCode == http.StatusNotFound:
 		return errNoRepo
 	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests:
-		// 403 在 GitHub 上既是限流也是权限不足，靠剩余配额区分：
-		// 报错文案指错方向的话，人会去查 token 权限而不是去等配额。
+		// On GitHub a 403 means both "rate limited" and "not enough permission"; the
+		// remaining quota tells them apart. Point the message the wrong way and people go
+		// audit token scopes instead of waiting for the quota to reset.
 		if c.remaining == 0 {
 			return fmt.Errorf("%w: %s", errRateLimited, c.Quota())
 		}
@@ -178,7 +187,7 @@ func (c *ghClient) get(ctx context.Context, path string, v any) error {
 		return fmt.Errorf("%s returned HTTP %d", path, resp.StatusCode)
 	}
 
-	// 响应是远端内容：不限长等于让上游决定我们的内存用量。
+	// The response is remote content: no length limit means upstream decides our memory use.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, ghMaxBody+1))
 	if err != nil {
 		return fmt.Errorf("reading the response from %s failed: %w", path, err)

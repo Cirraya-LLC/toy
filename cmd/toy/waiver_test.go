@@ -1,9 +1,11 @@
 package main
 
-// --force 收窄之后它还管着五件事（哈希 / 公钥 / 遮蔽 / 信任降级 / 来源）。
-// 铁律 8 要求信任状态如实打印给用户看 —— 一次**静默的**放行等于没有这道检查，
-// 所以这里逐条钉住「真的放行时必须说出放行了什么」。
-// 哈希和公钥那两条在 hash_audit_test.go / sign_audit_test.go 里，这里是剩下三条。
+// After --force was narrowed it still governs five things (checksum / author key /
+// shadowing / trust downgrade / source). Iron law 8 says the trust state has to be
+// printed honestly for the user — a SILENT waiver is the same as not having the
+// check at all — so this file pins, one by one, that a real waiver has to say what
+// it waived. Checksum and author key live in hash_audit_test.go and
+// sign_audit_test.go; the other three are here.
 
 import (
 	"context"
@@ -17,8 +19,9 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/index"
 )
 
-// 来源变了：索引条目只是个指针，改一行 source 就能把已装的命令换成另一个仓库的
-// 内容。--force 放行得了，但不能不吭声。
+// The source changed: an index entry is just a pointer, and editing one line of
+// source swaps the content behind an installed command for another repo's.
+// --force may waive it, but not without a word.
 func TestForceAnnouncesASourceChange(t *testing.T) {
 	fh := audNewFakeHost(t)
 	fh.publish(t, "alice", "tool", "v1.0.0", "#!/bin/sh\necho GOOD\n")
@@ -27,25 +30,26 @@ func TestForceAnnouncesASourceChange(t *testing.T) {
 
 	writeIdx("fake:alice/tool")
 	if err := runInstall(context.Background(), []string{"alice/tool"}); err != nil {
-		t.Fatalf("装不上：%v", err)
+		t.Fatalf("install failed: %v", err)
 	}
 	writeIdx("fake:bob/tool")
 
 	if err := runInstall(context.Background(), []string{"alice/tool"}); err == nil {
-		t.Fatal("来源变了却一声不吭地装上了")
+		t.Fatal("the source changed and it installed without a word")
 	}
 	out := captureStderr(t, func() {
 		if err := runInstall(context.Background(), []string{"--force", "alice/tool"}); err != nil {
-			t.Fatalf("确认之后还是装不上：%v", err)
+			t.Fatalf("still cannot install after confirming: %v", err)
 		}
 	})
 	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "fake:bob/tool") {
-		t.Fatalf("--force 把来源变更放行了，输出里却看不出换到了哪个仓库：\n%s", out)
+		t.Fatalf("--force waived a source change and the output does not say which repo it moved to:\n%s", out)
 	}
 }
 
-// 信任降级：索引条目上的 sig 被摘掉，「✓ 已签名」会悄悄变成「· 来源 …」。
-// TOFU 记的是「上次是什么样」，所以这一条也要停下来，放行时也要说。
+// Trust downgrade: strip the sig off an index entry and "✓ signed" quietly turns
+// into "· source …". TOFU records what it looked like last time, so this has to
+// stop too — and say so when it is waived.
 func TestForceAnnouncesATrustDowngrade(t *testing.T) {
 	fh := audNewFakeHost(t)
 	fh.publish(t, "alice", "tool", "v1.0.0", "#!/bin/sh\necho GOOD\n")
@@ -58,10 +62,10 @@ func TestForceAnnouncesATrustDowngrade(t *testing.T) {
 	idxPath := sgnSignedIndexPath(t, home)
 	sgnWriteSignedIndex(t, idxPath, "alice/tool", "fake:alice/tool", raw, sgnKey(t))
 	if err := runInstall(context.Background(), []string{"alice/tool"}); err != nil {
-		t.Fatalf("装不上：%v", err)
+		t.Fatalf("install failed: %v", err)
 	}
 
-	// 同一条记录，sig 和 key 被摘掉了。
+	// Same record, sig and key removed.
 	b, err := json.Marshal(index.Index{Version: 1, Packages: []index.Entry{
 		{ID: "alice/tool", Source: "fake:alice/tool", Desc: "d"},
 	}})
@@ -73,20 +77,21 @@ func TestForceAnnouncesATrustDowngrade(t *testing.T) {
 	}
 
 	if err := runInstall(context.Background(), []string{"--reinstall", "alice/tool"}); err == nil {
-		t.Fatal("那个勾悄悄没掉了，却照装不误")
+		t.Fatal("the check mark quietly disappeared and it installed anyway")
 	}
 	out := captureStderr(t, func() {
 		if err := runInstall(context.Background(), []string{"--reinstall", "--force", "alice/tool"}); err != nil {
-			t.Fatalf("确认之后还是装不上：%v", err)
+			t.Fatalf("still cannot install after confirming: %v", err)
 		}
 	})
 	if !strings.Contains(out, "--force waived") || !strings.Contains(out, "signed") {
-		t.Fatalf("--force 放行了一次信任降级，输出里却没说这个包不再是已签名的了：\n%s", out)
+		t.Fatalf("--force waived a trust downgrade and never said this package is no longer signed:\n%s", out)
 	}
 }
 
-// 命令名遮蔽（铁律 5）：`bin = "sudo"` 那一类。--force 是它唯一的出口，
-// 那就更要说清楚顶掉的是 PATH 上的哪个文件。
+// Command-name shadowing (iron law 5): the `bin = "sudo"` class of thing.
+// --force is its only way through, which makes it all the more important to name
+// exactly which file on PATH gets shadowed.
 func TestForceAnnouncesAShadowedCommand(t *testing.T) {
 	p := i1New(t, "name = \"shadowpkg\"\n[script]\nshadowme = \"s.sh\"\n")
 	p.file(t, "s.sh", "#!/bin/sh\necho MINE\n", 0o644)
@@ -96,35 +101,36 @@ func TestForceAnnouncesAShadowedCommand(t *testing.T) {
 	if err := os.WriteFile(victim, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// i1New 已经把 TOY_HOME 指到 p.home 了；bin 排在前面是文档教的写法。
+	// i1New already pointed TOY_HOME at p.home; bin coming first is what the docs teach.
 	t.Setenv("PATH", filepath.Join(p.home, "bin")+string(os.PathListSeparator)+other)
 
 	url := "file://" + filepath.Join(p.dir, "toy.toml")
 	if err := runInstall(context.Background(), []string{url}); err == nil {
-		t.Fatal("不给 --force 就把 PATH 上的 shadowme 顶掉了（铁律 5）")
+		t.Fatal("it shadowed shadowme on PATH without --force (iron law 5)")
 	}
 	out := captureStderr(t, func() {
 		if err := runInstall(context.Background(), []string{"--force", url}); err != nil {
-			t.Fatalf("--force 之后还是装不上：%v", err)
+			t.Fatalf("still cannot install with --force: %v", err)
 		}
 	})
 	if !strings.Contains(out, "--force waived") || !strings.Contains(out, victim) {
-		t.Fatalf("--force 顶掉了 PATH 上的 %s，输出里却没说顶掉的是谁：\n%s", victim, out)
+		t.Fatalf("--force shadowed %s on PATH and the output never said whom it shadowed:\n%s", victim, out)
 	}
 }
 
-// `toy install -h` 必须把 --reinstall 和 --force 的区别说清楚。
-// 原来 -h 把 flag 包的输出丢进 io.Discard，用户只拿到一行语法串 ——
-// 而这两个开关的分工恰恰只写在各自的 usage 里，等于谁也看不到。
+// `toy install -h` has to spell out the difference between --reinstall and --force.
+// It used to throw the flag package's output into io.Discard, leaving the user with
+// a single syntax line — and the split between these two switches is written
+// nowhere but in their usage strings, so nobody could see it.
 func TestInstallHelpExplainsTheTwoSwitches(t *testing.T) {
 	out := captureStderr(t, func() {
 		if err := runInstall(t.Context(), []string{"-h"}); !errors.Is(err, errUsage) {
-			t.Fatalf("-h 该走 usage 那条路：%v", err)
+			t.Fatalf("-h should take the usage path: %v", err)
 		}
 	})
 	for _, want := range []string{"-reinstall", "-force", "same version again", "safety check"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("`toy install -h` 里没有 %q，用户无从知道该用哪个开关：\n%s", want, out)
+			t.Errorf("`toy install -h` does not contain %q, so the user cannot tell which switch to use:\n%s", want, out)
 		}
 	}
 }

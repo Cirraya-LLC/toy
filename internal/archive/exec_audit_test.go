@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// 铁律 1/7 攻击面：解压出来的东西能不能指到包外面、能不能带出 setuid。
+// Iron rule 1/7 attack surface: can what we unpack point outside the package, and can it carry setuid out?
 
 func audWriteTar(t *testing.T, dir string, build func(*tar.Writer)) string {
 	t.Helper()
@@ -35,11 +35,11 @@ func audReg(t *testing.T, tw *tar.Writer, name string, mode int64, body string) 
 	}
 }
 
-// A1：setuid / setgid 位有没有被带出来。带出来 = 一个装包器能造 setuid 文件。
+// A1: do setuid / setgid bits survive? If they do, an installer can create setuid files.
 func TestAuditSetuidIsStripped(t *testing.T) {
 	tmp := t.TempDir()
 	src := audWriteTar(t, tmp, func(tw *tar.Writer) {
-		// 04755：setuid + rwxr-xr-x
+		// 04755: setuid + rwxr-xr-x
 		audReg(t, tw, "boom", 04755, "#!/bin/sh\n")
 		audReg(t, tw, "sgid", 02755, "#!/bin/sh\n")
 		audReg(t, tw, "sticky", 01755, "#!/bin/sh\n")
@@ -47,7 +47,7 @@ func TestAuditSetuidIsStripped(t *testing.T) {
 	dest := filepath.Join(tmp, "out")
 	os.MkdirAll(dest, 0o755)
 	if _, err := Extract(src, dest); err != nil {
-		t.Fatalf("解压失败：%v", err)
+		t.Fatalf("extract failed: %v", err)
 	}
 	for _, n := range []string{"boom", "sgid", "sticky"} {
 		fi, err := os.Lstat(filepath.Join(dest, n))
@@ -55,12 +55,12 @@ func TestAuditSetuidIsStripped(t *testing.T) {
 			t.Fatal(err)
 		}
 		if fi.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
-			t.Errorf("%s 解出来带了特殊位：%v", n, fi.Mode())
+			t.Errorf("%s came out carrying special bits: %v", n, fi.Mode())
 		}
 	}
 }
 
-// A2：符号链接指到包外面（绝对路径 / 一路 ..）。
+// A2: symlinks pointing outside the package (absolute path, or all the way up with ..).
 func TestAuditSymlinkCannotEscape(t *testing.T) {
 	for _, target := range []string{
 		"/bin/sh",
@@ -80,12 +80,12 @@ func TestAuditSymlinkCannotEscape(t *testing.T) {
 		os.MkdirAll(dest, 0o755)
 		if _, err := Extract(src, dest); err == nil {
 			got, _ := os.Readlink(filepath.Join(dest, "tool"))
-			t.Errorf("链接目标 %q 被放行了，包里现在有一条 tool -> %q", target, got)
+			t.Errorf("link target %q was let through; the package now holds tool -> %q", target, got)
 		}
 	}
 }
 
-// A3：注释里那个三段式绕过（x -> "."，x/up -> ".."，x/up/pwned）。
+// A3: the three-step bypass from the comments (x -> ".", x/up -> "..", x/up/pwned).
 func TestAuditSymlinkLadderCannotEscape(t *testing.T) {
 	tmp := t.TempDir()
 	src := audWriteTar(t, tmp, func(tw *tar.Writer) {
@@ -97,14 +97,14 @@ func TestAuditSymlinkLadderCannotEscape(t *testing.T) {
 	dest := filepath.Join(root, "dest")
 	os.MkdirAll(dest, 0o755)
 	if _, err := Extract(src, dest); err == nil {
-		t.Error("三段式符号链接梯子被放行了")
+		t.Error("the three-step symlink ladder was let through")
 	}
 	if _, err := os.Stat(filepath.Join(root, "pwned")); err == nil {
-		t.Fatal("写到 destDir 外面去了")
+		t.Fatal("wrote outside destDir")
 	}
 }
 
-// A4：硬链接指向系统文件。
+// A4: a hard link pointing at a system file.
 func TestAuditHardlinkCannotGrabSystemFiles(t *testing.T) {
 	tmp := t.TempDir()
 	src := audWriteTar(t, tmp, func(tw *tar.Writer) {
@@ -113,11 +113,11 @@ func TestAuditHardlinkCannotGrabSystemFiles(t *testing.T) {
 	dest := filepath.Join(tmp, "out")
 	os.MkdirAll(dest, 0o755)
 	if _, err := Extract(src, dest); err == nil {
-		t.Error("硬链接到 /etc/passwd 被放行了")
+		t.Error("a hard link to /etc/passwd was let through")
 	}
 }
 
-// A5：路径穿越。
+// A5: path traversal.
 func TestAuditTraversalRejected(t *testing.T) {
 	for _, name := range []string{"../evil", "a/../../evil", "/tmp/evil", `..\evil`} {
 		tmp := t.TempDir()
@@ -125,7 +125,7 @@ func TestAuditTraversalRejected(t *testing.T) {
 		dest := filepath.Join(tmp, "out")
 		os.MkdirAll(dest, 0o755)
 		if _, err := Extract(src, dest); err == nil {
-			t.Errorf("成员名 %q 被放行了", name)
+			t.Errorf("member name %q was let through", name)
 		}
 	}
 }

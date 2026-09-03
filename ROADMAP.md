@@ -1,156 +1,183 @@
-# 路线图
+# Roadmap
 
-这份文档回答三个问题：**做了什么**、**不做什么和为什么**、**已知的缺口在哪**。
+This document answers three questions: **what's done**, **what we won't do and why**,
+and **where the known gaps are**.
 
-第二节比第一节长，这是有意的 —— 一个分发器的性格是由它拒绝做的事定义的。
-
----
-
-## 一、v0.1.0 已经能用的
-
-- 四条安装路径（索引名 / `github:` / 其它托管方 / 裸 `toy.toml` 地址）
-- 版本发现走 `git ls-remote`，不依赖任何托管方的 API
-- 两种包形态：release 二进制、单文件脚本
-- 平台候选回退（`linux/amd64/musl`、Rosetta、armv6/armv7）
-- `toy init`：从 `dist/` 反推 `toy.toml`，含现算的 `[sha256]`
-- 四档信任等级 + TOFU 钥匙环
-- 多索引；`toy serve` 镜像
-- ed25519 签名（`keygen` / `publish`），可选
-- 安装清单，因此 `uninstall` / `update` / `list` 是可靠的
+The second section is longer than the first. That's deliberate — a distributor's
+character is defined by what it refuses to do.
 
 ---
 
-## 二、明确不做的
+## 1. What v0.1.0 already does
 
-### 不做源码构建
-
-**只装 ① release 二进制 ② 单文件脚本，别的报错。**
-
-一旦开始构建就要管工具链：装什么版本的 Go/Rust/Node、锁哪个版本、怎么隔离、
-构建失败了怎么报。项目规模翻三倍，而且**工具链是一个比包本身大得多的攻击面**。
-
-更根本的是：构建就是执行。一个从设计上不执行任何东西的分发器，不能有一个
-「除了构建的时候」的例外。
-
-**什么会让我们改主意**：什么都不会。这条和铁律 1 是同一条。
-需要从源码装的人应该用 `cargo install` / `go install`，那些工具做得比我们好。
-
-### 不做包间依赖
-
-**每个 toy 自包含。**
-
-有依赖图就是重新造了一遍 apt，而 apt 正是要反的东西。依赖图带来的是：
-版本求解、冲突、菱形依赖、传递性信任、以及 left-pad。
-
-而这个产品的目标是「那些没人给你打包的小工具」—— 一个静态二进制或一个脚本，
-它本来就不需要依赖图。
-
-**代价说清楚**：toy 装不了需要运行时的东西（一个需要 Python 3.11 的脚本、
-一个动态链接一堆库的程序）。那不是我们的用户。
-
-### 不做 P2P / DHT / NAT 穿透
-
-artifact 是哈希寻址 + 可验签的，所以**镜像天然不需要被信任**。
-既然不需要信任，「从哪找镜像」就是一个低风险问题，而**低风险问题用蠢办法解决**：
-配置文件里一串 URL，原始地址失败就按顺序试。
-
-P2P 的价值是「上游消失后包还活着」——`toy serve` 已经拿到了这个价值，
-十几行代码。自动发现只是往那个列表里填条目，收益远小于 NAT 穿透和节点发现的复杂度。
-
-**什么会让我们改主意**：真的有人在用镜像，并且手工维护镜像列表成了瓶颈。
-那时候要做的也不是 DHT，是一个「已知镜像」的静态列表。
-
-### 不做 Windows
-
-v1 只有 Linux + macOS。
-
-不是因为不重要，是因为 Windows 的软链（需要开发者模式或管理员权限）、
-`.exe` 后缀、PATH 语义、以及「解压出来的东西怎么变成一个能敲的命令」
-是另一整坨活，而且和现在这套模型不是简单映射。
-
-`toy init` 现在会**跳过 Windows 资产并说明原因**，不静默丢掉 —— 这是为以后留的门。
-
-**什么会让我们改主意**：有人真的来要。这一条和上面三条不同，它是「暂时不做」
-而不是「不做」。
-
-### 不做 x86-64 微架构等级匹配（v2/v3/v4）
-
-要解析 CPUID，标准库不给，引库违反依赖策略（只有两个第三方依赖，见 the design notes §10）。
-`toy doctor` 里给一行线索，仅此而已。
-
-### 评分不做成给用户看的东西
-
-装机量和票数是**索引的准入信号**，不是排行榜。投票没有后果就是装饰 ——
-AUR 的票有后果（能被提拔进官方仓库），所以那里的票是真的。
+- Four install paths (index name / `github:` / other hosts / bare `toy.toml` URL)
+- Version discovery via `git ls-remote`, no host's API involved
+- Two package shapes: release binary, single-file script
+- Platform candidate fallback (`linux/amd64/musl`, Rosetta, armv6/armv7)
+- `toy init`: derives a `toy.toml` from `dist/`, `[sha256]` computed on the spot
+- Four trust levels + a TOFU keyring
+- Multiple indexes; `toy serve` mirrors
+- ed25519 signing (`keygen` / `publish`), optional
+- Install manifests, which is why `uninstall` / `update` / `list` are reliable
 
 ---
 
-## 三、已知缺口
+## 2. What we deliberately won't do
 
-这一节是这份文档里最要紧的。
+### No building from source
 
-### 1. 签名证明不了归属（最大的一条）
+**We install exactly two things: (1) release binaries, (2) single-file scripts.
+Anything else is an error.**
 
-`✓ 已签名` 现在证明的是**连续性**，不是身份：签名消息是
-`id + source + toy.toml 原文`，三样都是公开可读的，**里面没有一个字节把公钥和
-仓库 owner 绑起来**。任何人都能 fork 一份索引、用自己的钥匙给同一个 `id` 重新签
-一条、把 `source` 指向自己的仓库。
+The moment you build, you own a toolchain: which Go/Rust/Node version, pinned how,
+isolated how, and what to say when the build fails. Three times the project, and
+**a toolchain is a far larger attack surface than the package it builds**.
 
-所以那一行永远带着「不代表某某本人」这句尾巴，而且**第一次安装时该看的是 `source`
-指向哪里，不是有没有勾**。详见 `SECURITY.md §4`。
+More fundamentally: building *is* execution. A distributor that executes nothing
+by design cannot have an "except when building" exception.
 
-**要修需要什么**：索引有一个会**校验提交者对那个仓库有 push 权限**的入口。
-在索引还是「一个 JSON 文件 + PR」的形态下，这件事做不了 —— 它需要索引侧有一个
-能跑代码的东西。
+**What would change our mind**: nothing. This is iron law 1 wearing a different hat.
+People who need to install from source should use `cargo install` / `go install` —
+those tools do it better than we would.
 
-在那之前，不要把这个勾说得比它是的更多。
+### No inter-package dependencies
 
-### 2. 索引冷启动
+**Every toy is self-contained.**
 
-**v1 不预置任何索引**，因为公共索引还没传到任何静态托管上。
-`DefaultIndexURL` 是一个空串常量 —— 索引真上线之后改那**一个常量**就完事。
+A dependency graph is apt rebuilt from scratch, and apt is the thing we're reacting
+against. Graphs bring version solving, conflicts, diamond dependencies, transitive
+trust, and left-pad.
 
-冷启动的计划是**扒 awesome-list**，不等人来注册：那些列表本来就是 `owner/repo`
-格式，正好是索引条目需要的东西。
+And the target here is "the small tools nobody packaged for you" — a static binary
+or a script. It never needed a graph.
 
-在那之前，`toy install github:owner/repo` 那条路从头到尾就是完整可用的 ——
-索引只影响「能不能按名字搜到」。
+**The cost, stated plainly**: toy can't install anything that needs a runtime (a
+script that wants Python 3.11, a program dynamically linked against a pile of
+libraries). Those aren't our users.
 
-### 3. musl 和 Rosetta 的回退**没有在真机上验过**
+### No P2P / DHT / NAT traversal
 
-平台候选回退的探测逻辑全在纯函数里、有测试覆盖，但那些测试喂的是构造出来的输入。
+Artifacts are content-addressed and signature-checkable, so **a mirror is
+inherently untrusted anyway**. And if you don't have to trust it, "where do I find
+a mirror" is a low-risk question — **and low-risk questions get stupid answers**: a
+list of URLs in a config file, tried in order when the original fails.
 
-**真机没验过的有两条**：
-- Alpine（musl）上装一个只发了 `linux/amd64` 的包 —— 应该装上并**多打一行说明**
-  （glibc 二进制在 Alpine 上报的是 `not found`，而文件明明就在那儿）。
-- Apple Silicon 上装一个只发了 `darwin/amd64` 的包 —— 应该走 Rosetta 2 并说明。
-  没装 Rosetta 的机器上会直接「无法打开」。
+The value of P2P is "the package survives its upstream disappearing", and
+`toy serve` already delivers that in about fifteen lines. Auto-discovery only fills
+in entries on that list; the payoff is nowhere near the cost of NAT traversal and
+peer discovery.
 
-armv6 / armv7 的代次判别（读 `/proc/cpuinfo`）同样只有构造输入的测试。
+**What would change our mind**: people actually using mirrors, with hand-maintaining
+the mirror list as the bottleneck. Even then the answer isn't a DHT — it's a static
+"known mirrors" list.
 
-这三条是 v0.1.0 里我们最不确定的部分。碰到了请开 issue。
+### No Windows
 
-### 4. 其它
+v1 is Linux + macOS only.
 
-- **没有 `--json` 的统一支持**：只有 `toy search` 有，`toy list` / `toy info` 还没有。
-- **没有并行安装**：`toy update` 是一个一个来的。
-- **托管方表只有内置四条**，加一家要写进 `config.toml`。这是设计（表比代码好改），
-  但还没有一个「贡献一条 host 配置」的路径。
-- **`reservedLinkNames` 靠人记着维护**：toy 以后新增一个「按名字 exec 的外部程序」
-  就必须往里加一行，而没有任何自动化会在有人加第二个 `exec.Command` 时提醒他。
-  见 `docs/audit-2026-08.md`。
-- **`internal/host` 和 `internal/store` 各有一份 bin 目录推导逻辑**（不许 import
-  会成环），注释互相指认。改一边忘了另一边，那条 critical 的防御会静默失效。
+Not because it doesn't matter, but because Windows symlinks (developer mode or
+admin), the `.exe` suffix, PATH semantics, and "how does an unpacked file become a
+command you can type" are a whole separate pile of work that doesn't map cleanly
+onto this model.
+
+`toy init` **skips Windows assets and says why** rather than dropping them
+silently — that's the door left open.
+
+**What would change our mind**: someone actually asking. Unlike the three above,
+this one is "not yet", not "no".
+
+### No x86-64 microarchitecture levels (v2/v3/v4)
+
+It requires parsing CPUID, the standard library won't do it, and pulling in a
+library violates the dependency policy (exactly two third-party deps, see
+the design notes §10). `toy doctor` prints one hint. That's all.
+
+### Ratings are not a leaderboard
+
+Install counts and votes are an **admission signal for the index**, not a chart.
+A vote with no consequence is decoration — AUR votes have a consequence (promotion
+into the official repos), which is why they're real there.
 
 ---
 
-## 四、下一步大概会做什么
+## 3. Known gaps
 
-没有日期，按「有人真的需要」排序：
+This is the most important section in this document.
 
-1. 把公共索引传上去，填掉那个空常量，扒一轮 awesome-list 做冷启动。
-2. 真机验 musl / Rosetta 那两条回退。
-3. 索引侧的归属校验 —— 也就是让 `✓ 已签名` 真的能说「是这个仓库的主人签的」。
-4. `--json` 铺到 `list` / `info`。
-5. Windows，如果有人来要。
+### 1. Signatures prove nothing about ownership (the big one)
 
+`✓ signed` proves **continuity**, not identity. The signed message is
+`id + source + the raw toy.toml`, all three of which are publicly readable, and
+**not one byte of it binds the key to the repo's owner**. Anyone can fork the index,
+re-sign the same `id` with their own key, and point `source` at their own repo.
+
+So that line always carries the "does not mean the person themselves" tail, and
+**what you should look at on a first install is where `source` points, not whether
+there's a checkmark**. See `SECURITY.md §4`.
+
+**What fixing it needs**: an index entry point that **verifies the submitter has
+push access to that repo**. While the index is "a JSON file plus a PR", this can't
+be done — it needs something on the index side that runs code.
+
+Until then, don't claim more for that checkmark than it earns.
+
+### 2. Index cold start
+
+**v1 ships with no index preconfigured**, because the public index isn't hosted
+anywhere yet. `DefaultIndexURL` is an empty string constant — once the index is
+live, changing that **one constant** is the whole job.
+
+The cold-start plan is **scraping awesome-lists** rather than waiting for people to
+register: those lists are already in `owner/repo` form, which is exactly what an
+index entry needs.
+
+Until then, `toy install github:owner/repo` is fully usable end to end — the index
+only affects whether you can find something by name.
+
+### 3. The musl and Rosetta fallbacks **have not been verified on real hardware**
+
+The platform-candidate detection is all pure functions with test coverage, but
+those tests are fed constructed inputs.
+
+**Two things unverified on real hardware**:
+- Installing a package that only ships `linux/amd64` on Alpine (musl) — it should
+  install and **print an extra note** (a glibc binary on Alpine reports `not found`,
+  even though the file is right there).
+- Installing a package that only ships `darwin/amd64` on Apple Silicon — it should
+  go through Rosetta 2 and say so. On a machine without Rosetta it will simply fail
+  to open.
+
+The armv6 / armv7 generation check (reading `/proc/cpuinfo`) likewise only has
+constructed-input tests.
+
+These three are the parts of v0.1.0 we're least sure about. If you hit one, open an
+issue.
+
+### 4. Everything else
+
+- **No uniform `--json`**: only `toy search` has it; `toy list` / `toy info` don't yet.
+- **No parallel installs**: `toy update` goes one at a time.
+- **The host table has four built-in entries**; adding one means editing
+  `config.toml`. That's by design (a table beats code), but there's no path yet for
+  "contribute a host config".
+- **`reservedLinkNames` is maintained by memory**: the next time toy adds an
+  external program it execs *by name*, a line has to go in there — and nothing
+  automated will remind whoever adds the second `exec.Command`.
+  See `docs/audit-2026-08.md`.
+- **`internal/host` and `internal/store` each carry their own copy of the bin-dir
+  derivation** (importing across would cycle); the comments point at each other.
+  Change one and forget the other, and that critical defense fails silently.
+
+---
+
+## 4. What's likely next
+
+No dates. Ordered by "someone actually needs it":
+
+1. Host the public index, fill in that empty constant, scrape a round of
+   awesome-lists for the cold start.
+2. Verify the musl / Rosetta fallbacks on real hardware.
+3. Ownership verification on the index side — i.e. make `✓ signed` actually able to
+   say "the owner of this repo signed it".
+4. Extend `--json` to `list` / `info`.
+5. Windows, if someone asks.

@@ -26,7 +26,8 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
-// runKeygen 生成密钥对存进 ~/.toy/keys，打印公钥和指纹。已存在时拒绝覆盖。
+// runKeygen generates a key pair into ~/.toy/keys and prints the public key and its
+// fingerprint. It refuses to overwrite an existing one.
 func runKeygen(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
@@ -41,9 +42,11 @@ func runKeygen(ctx context.Context, args []string) error {
 		return err
 	}
 	if err := sign.SaveKeyPair(st.KeysDir(), kp); err != nil {
-		// SaveKeyPair 已经说清楚是哪个文件挡住了，这里补的是「为什么不给 --force」：
-		// 覆盖私钥等于永久丢掉这个名字 —— 旧钥匙签过的条目再也签不出来，
-		// 索引里那个 key 字段一换，所有认得旧钥匙的人看到的就是一次密钥变更。
+		// SaveKeyPair has already named the file that stopped it; what gets added
+		// here is why there is no --force. Overwriting the private key means losing
+		// that name for good — nothing can ever re-sign the entries the old key
+		// signed, and the moment the key field in the index changes, everyone who
+		// knew the old key sees a key change.
 		return fmt.Errorf("%w. toy offers no overwrite flag: swapping keys means giving up every name the old "+
 			"key claimed, and nobody can re-sign the entries it signed — if you really want to start over, "+
 			"move that file aside yourself", err)
@@ -53,21 +56,26 @@ func runKeygen(ctx context.Context, args []string) error {
 	ui.Info("Fingerprint %s — this is the string other people see when they install", sign.Fingerprint(kp.Public))
 	ui.Info("Next: paste the public key below into the \"key\" field of an index entry — that is how you claim a name.")
 	ui.Info("Running `toy publish` in the project directory writes the whole entry, key included.")
-	// 机器可读的走 stdout（规格 §9），这样 `toy keygen | pbcopy` 拿到的就是纯公钥。
+	// Machine-readable goes to stdout (spec §9), so `toy keygen | pbcopy` gets the
+	// bare public key and nothing else.
 	fmt.Println(hex.EncodeToString(kp.Public))
 	return nil
 }
 
-// autSignMessage 是作者签名覆盖的字节，**这个定义定死了不能再改**：
+// autSignMessage is the byte string an author's signature covers. THIS DEFINITION IS
+// FROZEN AND MUST NOT CHANGE:
 //
-//	id + "\n" + source + "\n" + toy.toml 的原始字节
+//	id + "\n" + source + "\n" + the verbatim bytes of toy.toml
 //
-// 改一个字节，所有已经发出去的签名会在同一天全部验不过，而用户看到的是
-// 「签名不对」—— 那句话读起来像作者的私钥泄漏了，不像我们改了格式。
-// 真要换定义只能是加一个带版本号的新字段，让两种签名并存一段时间。
+// Change one byte and every signature already out there stops verifying on the same
+// day, while what the user sees is "the signature does not verify" — a sentence that
+// reads like the author's private key leaked, not like we changed a format. The only
+// way to ever redefine it is a new, versioned field, with both kinds of signature
+// coexisting for a while.
 //
-// 用原始字节而不是解析后的 Toyfile：签名要覆盖的是「用户真正会下载到的那份文件」，
-// 重新序列化一遍等于给了一个能在两份不同文本上算出同一个签名的机会。
+// Verbatim bytes rather than the parsed Toyfile: a signature has to cover "the file
+// the user actually downloads", and re-serializing hands out a chance to compute one
+// signature that is valid over two different texts.
 func autSignMessage(id, source string, toyTOML []byte) []byte {
 	msg := make([]byte, 0, len(id)+len(source)+len(toyTOML)+2)
 	msg = append(msg, id...)
@@ -77,20 +85,24 @@ func autSignMessage(id, source string, toyTOML []byte) []byte {
 	return append(msg, toyTOML...)
 }
 
-// runPublish 读目录里的 toy.toml，校验，用本机私钥签名，
-// 打印一条可以直接粘进索引 JSON 的条目。
-// 不联网、不提交 —— v1 索引是本地文件，粘过去就行（规格 §5）。
+// runPublish reads the toy.toml in a directory, validates it, signs it with the local
+// private key, and prints an entry that can be pasted straight into an index JSON.
+// It goes nowhere online and commits nothing — a v1 index is a local file, and
+// pasting is the whole workflow (spec §5).
 //
-// --inline 是另一件事，给的是**索引维护者**：为一个自己不拥有的仓库写打包说明。
-// 那份 toy.toml 会原文进条目的 toyfile 字段，客户端只在上游仓库确实没有自己那份
-// 时才用它，装出来带降档标识（store.TrustIndexed）。索引冷启动靠的就是它 ——
-// 现存几千个 CLI 工具一个都没有 toy.toml。
+// --inline is a different job, and it is FOR AN INDEX MAINTAINER: writing packaging
+// instructions for a repository you do not own. That toy.toml goes verbatim into the
+// entry's toyfile field, clients only use it when the upstream repository really has
+// none of its own, and it installs with a reduced-trust marker
+// (store.TrustIndexed). It is how the index gets off the ground at all — of the
+// thousands of CLI tools out there, not one has a toy.toml.
 func runPublish(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
 	source := fs.String("source", "", "the entry's source, like github:owner/repo; inferred from the git origin if omitted")
 	inline := fs.Bool("inline", false, "inline this toy.toml verbatim into the entry: packaging instructions for a repository that is NOT yours (it steps aside the moment upstream ships its own toy.toml)")
-	// 借 install 那套解析：-h 才会把上面两行说明打出来，而 --inline 和普通 publish
-	// 是两件事，那个区别只写在这里。
+	// Borrow install's parsing: only that makes -h print the two descriptions above,
+	// and --inline versus an ordinary publish are two different jobs whose difference
+	// is written down nowhere else.
 	if err := insParseFlags(fs, args); err != nil {
 		return err
 	}
@@ -108,7 +120,8 @@ func runPublish(ctx context.Context, args []string) error {
 		return fmt.Errorf("cannot read %s: %w. publish reads the toy.toml in this directory — "+
 			"eight lines is enough (name / [bin] / [artifact]), and nobody has to approve it", path, err)
 	}
-	// 先校验再签名：签一个自己都装不上的 toy.toml，只是把错误推迟到别人机器上。
+	// Validate before signing: signing a toy.toml that will not even install just
+	// defers the error onto somebody else's machine.
 	tf, err := toyfile.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("%s is not ready to publish: %w", path, err)
@@ -150,22 +163,27 @@ func runPublish(ctx context.Context, args []string) error {
 		Desc:   tf.Desc,
 	}
 	if *inline {
-		// 内联条目必须【与版本无关】—— 它住在索引里，靠 git ls-remote 跟着上游最新
-		// 的 tag 走，而 [sha256] 钉的是某一个版本的字节。留着它，上游下一次发版
-		// 就会让每个用户拿到「哈希对不上，拒绝安装」，读起来完全像投毒警告，
-		// 而实际上只是作者正常发了个新版。所以在这里剥掉。
+		// An inline entry has to be VERSION-INDEPENDENT: it lives in the index and
+		// follows whatever tag git ls-remote finds upstream, while [sha256] pins the
+		// bytes of one specific version. Leave it in and upstream's next release
+		// hands every user "checksum mismatch, refusing to install" — which reads
+		// exactly like a poisoning warning when all that happened is the author cut
+		// a normal release. So it gets stripped here.
 		//
-		// 剥必须发生在签名【之前】：签的就是内联进去的这份原文（autSignMessage）。
-		// （自己那个仓库不受影响：那份 toy.toml 和资产一起打在同一个 tag 上，
-		// 哈希就是对的，那里该留着 —— 只有替别人写的这条不能留。）
+		// The stripping has to happen BEFORE signing: what is signed is the verbatim
+		// text that goes inline (autSignMessage).
+		// (Your own repository is unaffected: there the toy.toml ships on the same
+		// tag as the assets, so the hashes are correct and belong there. Only an
+		// entry written on somebody else's behalf must not keep them.)
 		if stripped, ok := autStripSHA256(raw); ok {
 			raw = stripped
 			ui.Warn("Stripped [sha256] from the inlined toy.toml: it pins the bytes of one specific version,")
 			ui.Info("while an inline entry follows whatever tag upstream publishes next. Left in, the author's")
 			ui.Info("next release would hand everyone a checksum mismatch. First installs are still pinned by TOFU.")
 		}
-		// 原文进条目：客户端验签名验的就是这份原文（autSignMessage），
-		// 重新序列化一遍等于换了一份文本（同 rsvGetToyfile 那条注释）。
+		// Verbatim text goes into the entry: what the client verifies the signature
+		// against is exactly this text (autSignMessage), and re-serializing means a
+		// different piece of text (same reasoning as the comment in rsvGetToyfile).
 		entry.Toyfile = string(raw)
 		ui.Warn("This is an INLINE entry: you are writing packaging instructions for %s, which is not your repository.", entry.Source)
 		ui.Info("Whoever installs it sees a reduced-trust line: the binary comes from the author's release, but")
@@ -174,7 +192,8 @@ func runPublish(ctx context.Context, args []string) error {
 		ui.Info("and this inline entry steps aside on its own.")
 	}
 
-	// 签名是可选升级不是入场券（规格 §4）：没有密钥对照样输出条目，照样能被收进索引。
+	// Signing is an optional upgrade, not an entry ticket (spec §4): with no key pair
+	// it still prints the entry, and that entry can still be listed in an index.
 	switch kp, err := sign.LoadKeyPair(st.KeysDir()); {
 	case errors.Is(err, sign.ErrNoKey):
 		ui.Info("There is no key pair on this machine, so this entry is unsigned — it can still be listed and still installs.")
@@ -186,8 +205,9 @@ func runPublish(ctx context.Context, args []string) error {
 		entry.Sig = sign.Sign(kp.Private, autSignMessage(entry.ID, entry.Source, raw))
 		ui.Info("Signed with %s (the signature covers id + source + the verbatim bytes of this toy.toml)", sign.Fingerprint(kp.Public))
 		if *inline {
-			// 内联那一档永远到不了「✓ 已签名」（规则 2）：签名者是写这条记录的人，
-			// 不是作者。这里必须说明白，否则维护者会以为签了名就等于背书。
+			// The inline level never reaches "✓ signed" (rule 2): the signer is
+			// whoever wrote this record, not the author. Say so here, or a
+			// maintainer will take a signature for an endorsement.
 			ui.Info("A signature on an inline entry only proves this record was not altered. It will NOT make it")
 			ui.Info("show up as \"✓ signed\" — that check mark means the author signed, and you wrote these instructions.")
 		}
@@ -197,7 +217,8 @@ func runPublish(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("cannot render the index entry: %w", err)
 	}
-	// 条目走 stdout，说明走 stderr（规格 §9），所以 `toy publish > entry.json` 拿到的是纯 JSON。
+	// The entry goes to stdout and the explanations to stderr (spec §9), so
+	// `toy publish > entry.json` gets nothing but JSON.
 	fmt.Printf("  %s\n", out)
 	ui.Info("Paste the block above into the packages array of an index JSON and you have published (add a line")
 	ui.Info("like \"tags\": [\"web\"] yourself if you want tags). toy does not go online for you and does not commit")
@@ -205,8 +226,8 @@ func runPublish(ctx context.Context, args []string) error {
 	return nil
 }
 
-// autGitSource 从 git 的 origin 推出索引条目的 source。
-// binDir 是 toy 自己的 bin 目录，autGitPath 要用它把那个目录排除掉。
+// autGitSource infers an index entry's source from git's origin.
+// binDir is toy's own bin directory, which autGitPath needs in order to exclude it.
 func autGitSource(ctx context.Context, dir, binDir string, overrides map[string]host.Host) (string, error) {
 	remote, err := autGitRemote(ctx, dir, binDir)
 	if err != nil {
@@ -226,31 +247,37 @@ func autGitSource(ctx context.Context, dir, binDir string, overrides map[string]
 	return name + ":" + owner + "/" + repo, nil
 }
 
-// autGitPath 找 git 的绝对路径，**跳过 toy 自己的 bin 目录**。
+// autGitPath finds the absolute path of git, SKIPPING TOY'S OWN BIN DIRECTORY.
 //
-// 裸 "git" 交给 exec 就是执行 PATH 上的第一个 git，而 toy 的 bin 目录按文档就在
-// PATH 上 —— 一个装上来的包只要提供一条叫 git 的命令，`toy publish` 就会执行它。
-// 那是铁律 1 的洞，不是不方便。
+// Handing a bare "git" to exec runs the first git on PATH, and toy's bin directory is
+// on PATH by documented design — so any installed package that ships a command named
+// git gets executed by `toy publish`. That is a hole straight through iron law 1, not
+// an inconvenience.
 //
-// 这是 internal/host 里 lookupGit 的第二份实现（那边还没导出可用的入口）。
-// **两处的规则必须一字不差地保持一致**：走 PATH、跳过相对项、跳过 ~/.toy/bin、
-// 取第一个能跑的普通文件。这边松一格，publish 就成了绕过去的那条路。
-// internal/host 哪天把入口导出来，这里和 qryCheckGit 一起换过去，把这份删掉。
+// This is a second implementation of lookupGit in internal/host (which has no usable
+// exported entry point yet). THE RULES IN THE TWO PLACES MUST STAY IDENTICAL, word
+// for word: walk PATH, skip relative entries, skip ~/.toy/bin, take the first
+// runnable regular file. Relax this side by one notch and publish becomes the way
+// around it. The day internal/host exports an entry point, move this and qryCheckGit
+// over to it and delete this copy.
 func autGitPath(binDir string) (string, error) {
 	var inToyBin string
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		// 相对项（"." 和 PATH 里那个到处都是的空项）指的是进程当前所在的目录。
-		// 在一个别人写得进去的目录里跑 toy，不该等于把铁律 1 交出去。
+		// Relative entries ("." and the empty entry that turns up everywhere in
+		// PATH) mean whatever directory the process happens to be in. Running toy
+		// inside a directory somebody else can write to must not amount to handing
+		// over iron law 1.
 		if !filepath.IsAbs(dir) {
 			continue
 		}
 		cand := filepath.Join(dir, "git")
-		// 跟随软链：bin/ 里全是软链，pkg 里的真身才是那个普通文件。
+		// Follow symlinks: bin/ holds nothing but symlinks, and the real regular
+		// file lives under pkg.
 		if fi, err := os.Stat(cand); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
 			continue
 		}
 		if binDir != "" && autSameDir(dir, binDir) {
-			inToyBin = cand // 只为报错时说得清楚，继续往后找真的 git
+			inToyBin = cand // kept only so the error can be specific; keep looking for a real git
 			continue
 		}
 		return cand, nil
@@ -265,8 +292,9 @@ func autGitPath(binDir string) (string, error) {
 	return "", errors.New("no git command found, so the source cannot be inferred. Pass --source github:owner/repo instead")
 }
 
-// autSameDir / autCanonDir：先转绝对路径再解软链（/usr/bin 常常是 /bin 的软链），
-// 解不动就退回字符串比较。和 internal/host、internal/store 里的同名函数是一份东西。
+// autSameDir / autCanonDir: absolute path first, then resolve symlinks (/usr/bin is
+// often a symlink to /bin), falling back to string comparison when that fails. The
+// same thing as the identically named functions in internal/host and internal/store.
 func autSameDir(a, b string) bool { return autCanonDir(a) == autCanonDir(b) }
 
 func autCanonDir(p string) string {
@@ -279,8 +307,9 @@ func autCanonDir(p string) string {
 	return filepath.Clean(p)
 }
 
-// autGitRemote 取这个目录的 origin 地址。
-// 只读一行配置，不联网、不执行仓库里的任何东西（铁律 1）。
+// autGitRemote reads this directory's origin URL.
+// One line of config, nothing over the network, and nothing from the repository is
+// executed (iron law 1).
 func autGitRemote(ctx context.Context, dir, binDir string) (string, error) {
 	gitPath, err := autGitPath(binDir)
 	if err != nil {
@@ -302,12 +331,14 @@ func autGitRemote(ctx context.Context, dir, binDir string) (string, error) {
 	return remote, nil
 }
 
-// autParseRemote 把 origin 地址拆成域名 + owner + repo。认两种形态：
+// autParseRemote splits an origin URL into domain + owner + repo. Two shapes are
+// recognized:
 //
-//	https://github.com/owner/repo.git   （scheme 形态，ssh:// git:// 也走这条）
-//	git@github.com:owner/repo.git       （scp 形态，没有 scheme）
+//	https://github.com/owner/repo.git   (scheme form; ssh:// and git:// come here too)
+//	git@github.com:owner/repo.git       (scp form, no scheme)
 //
-// 只做拆分不做字符校验 —— 拼出来的 source 会过 ref.Parse，那里才是白名单的家。
+// It splits and does not validate characters — the source it builds goes through
+// ref.Parse, and that is where the allowlist lives.
 func autParseRemote(remote string) (domain, owner, repo string, err error) {
 	s := strings.TrimSpace(remote)
 	var hostPart, path string
@@ -319,13 +350,14 @@ func autParseRemote(remote string) (domain, owner, repo string, err error) {
 		}
 		hostPart, path = u.Hostname(), u.Path
 	case strings.Contains(s, ":") && !strings.HasPrefix(s, "/"):
-		// scp 形态：冒号左边是 [user@]host，右边是路径。
+		// scp form: [user@]host to the left of the colon, path to the right.
 		hostPart, path, _ = strings.Cut(s, ":")
 		if _, after, ok := strings.Cut(hostPart, "@"); ok {
 			hostPart = after
 		}
 	default:
-		// 本地路径的 origin（/srv/git/x.git 之类）没有域名，推不出托管方。
+		// An origin that is a local path (/srv/git/x.git and the like) has no
+		// domain, so there is no host to infer.
 		return "", "", "", fmt.Errorf("the origin is %q, which does not say which host it is — a remote that is "+
 			"a local path has no domain. Pass --source github:owner/repo instead", s)
 	}
@@ -333,8 +365,9 @@ func autParseRemote(remote string) (domain, owner, repo string, err error) {
 	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
 	segs := strings.Split(path, "/")
 	if hostPart == "" || len(segs) != 2 || segs[0] == "" || segs[1] == "" {
-		// GitLab 的子组（a/b/c）会落到这里：ref 只有 owner/repo 一层，装不了，
-		// 与其推出一个错的 source，不如说清楚（铁律 8 的同一个道理）。
+		// GitLab subgroups (a/b/c) land here: a ref has exactly one owner/repo
+		// level, so it cannot be installed, and inferring a wrong source is worse
+		// than saying so (same reasoning as iron law 8).
 		return "", "", "", fmt.Errorf("cannot make out owner/repo from the origin %q — a toy package reference "+
 			"has exactly one level of owner/repo, and deeper paths like GitLab subgroups are not supported yet. "+
 			"Pass --source github:owner/repo instead", s)
@@ -342,16 +375,19 @@ func autParseRemote(remote string) (domain, owner, repo string, err error) {
 	return strings.ToLower(hostPart), segs[0], segs[1], nil
 }
 
-// autHostName 按域名反查托管方前缀（github.com → github）。
-// 查的是 host 表本身，所以用户在 config.toml 里加的自建实例自动也认得
-// —— 托管方是配置不是代码，这里也不该再抄一份域名清单。
+// autHostName looks a host prefix up by domain (github.com -> github).
+// It searches the host table itself, so a self-hosted instance the user added in
+// config.toml is recognized automatically — hosts are configuration, not code, and
+// this is not the place for a second copy of the domain list.
 func autHostName(domain string, overrides map[string]host.Host) string {
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	if domain == "" {
 		return ""
 	}
-	// 用户自己配的优先（他可能覆盖了内置的 github）。同一域名有多条时按名字排序取第一条：
-	// map 的遍历顺序是随机的，不排的话同一个仓库两次 publish 能给出两个不同的 source。
+	// The user's own config wins (they may have overridden the built-in github). When
+	// several entries share a domain, sort by name and take the first: map iteration
+	// order is random, and without sorting, two publishes of the same repository can
+	// print two different sources.
 	for _, table := range []map[string]host.Host{overrides, host.Builtin()} {
 		for _, name := range slices.Sorted(maps.Keys(table)) {
 			if autTemplateHost(table[name].Clone) == domain {
@@ -362,7 +398,8 @@ func autHostName(domain string, overrides map[string]host.Host) string {
 	return ""
 }
 
-// autTemplateHost 取一个 URL 模板里的域名。模板里的 {owner} 之类不影响主机名那一段。
+// autTemplateHost extracts the domain from a URL template. The {owner} and friends in
+// a template do not affect the hostname part.
 func autTemplateHost(tmpl string) string {
 	u, err := url.Parse(strings.TrimSpace(tmpl))
 	if err != nil {
@@ -371,12 +408,14 @@ func autTemplateHost(tmpl string) string {
 	return strings.ToLower(u.Hostname())
 }
 
-// autShutdownGrace 是 Ctrl-C 之后等在途请求收尾的时间。
-// 有人正在下一个 200 MB 的包时，不给这几秒就是把他的下载剪断。
+// autShutdownGrace is how long in-flight requests get to finish after a Ctrl-C.
+// With somebody halfway through a 200 MB package, not granting these few seconds
+// means cutting their download off.
 const autShutdownGrace = 5 * time.Second
 
-// runServe 把 ~/.toy/cache 当静态目录起个 HTTP server（文件名就是 sha256）。
-// 因为内容是 hash 寻址的，这个镜像天然不需要被信任。规格 §8。
+// runServe serves ~/.toy/cache as a static directory over HTTP (each file is named
+// after its own sha256). Because the content is address-by-hash, this mirror does not
+// need to be trusted at all. Spec §8.
 func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on. The default is local-only; use 0.0.0.0:8080 to serve others")
@@ -391,8 +430,9 @@ func runServe(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// 先 Listen 再 Serve：端口被占用时要当场报错，而不是让用户对着一句
-	// "已启动" 去 curl 一个不存在的服务。
+	// Listen before Serve: a port already in use has to fail right here, rather than
+	// leaving the user curling a service that does not exist while the screen says
+	// it started.
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return fmt.Errorf("cannot listen on %s: %w", *addr, err)
@@ -418,7 +458,8 @@ func runServe(ctx context.Context, args []string) error {
 
 	srv := &http.Server{
 		Handler: autMirrorHandler(st.CacheDir()),
-		// 只给读头设死线：正文是几百 MB 的包，给 WriteTimeout 等于给慢速客户端判死刑。
+		// A deadline on reading headers only: the body is a package of a few hundred
+		// megabytes, and a WriteTimeout would be a death sentence for slow clients.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -436,14 +477,17 @@ func runServe(ctx context.Context, args []string) error {
 		if err := srv.Shutdown(shutCtx); err != nil {
 			ui.Warn("downloads were still in flight and got cut off: %v", err)
 		}
-		return ctx.Err() // main 把它打成「已取消」并 exit 130
+		return ctx.Err() // main prints it as "cancelled" and exits 130
 	}
 }
 
-// autMirrorHandler 只做一件事：GET/HEAD 一个 64 位 hex 的路径，回缓存里那个文件。
+// autMirrorHandler does exactly one thing: GET/HEAD a 64-character hex path, return
+// that file from the cache.
 //
-// 故意不用 http.FileServer：它会列目录、会跟着任意路径走，而这个服务可能开在公网上，
-// 缓存目录里将来也未必只有 hash 命名的文件。路径精确匹配 sha256，别的一律 404。
+// Deliberately not http.FileServer: that lists directories and follows arbitrary
+// paths, while this service may be exposed to the internet and the cache directory
+// may not always hold nothing but hash-named files. The path has to be exactly a
+// sha256; everything else is a 404.
 func autMirrorHandler(cacheDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -467,14 +511,16 @@ func autMirrorHandler(cacheDir string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		// 自己定 Content-Type，ServeContent 就不会去嗅探内容 —— 缓存里全是
-		// 二进制包，被嗅成 text/html 只会让浏览器和中间层各自发挥。
+		// Setting Content-Type ourselves stops ServeContent from sniffing: the
+		// cache holds nothing but binary packages, and having one sniffed as
+		// text/html only invites browsers and middleboxes to improvise.
 		w.Header().Set("Content-Type", "application/octet-stream")
-		http.ServeContent(w, r, "", fi.ModTime(), f) // 顺带白捡 Range 支持
+		http.ServeContent(w, r, "", fi.ModTime(), f) // Range support for free
 	})
 }
 
-// autIsSHA256 判断是不是 64 位小写 hex。缓存文件名就是这个形状（fetch 那边写的）。
+// autIsSHA256 reports whether a string is 64 lowercase hex characters. That is the
+// shape of a cache file name (fetch writes them).
 func autIsSHA256(s string) bool {
 	if len(s) != 64 {
 		return false
@@ -488,7 +534,7 @@ func autIsSHA256(s string) bool {
 	return true
 }
 
-// autWildcard 判断这个监听地址是不是对所有网卡开着。
+// autWildcard reports whether a listen address is open on every interface.
 func autWildcard(addr string) bool {
 	h, _, err := net.SplitHostPort(strings.TrimSpace(addr))
 	if err != nil {
@@ -502,14 +548,16 @@ func autWildcard(addr string) bool {
 	return false
 }
 
-// autStripSHA256 从 toy.toml 原文里去掉整个 [sha256] 段，其余字节一字不动。
-// 只在 --inline 那条路上用，理由见调用点。返回是否真的去掉了东西。
+// autStripSHA256 removes the whole [sha256] section from the verbatim toy.toml,
+// leaving every other byte untouched. Only used on the --inline route; the reason is
+// at the call site. It reports whether anything was actually removed.
 //
-// 手写而不是 Unmarshal 再 Marshal：客户端验签名验的是这份原文，
-// 重新序列化一遍会换掉注释、顺序和空白，等于换了一份文本。
+// Written by hand rather than Unmarshal-then-Marshal: what a client verifies the
+// signature against is this verbatim text, and re-serializing would replace the
+// comments, the ordering and the whitespace — a different piece of text.
 func autStripSHA256(raw []byte) ([]byte, bool) {
 	lines := strings.Split(string(raw), "\n")
-	head := -1 // [sha256] 那一行本身
+	head := -1 // the [sha256] line itself
 	for i, l := range lines {
 		if strings.TrimSpace(l) == "[sha256]" {
 			head = i
@@ -520,8 +568,10 @@ func autStripSHA256(raw []byte) ([]byte, bool) {
 		return raw, false
 	}
 	start := head
-	// 往前吞掉紧挨着的注释和空行 —— 那几行讲的就是 sha256，留下来会变成
-	// 一段指着不存在的段落的说明。遇到别的内容就停。
+	// Swallow the comments and blank lines immediately above it — those lines are
+	// about the sha256, and leaving them behind turns them into an explanation
+	// pointing at a section that no longer exists. Stop at anything else.
+
 	for start > 0 {
 		prev := strings.TrimSpace(lines[start-1])
 		if prev == "" || strings.HasPrefix(prev, "#") {
