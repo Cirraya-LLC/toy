@@ -1,8 +1,9 @@
-# Cloudflare Pages 的头配置。索引是给客户端 fetch 的，所以它这几条是功能不是优化。
+# Cloudflare Pages header config. The index is fetched by the client, so for it these lines
+# are functionality, not optimisation.
 /index.json
   Content-Type: application/json; charset=utf-8
   Access-Control-Allow-Origin: *
-  # 短一点：索引更新之后不该等一天才生效。
+  # Kept short: an index update should not take a day to take effect.
   Cache-Control: public, max-age=300
 
 /*

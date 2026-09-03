@@ -1,4 +1,4 @@
-/* toy —— 手写，没有构建步骤。改完直接刷新。 */
+/* toy -- handwritten, no build step. Edit and refresh. */
 
 :root {
   --bg:      #fbfaf8;
@@ -8,7 +8,7 @@
   --ink-3:   #6d757d;
   --line:    #dfdcd6;
   --line-2:  #ecebe7;
-  --accent:  #a33a12;   /* 单一强调色：终端琥珀往红里压一点，浅色下对比够 */
+  --accent:  #a33a12;   /* the single accent: terminal amber pushed toward red, enough contrast on light */
   --ok:      #1d6b35;
   --warn:    #8a5a04;
   --code-bg: #f3f1ec;
@@ -42,7 +42,7 @@ body {
   background: var(--bg);
   color: var(--ink);
   font: 16px/1.7 var(--sans);
-  overflow-x: hidden;          /* body 永远不横向滚，宽内容自己滚 */
+  overflow-x: hidden;          /* body never scrolls sideways; wide content scrolls itself */
   -webkit-font-smoothing: antialiased;
 }
 
@@ -70,7 +70,7 @@ a:hover { text-decoration-thickness: 2px; }
   clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-/* ---------- 顶栏 ---------- */
+/* ---------- top bar ---------- */
 
 .topbar {
   border-bottom: 1px solid var(--line);
@@ -94,7 +94,7 @@ a:hover { text-decoration-thickness: 2px; }
 }
 .bar nav a:hover { color: var(--accent); }
 
-/* 语言切换器：三个普通链接，禁 JS 也能切。 */
+/* Language switcher: three plain links, so it works with JS disabled. */
 .langnav {
   display: flex; gap: .6rem; flex-wrap: wrap;
   margin-left: 0;
@@ -114,12 +114,13 @@ a:hover { text-decoration-thickness: 2px; }
   text-underline-offset: 3px;
 }
 @media (max-width: 46rem) {
-  /* 窄屏两行：导航一行、语言一行，别把语言挤成半个字。 */
+  /* Two rows on narrow screens: nav on one, languages on the other, so a language name
+     never gets squeezed to half a word. */
   .bar nav:not(.langnav) { margin-left: 0; }
   .langnav { margin-left: auto; border-left: 0; padding-left: 0; }
 }
 
-/* ---------- 排版 ---------- */
+/* ---------- typography ---------- */
 
 section { padding: 3rem 1.25rem; border-bottom: 1px solid var(--line-2); }
 section.hero { padding-top: 3.5rem; border-bottom: 1px solid var(--line); }
@@ -145,7 +146,7 @@ p { margin: 0 0 .85rem; }
 
 strong { font-weight: 650; }
 
-/* ---------- 代码 ---------- */
+/* ---------- code ---------- */
 
 code {
   font-family: var(--mono);
@@ -161,7 +162,7 @@ pre {
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: .85rem 1rem;
-  overflow-x: auto;              /* 宽代码自己滚 */
+  overflow-x: auto;              /* wide code scrolls itself */
   position: relative;
 }
 pre code {
@@ -181,7 +182,7 @@ pre.cmd { padding-right: 4.25rem; margin-bottom: .85rem; }
 .copy:hover { color: var(--accent); border-color: var(--accent); }
 .copy[data-done] { color: var(--ok); border-color: var(--ok); }
 
-/* ---------- 首屏两栏 ---------- */
+/* ---------- two-column hero ---------- */
 
 .split {
   display: grid; grid-template-columns: 1fr; gap: 1rem;
@@ -196,7 +197,7 @@ pre.cmd { padding-right: 4.25rem; margin-bottom: .85rem; }
   color: var(--ink-3); margin-bottom: .4rem;
 }
 
-/* ---------- 三点 ---------- */
+/* ---------- the three points ---------- */
 
 .points { list-style: none; padding: 0; margin: 1.25rem 0 0; }
 .points > li {
@@ -206,7 +207,7 @@ pre.cmd { padding-right: 4.25rem; margin-bottom: .85rem; }
 .points > li:hover { border-left-color: var(--accent); }
 .points h3 { margin-top: 0; font-size: 1.05rem; }
 
-/* ---------- 包列表 ---------- */
+/* ---------- package list ---------- */
 
 .pkg-toolbar {
   display: flex; align-items: center; gap: .75rem;
@@ -258,12 +259,12 @@ pre.cmd { padding-right: 4.25rem; margin-bottom: .85rem; }
   font-size: .9rem;
 }
 
-/* ---------- 信任表 ---------- */
+/* ---------- trust table ---------- */
 
 .tablewrap { overflow-x: auto; margin: 1.25rem 0 1rem; }
 table.trust {
   border-collapse: collapse;
-  min-width: 46rem;                /* 窄屏靠 .tablewrap 横滚，body 不动 */
+  min-width: 46rem;                /* narrow screens scroll via .tablewrap; body stays put */
   font-size: .875rem;
 }
 table.trust th, table.trust td {
@@ -289,7 +290,7 @@ table.trust td code { display: inline-block; line-height: 1.5; }
   font-size: .9rem;
 }
 
-/* ---------- 页脚 ---------- */
+/* ---------- footer ---------- */
 
 footer { padding: 2rem 1.25rem 3rem; color: var(--ink-3); font-size: .875rem; }
 footer p { margin: 0 0 .4rem; }

@@ -1,11 +1,12 @@
-# toy 索引的种子列表 —— 一行一个 owner/repo，# 之后是注释。
-# 来源：常见的 "modern CLI tools" awesome-list（the design notes §11 的冷启动办法）。
-# 跑法见 index/README.md；一律带 --probe，不带的话 [bin] 右边是猜的。
+# Seed list for the toy index -- one owner/repo per line, # starts a comment.
+# Source: the usual "modern CLI tools" awesome-lists (the cold-start method in the design notes §11).
+# See index/README.md for how to run it. Always pass --probe; without it the right-hand
+# side of [bin] is a guess.
 
-junegunn/fzf              # 已在索引里
-mikefarah/yq              # 已在索引里
+junegunn/fzf              # already in the index
+mikefarah/yq              # already in the index
 
-# cargo-dist / Rust 那一批（§14.13 剥顶层目录之后才收得了）
+# The cargo-dist / Rust batch (only acceptable once §14.13 strips the top-level directory)
 BurntSushi/ripgrep
 sharkdp/fd
 sharkdp/bat
@@ -20,7 +21,7 @@ dalance/procs
 ClementTsang/bottom
 Peltoche/lsd
 
-# Go 那一批
+# The Go batch
 muesli/duf
 jesseduffield/lazygit
 charmbracelet/glow

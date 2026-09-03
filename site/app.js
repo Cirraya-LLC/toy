@@ -1,9 +1,11 @@
-// 索引浏览。包列表不写进 HTML —— 抄一份必然和 /index.json 漂移，
-// 而漂移意味着网页上写着有的包装不上。所以运行时 fetch 那同一份字节。
+// Index browsing. The package list is not written into the HTML -- a copy would inevitably
+// drift from /index.json, and drift means the site advertises packages that will not install.
+// So we fetch those same bytes at runtime.
 'use strict';
 
-// 文案不在这里硬编码 —— 三语页面是构建时生成的，它把这一份挂在 <body data-i18n> 上。
-// 拿不到就用空对象，`t()` 会回落成 key 本身：一个显示 key 的按钮，好过一个空白按钮。
+// Strings are not hardcoded here -- the three language pages are generated at build time, and
+// the generator hangs this bundle on <body data-i18n>. If it cannot be read we use an empty
+// object and `t()` falls back to the key itself: a button showing a key beats a blank button.
 const T = (() => {
   try { return JSON.parse(document.body.dataset.i18n || '{}'); } catch { return {}; }
 })();
@@ -13,10 +15,10 @@ const t = (k, vars) => {
   return s;
 };
 
-// 站点自己的地址，填进那几条 `toy index add` 的示例里。
+// The site's own address, substituted into the `toy index add` examples.
 for (const el of document.querySelectorAll('[data-host]')) el.textContent = location.host;
 
-/* ---------- 复制按钮 ---------- */
+/* ---------- copy button ---------- */
 
 function wireCopy(btn, text) {
   btn.addEventListener('click', async () => {
@@ -36,14 +38,15 @@ for (const btn of document.querySelectorAll('pre.cmd > .copy')) {
   wireCopy(btn, () => code.textContent);
 }
 
-/* ---------- 索引 ---------- */
+/* ---------- index ---------- */
 
 const out = document.getElementById('packages-out');
 const q = document.getElementById('q');
 const count = document.getElementById('count');
 
-// `[bin]` 左边那个名字才是装完之后 PATH 上的命令 —— 和仓库名经常对不上
-// （ClementTsang/bottom → btm，BurntSushi/ripgrep → rg），而那正是要显示的东西。
+// The name on the left of `[bin]` is the command that lands on PATH after install -- it often
+// does not match the repo name (ClementTsang/bottom -> btm, BurntSushi/ripgrep -> rg), and that
+// is exactly the thing worth showing.
 function binName(toyfile) {
   if (!toyfile) return '';
   const lines = toyfile.split('\n');
@@ -59,8 +62,8 @@ function binName(toyfile) {
   return '';
 }
 
-// source 只可能是 `github:owner/repo` 这种托管方形态或者 https:// 裸地址
-// （索引校验就是这么定的）。别的一律不给链接，而不是猜一个出来。
+// source can only be a forge form like `github:owner/repo` or a bare https:// address (that is
+// what index validation enforces). Anything else gets no link at all, rather than a guessed one.
 function upstream(source) {
   const host = { github: 'github.com', gitlab: 'gitlab.com', codeberg: 'codeberg.org' };
   const m = /^([a-z]+):([^/\s]+\/[^/\s]+)$/.exec(source || '');
@@ -72,7 +75,7 @@ function upstream(source) {
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
-  if (text != null) n.textContent = text;   // 一律 textContent：desc 是上游抄来的，不可信
+  if (text != null) n.textContent = text;   // always textContent: desc is copied from upstream and is not trusted
   return n;
 }
 
@@ -143,7 +146,7 @@ fetch('/index.json', { cache: 'no-cache' })
     apply();
   })
   .catch((err) => {
-    // JS 能跑但索引拉不到，也要给一条读得懂的出路，不要留一块空白。
+    // JS runs but the index will not load: still give a readable way out, not a blank space.
     out.replaceChildren();
     const p = el('p', 'pkg-error', t('err', { msg: err.message }));
     const a = el('a', null, t('err_link'));
