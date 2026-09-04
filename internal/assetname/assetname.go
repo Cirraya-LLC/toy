@@ -154,6 +154,39 @@ var companionSuffixes = []string{
 	".sha256", ".sha512", ".sha1", ".md5", ".sum", ".sig", ".asc", ".pem",
 	".sbom", ".spdx", ".intoto", ".json", ".txt", ".sha256sum",
 	".deb", ".rpm", ".apk", ".pkg", ".msi", ".dmg", ".snap", ".appimage",
+	// BLAKE3 and minisign sidecars. watchexec ships `...-gnu.deb.b3`, and the
+	// suffix that decides is the LAST one -- the `.deb` before it was already on
+	// this list and still did not save us, because the check looks at the end of
+	// the name. Without `.b3` here that file was picked as the artifact and
+	// installed: a text file holding a hex digest, chmod +x'd, and the shell
+	// reported `<sha256>: command not found` from line 1 of the "binary".
+	".b3", ".blake3", ".minisig", ".cert", ".crt", ".pub", ".sigstore",
+}
+
+// Compression and package formats we cannot unpack are deliberately NOT in the
+// list above. That list is consulted before platform detection and matches on the
+// end of the name, so putting ".gz" in it silently threw away every .tar.gz --
+// the formats belong here instead, where the question is "can we unpack this",
+// and where a rejection is reported with a reason instead of vanishing.
+
+// notAnArchiveWeHandle is the companion list restricted to the entries that mean
+// "we cannot unpack this", used where the question is specifically about format
+// rather than about sidecar files. `.tar.gz` is deliberately NOT caught by the
+// `.gz` entry: matching is by full suffix, and `.tar.gz` is handled elsewhere
+// before this list is consulted.
+func UnpackableSuffix(name string) string {
+	l := strings.ToLower(name)
+	if strings.HasSuffix(l, ".tar.gz") || strings.HasSuffix(l, ".tgz") {
+		return ""
+	}
+	for _, sfx := range []string{".bz2", ".bz", ".xz", ".lzma", ".zst", ".zstd",
+		".lz4", ".br", ".7z", ".rar", ".gz", ".tar.xz", ".txz",
+		".deb", ".rpm", ".apk", ".pkg", ".msi", ".dmg", ".snap"} {
+		if strings.HasSuffix(l, sfx) {
+			return sfx
+		}
+	}
+	return ""
 }
 
 // foreignOS reports whether the goos detect returned is a foreign system.

@@ -165,7 +165,7 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 	// through is the same judgement as unstableBinPath: an entry nobody can install
 	// does not belong in the index, and `toy install` failing at step one gives no
 	// hint that the tag SHAPE was the problem.
-	if _, verr := semver.Max([]string{info.Tag}, true); verr != nil {
+	if _, verr := semver.Max([]string{info.Tag}, true, r.Repo); verr != nil {
 		res.err = fmt.Errorf("the latest release is tagged %q, and semver can find no version in it "+
 			"(it has to look like v1.2.3, or carry one after a package name like jq-1.8.2). "+
 			"The client picks versions with `git ls-remote --tags` + semver, so it would not recognise a "+

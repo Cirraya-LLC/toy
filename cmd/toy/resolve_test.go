@@ -18,16 +18,16 @@ import (
 func TestPickVersion(t *testing.T) {
 	tags := []string{"v1.0.0", "release-junk", "v2.0.0-rc.1", "v1.2.0"}
 
-	v, err := rsvPickVersion(tags, "")
+	v, err := rsvPickVersion(tags, "", "tool")
 	if err != nil || v.Raw != "v1.2.0" {
 		t.Fatalf("without --version it should pick the highest stable release v1.2.0, got %q (err=%v)", v.Raw, err)
 	}
 	// Writing 1.2.0 and writing v1.2.0 mean the same tag.
-	if v, err := rsvPickVersion(tags, "1.2.0"); err != nil || v.Raw != "v1.2.0" {
+	if v, err := rsvPickVersion(tags, "1.2.0", "tool"); err != nil || v.Raw != "v1.2.0" {
 		t.Fatalf("1.2.0 should match tag v1.2.0, got %q (err=%v)", v.Raw, err)
 	}
 	// Naming a version that does not exist has to error and say which ones do.
-	_, err = rsvPickVersion(tags, "v9.9.9")
+	_, err = rsvPickVersion(tags, "v9.9.9", "tool")
 	if err == nil || !strings.Contains(err.Error(), "v1.2.0") {
 		t.Fatalf("a missing version must error and list the existing ones, got %v", err)
 	}

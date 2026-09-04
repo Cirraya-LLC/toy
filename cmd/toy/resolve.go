@@ -329,7 +329,7 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string)
 		return nil, fmt.Errorf("%s has no tags at all, and tags are how toy discovers versions. "+
 			"If this is your repository: push a v1.0.0 tag, cut a release, add a toy.toml, and it is installable", clone)
 	}
-	v, err := rsvPickVersion(tags, r.Version)
+	v, err := rsvPickVersion(tags, r.Version, r.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", r.String(), err)
 	}
@@ -476,9 +476,12 @@ func rsvIsNotFound(err error) bool {
 
 // rsvPickVersion picks the version: the tag the user named if they named one,
 // otherwise the highest stable release.
-func rsvPickVersion(tags []string, want string) (semver.V, error) {
+// repo is the repository name; semver.Max needs it to tell a project's own
+// prefixed tags (gping-v1.21.0) from a sub-project sharing the repository
+// (wincolor-0.1.6).
+func rsvPickVersion(tags []string, want, repo string) (semver.V, error) {
 	if want == "" {
-		return semver.Max(tags, false)
+		return semver.Max(tags, false, repo)
 	}
 	for _, t := range tags {
 		// "v1.2.3" and "1.2.3" name the same tag; accept either spelling.

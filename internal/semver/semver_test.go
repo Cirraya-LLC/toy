@@ -135,7 +135,7 @@ func TestMax(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := Max(c.tags, c.allowPre)
+			got, err := Max(c.tags, c.allowPre, "tool")
 			if err != nil {
 				t.Fatalf("Max failed: %v", err)
 			}
@@ -158,7 +158,7 @@ func TestMaxErrors(t *testing.T) {
 	}
 	for _, c := range bad {
 		t.Run(c.name, func(t *testing.T) {
-			if v, err := Max(c.tags, c.allowPre); err == nil {
+			if v, err := Max(c.tags, c.allowPre, "tool"); err == nil {
 				t.Fatalf("should have failed, got %+v", v)
 			}
 		})
@@ -168,7 +168,7 @@ func TestMaxErrors(t *testing.T) {
 // A non-semver tag must be SKIPPED, never treated as 0.0.0 — otherwise it beats
 // a genuinely low version.
 func TestMaxNeverTreatsJunkAsZero(t *testing.T) {
-	got, err := Max([]string{"release-2024", "v0.0.1"}, false)
+	got, err := Max([]string{"release-2024", "v0.0.1"}, false, "tool")
 	if err != nil {
 		t.Fatalf("Max failed: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestCompareDoesNotOverflowOnHandBuiltV(t *testing.T) {
 // one vague error leaves the second person with nowhere to go (spec §3: "fail
 // with an error that tells the author exactly what to do").
 func TestMaxErrorsTellYouWhichSituationYouAreIn(t *testing.T) {
-	_, preOnly := Max([]string{"v1.0.0-rc.1", "v1.0.0-rc.2"}, false)
+	_, preOnly := Max([]string{"v1.0.0-rc.1", "v1.0.0-rc.2"}, false, "tool")
 	if preOnly == nil {
 		t.Fatal("pre-releases only should be an error")
 	}
@@ -275,7 +275,7 @@ func TestMaxErrorsTellYouWhichSituationYouAreIn(t *testing.T) {
 		t.Errorf("with pre-releases only, the error should point at --version, got: %v", preOnly)
 	}
 
-	_, noSemver := Max([]string{"release-2024", "latest"}, false)
+	_, noSemver := Max([]string{"release-2024", "latest"}, false, "tool")
 	if noSemver == nil {
 		t.Fatal("all non-semver should be an error")
 	}

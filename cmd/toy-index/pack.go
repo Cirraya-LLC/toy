@@ -45,8 +45,17 @@ type pack struct {
 // (needs an external xz), so letting it through only produces an entry that generates
 // fine and installs never.
 func installable(name string) bool {
-	l := strings.ToLower(name)
-	if strings.HasSuffix(l, ".tar.xz") || strings.HasSuffix(l, ".txz") {
+	// Formats we cannot unpack come first, before IsArchive: IsArchive recognizes
+	// .tar.xz as a format it knows OF, and answers ErrUnsupported only at
+	// extraction time.
+	//
+	// It also has to be an allowlist rather than "whatever we did not recognize",
+	// because the fall-through case treats a name as a bare binary and chmod +x's
+	// it. A blocklist let restic's `restic_0.18.1_linux_amd64.bz2` through -- no
+	// recognized archive suffix, a perfectly readable platform in the name -- and
+	// the shell answered `cannot execute binary file: Exec format error`, after
+	// the download and the checksum had both passed.
+	if assetname.UnpackableSuffix(name) != "" {
 		return false
 	}
 	if archive.IsArchive(name) {

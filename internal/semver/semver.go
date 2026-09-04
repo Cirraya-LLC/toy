@@ -191,46 +191,72 @@ func allDigits(s string) bool {
 // Max picks the highest stable version out of a pile of tags, and errors when
 // none of them parse. Pre-releases are ignored unless allowPre — installing
 // something should not hand you an rc by default.
-func Max(tags []string, allowPre bool) (V, error) {
-	best, found, skippedPre := pickMax(tags, allowPre, Parse)
-	if found {
+// Max picks the highest release among a repository's tags.
+//
+// repo is the repository name ("gping"), and it is the discriminator that makes
+// prefixed tags safe. Pass "" when it is not known; the prefix rules below then
+// fall through to the conservative single-prefix case.
+func Max(tags []string, allowPre bool, repo string) (V, error) {
+	// Candidates are the bare semver tags PLUS any prefixed tag whose prefix is the
+	// repository's own name. That pairing is the whole rule, and both halves come
+	// from a real repository:
+	//
+	//   ripgrep tags its releases bare (15.2.0) and its sub-crates with prefixes
+	//   (wincolor-0.1.6). Let a sub-crate compete and one sitting on a higher
+	//   version silently becomes the release we install, from its tag's URL.
+	//
+	//   gping migrated the other way: its releases are gping-v1.21.0 today, and the
+	//   bare v1.0.0..v1.2.1 tags are 2021 leftovers. "Bare always wins" installed a
+	//   three-year-old version from an asset name that no longer exists.
+	//
+	// A prefix equal to the repository name is the project talking about itself.
+	// Any other prefix is a different project sharing the repository.
+	var cands []V
+	var skippedPre int
+	for _, t := range tags {
+		v, err := Parse(t)
+		if err != nil {
+			pv, perr := parsePrefixed(t)
+			if perr != nil || !prefixIsRepo(pv.Prefix, repo) {
+				continue // non-semver tags are everywhere; skip rather than treat as 0.0.0
+			}
+			v = pv
+		}
+		if v.Pre != "" && !allowPre {
+			skippedPre++
+			continue
+		}
+		cands = append(cands, v)
+	}
+	if best, ok := highest(cands); ok {
 		return best, nil
 	}
 
-	// Fallback: tags that carry a package-name prefix, "jq-1.8.2". jq tags every
-	// release that way and so do plenty of monorepos and C projects, and without
-	// this the error told the user the repository "may not have tagged a release
-	// yet" while staring at 19 tags -- blaming an upstream that did nothing wrong.
-	//
-	// Only when there is NOT ONE bare semver tag, and only when every prefixed tag
-	// shares ONE prefix. Both conditions matter. ripgrep's repo carries its own
-	// releases as bare 15.2.0 alongside sub-crate tags like wincolor-0.1.6; take
-	// the prefixed ones there and a sub-crate that happens to be on a higher
-	// version silently becomes the release you install. Requiring a single prefix
-	// is the same guard for a repo that tags two projects.
-	byPrefix := map[string][]string{}
+	// Nothing bare and nothing named after the repository. A repository whose tags
+	// all carry one other prefix is still perfectly installable, so accept that --
+	// but only one prefix: across two projects there is no highest version, and
+	// picking one installs whichever sub-project happens to be furthest ahead.
+	byPrefix := map[string][]V{}
 	for _, t := range tags {
-		if v, err := parsePrefixed(t); err == nil {
-			byPrefix[v.Prefix] = append(byPrefix[v.Prefix], t)
+		v, err := parsePrefixed(t)
+		if err != nil {
+			continue
 		}
+		if v.Pre != "" && !allowPre {
+			skippedPre++
+			continue
+		}
+		byPrefix[v.Prefix] = append(byPrefix[v.Prefix], v)
 	}
 	switch len(byPrefix) {
-	case 0:
-		if skippedPre > 0 {
-			return V{}, fmt.Errorf("found %d pre-release version(s) but no stable release; pass --version with a specific tag to install a pre-release", skippedPre)
-		}
-		return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3 or jq-1.8.2); this repository may not have tagged a release yet", len(tags))
 	case 1:
-		for _, ts := range byPrefix {
-			best, found, pre := pickMax(ts, allowPre, parsePrefixed)
-			if found {
+		for _, vs := range byPrefix {
+			if best, ok := highest(vs); ok {
 				return best, nil
 			}
-			if pre > 0 {
-				return V{}, fmt.Errorf("found %d pre-release version(s) but no stable release; pass --version with a specific tag to install a pre-release", pre)
-			}
 		}
-		return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3 or jq-1.8.2); this repository may not have tagged a release yet", len(tags))
+	case 0:
+		// fall through to the errors below
 	default:
 		names := make([]string, 0, len(byPrefix))
 		for k := range byPrefix {
@@ -240,24 +266,43 @@ func Max(tags []string, allowPre bool) (V, error) {
 		return V{}, fmt.Errorf("no plain semver tag here, and the prefixed ones belong to %d different projects (%s) -- picking a highest across them would install whichever sub-project happens to be furthest ahead. Pass --version with the exact tag you want",
 			len(names), strings.Join(names, ", "))
 	}
+
+	if skippedPre > 0 {
+		return V{}, fmt.Errorf("found %d pre-release version(s) but no stable release; pass --version with a specific tag to install a pre-release", skippedPre)
+	}
+	return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3, or carry one after the package name like jq-1.8.2); this repository may not have tagged a release yet", len(tags))
 }
 
-// pickMax is the shared loop: highest version any parse function accepts.
-func pickMax(tags []string, allowPre bool, parse func(string) (V, error)) (best V, found bool, skippedPre int) {
-	for _, t := range tags {
-		v, err := parse(t)
-		if err != nil {
-			continue // repos are full of non-semver tags like "release-2024"; skip them rather than treating them as 0.0.0
-		}
-		if v.Pre != "" && !allowPre {
-			skippedPre++
-			continue
-		}
+func highest(vs []V) (V, bool) {
+	var best V
+	found := false
+	for _, v := range vs {
 		if !found || Compare(v, best) > 0 {
 			best, found = v, true
 		}
 	}
-	return best, found, skippedPre
+	return best, found
+}
+
+// prefixIsRepo reports whether a tag prefix names this repository. Compared with
+// '-', '_' and '.' ignored and case folded, because gping-v1.21.0, gping_1.21.0
+// and GPing-1.21.0 are all the project talking about itself.
+func prefixIsRepo(prefix, repo string) bool {
+	if repo == "" {
+		return false
+	}
+	return foldName(prefix) == foldName(repo)
+}
+
+func foldName(s string) string {
+	var b strings.Builder
+	for _, c := range strings.ToLower(s) {
+		if c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }
 
 // parsePrefixed accepts "<name>-<semver>", the shape jq uses. The prefix has to
