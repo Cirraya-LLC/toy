@@ -69,6 +69,19 @@ jobs:
         if: github.event_name != 'pull_request'
         run: bash scripts/index-check.sh
 
+      # index-check above installs and runs, which it can only do for the platform
+      # of this runner. This one HEADs every platform an entry declares, and it is
+      # the only thing here that sees darwin from a linux runner and the other way
+      # round. Runs once per matrix leg -- the same URLs, but a failure that shows
+      # up on only one of them is itself worth knowing about.
+      - name: index-urls (every declared platform, not just this runner's)
+        if: github.event_name == 'pull_request' && steps.only.outputs.skip != '1'
+        run: bash scripts/index-urls.sh --only "${{ steps.only.outputs.ids }}"
+
+      - name: index-urls (everything)
+        if: github.event_name != 'pull_request'
+        run: bash scripts/index-urls.sh
+
   # A failure of the scheduled run has to leave a trace: nobody reads the logs of a
   # workflow that runs every day. If an issue with the same title is already open, comment
   # on it instead of opening another — five broken days must not become five issues.

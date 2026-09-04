@@ -123,7 +123,8 @@ runs, and uninstalls** every single entry. CI runs it daily (`index-check.yml`),
 on a PR it only tests the entries the diff touched.
 
 ```bash
-make index-check                             # everything (needs network, really downloads)
+make index-check          # installs, runs and removes every entry (this platform only)
+make index-urls           # HEADs every platform each entry declares                             # everything (needs network, really downloads)
 make index-check ARGS="--only owner/repo"    # just one
 ```
 
