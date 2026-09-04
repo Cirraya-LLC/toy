@@ -373,18 +373,39 @@ func TestReadRepoListStripsCommentsAndDupes(t *testing.T) {
 // fine, and then `toy install` dies at step one with an error that never hints the tag
 // SHAPE is the problem. An entry nobody can install does not belong in the index; same
 // class of judgement as unstableBinPath.
-func TestGenRefusesReposWhoseTagsAreNotSemver(t *testing.T) {
+func TestGenAcceptsAPrefixedTagButNotATagWithNoVersion(t *testing.T) {
+	// This assertion is flipped. It used to require that jqlang/jq be refused,
+	// because `jq-1.8.2` parsed to nothing and the entry would have been one nobody
+	// could install. Since semver.Max gained the prefixed-tag fallback the client
+	// resolves that shape, so refusing it here would lock out a whole style of
+	// tagging that jq, plenty of monorepos and plenty of C projects use.
 	out := filepath.Join(t.TempDir(), "idx.json")
-	err := runFakeGen(t, map[string]fakeRepo{
+	if err := runFakeGen(t, map[string]fakeRepo{
 		"jqlang/jq": {
 			desc: "Command-line JSON processor", tag: "jq-1.8.2",
 			assets: []string{"jq-linux-amd64", "jq-macos-arm64"},
 		},
-	}, []string{"jqlang/jq"}, out, false)
-	if err == nil {
-		t.Fatal("want the batch to fail: the only line in it produces no entry")
+	}, []string{"jqlang/jq"}, out, false); err != nil {
+		t.Fatalf("a package-name prefix is a tag shape the client handles: %v", err)
 	}
-	if _, serr := os.Stat(out); serr == nil {
+	if _, serr := os.Stat(out); serr != nil {
+		t.Fatalf("the entry should have been written: %v", serr)
+	}
+
+	// A tag with no version in it at all still has to be refused: the client would
+	// die at step one, and nothing in that error hints that the tag shape was the
+	// problem. An entry nobody can install does not belong in the index.
+	out2 := filepath.Join(t.TempDir(), "idx2.json")
+	err := runFakeGen(t, map[string]fakeRepo{
+		"someone/rolling": {
+			desc: "ships from a moving tag", tag: "nightly",
+			assets: []string{"tool_linux_amd64.tar.gz"},
+		},
+	}, []string{"someone/rolling"}, out2, false)
+	if err == nil {
+		t.Fatal("a tag carrying no version must still be refused")
+	}
+	if _, serr := os.Stat(out2); serr == nil {
 		t.Fatal("no index file should have been written -- not one entry was produced")
 	}
 }

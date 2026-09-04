@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -22,6 +23,10 @@ type V struct {
 	Major, Minor, Patch int
 	Pre                 string // without the leading '-'
 	Raw                 string // the original tag, possibly with a 'v' prefix
+	// Prefix is a package-name prefix that was stripped off Raw, "jq-" for the
+	// tag "jq-1.8.2". Empty for an ordinary tag. Only Max's fallback pass ever
+	// sets it; Parse stays strict.
+	Prefix string
 }
 
 // Parse accepts "v1.2.3" / "1.2.3" / "1.2.3-rc.1".
@@ -187,13 +192,60 @@ func allDigits(s string) bool {
 // none of them parse. Pre-releases are ignored unless allowPre — installing
 // something should not hand you an rc by default.
 func Max(tags []string, allowPre bool) (V, error) {
-	var (
-		best       V
-		found      bool
-		skippedPre int
-	)
+	best, found, skippedPre := pickMax(tags, allowPre, Parse)
+	if found {
+		return best, nil
+	}
+
+	// Fallback: tags that carry a package-name prefix, "jq-1.8.2". jq tags every
+	// release that way and so do plenty of monorepos and C projects, and without
+	// this the error told the user the repository "may not have tagged a release
+	// yet" while staring at 19 tags -- blaming an upstream that did nothing wrong.
+	//
+	// Only when there is NOT ONE bare semver tag, and only when every prefixed tag
+	// shares ONE prefix. Both conditions matter. ripgrep's repo carries its own
+	// releases as bare 15.2.0 alongside sub-crate tags like wincolor-0.1.6; take
+	// the prefixed ones there and a sub-crate that happens to be on a higher
+	// version silently becomes the release you install. Requiring a single prefix
+	// is the same guard for a repo that tags two projects.
+	byPrefix := map[string][]string{}
 	for _, t := range tags {
-		v, err := Parse(t)
+		if v, err := parsePrefixed(t); err == nil {
+			byPrefix[v.Prefix] = append(byPrefix[v.Prefix], t)
+		}
+	}
+	switch len(byPrefix) {
+	case 0:
+		if skippedPre > 0 {
+			return V{}, fmt.Errorf("found %d pre-release version(s) but no stable release; pass --version with a specific tag to install a pre-release", skippedPre)
+		}
+		return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3 or jq-1.8.2); this repository may not have tagged a release yet", len(tags))
+	case 1:
+		for _, ts := range byPrefix {
+			best, found, pre := pickMax(ts, allowPre, parsePrefixed)
+			if found {
+				return best, nil
+			}
+			if pre > 0 {
+				return V{}, fmt.Errorf("found %d pre-release version(s) but no stable release; pass --version with a specific tag to install a pre-release", pre)
+			}
+		}
+		return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3 or jq-1.8.2); this repository may not have tagged a release yet", len(tags))
+	default:
+		names := make([]string, 0, len(byPrefix))
+		for k := range byPrefix {
+			names = append(names, strings.TrimSuffix(k, "-"))
+		}
+		sort.Strings(names)
+		return V{}, fmt.Errorf("no plain semver tag here, and the prefixed ones belong to %d different projects (%s) -- picking a highest across them would install whichever sub-project happens to be furthest ahead. Pass --version with the exact tag you want",
+			len(names), strings.Join(names, ", "))
+	}
+}
+
+// pickMax is the shared loop: highest version any parse function accepts.
+func pickMax(tags []string, allowPre bool, parse func(string) (V, error)) (best V, found bool, skippedPre int) {
+	for _, t := range tags {
+		v, err := parse(t)
 		if err != nil {
 			continue // repos are full of non-semver tags like "release-2024"; skip them rather than treating them as 0.0.0
 		}
@@ -205,13 +257,46 @@ func Max(tags []string, allowPre bool) (V, error) {
 			best, found = v, true
 		}
 	}
-	if found {
-		return best, nil
+	return best, found, skippedPre
+}
+
+// parsePrefixed accepts "<name>-<semver>", the shape jq uses. The prefix has to
+// look like a package name and nothing else: Raw ends up in the download URL and
+// Number() feeds the directory under ~/.toy/pkg, so a prefix carrying a slash or
+// a dot-dot is upstream choosing our paths for us.
+func parsePrefixed(s string) (V, error) {
+	raw := strings.TrimSpace(s)
+	i := strings.LastIndexByte(raw, '-')
+	if i <= 0 || i == len(raw)-1 {
+		return V{}, fmt.Errorf("%q has no package-name prefix", raw)
 	}
-	if skippedPre > 0 {
-		return V{}, fmt.Errorf("found %d pre-release version(s) but no stable release; pass --version with a specific tag to install a pre-release", skippedPre)
+	// The last '-' may belong to the version itself ("mytool-1.2.3-rc.1"), so walk
+	// left until what follows parses.
+	for i > 0 {
+		prefix, rest := raw[:i+1], raw[i+1:]
+		if v, err := Parse(rest); err == nil && validPrefix(prefix) {
+			v.Raw, v.Prefix = raw, prefix
+			return v, nil
+		}
+		i = strings.LastIndexByte(raw[:i], '-')
 	}
-	return V{}, fmt.Errorf("none of these %d tags is a semver version (they should look like v1.2.3); this repository may not have tagged a release yet", len(tags))
+	return V{}, fmt.Errorf("%q is not <name>-<semver>", raw)
+}
+
+// validPrefix keeps the prefix to characters that are safe in a path and a URL.
+func validPrefix(p string) bool {
+	if p == "" || len(p) > maxLen || strings.Contains(p, "..") {
+		return false
+	}
+	for _, c := range p {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Number returns the version without the 'v' prefix, for the {version}
@@ -221,7 +306,7 @@ func (v V) Number() string {
 	// names are derived from that tag, so rebuilding the string from parts can
 	// fail to match (a tag carrying build metadata, for instance).
 	if v.Raw != "" {
-		return strings.TrimPrefix(v.Raw, "v")
+		return strings.TrimPrefix(strings.TrimPrefix(v.Raw, v.Prefix), "v")
 	}
 	s := fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
 	if v.Pre != "" {

@@ -11,21 +11,21 @@ func TestParseOK(t *testing.T) {
 		in   string
 		want V
 	}{
-		{"1.2.3", V{1, 2, 3, "", "1.2.3"}},
-		{"v1.2.3", V{1, 2, 3, "", "v1.2.3"}},
-		{"v0.0.0", V{0, 0, 0, "", "v0.0.0"}},
-		{"v10.20.30", V{10, 20, 30, "", "v10.20.30"}},
-		{"1.2.3-rc.1", V{1, 2, 3, "rc.1", "1.2.3-rc.1"}},
-		{"v2.0.0-alpha", V{2, 0, 0, "alpha", "v2.0.0-alpha"}},
-		{"v1.0.0-rc-1", V{1, 0, 0, "rc-1", "v1.0.0-rc-1"}},
+		{"1.2.3", V{Major: 1, Minor: 2, Patch: 3, Pre: "", Raw: "1.2.3"}},
+		{"v1.2.3", V{Major: 1, Minor: 2, Patch: 3, Pre: "", Raw: "v1.2.3"}},
+		{"v0.0.0", V{Major: 0, Minor: 0, Patch: 0, Pre: "", Raw: "v0.0.0"}},
+		{"v10.20.30", V{Major: 10, Minor: 20, Patch: 30, Pre: "", Raw: "v10.20.30"}},
+		{"1.2.3-rc.1", V{Major: 1, Minor: 2, Patch: 3, Pre: "rc.1", Raw: "1.2.3-rc.1"}},
+		{"v2.0.0-alpha", V{Major: 2, Minor: 0, Patch: 0, Pre: "alpha", Raw: "v2.0.0-alpha"}},
+		{"v1.0.0-rc-1", V{Major: 1, Minor: 0, Patch: 0, Pre: "rc-1", Raw: "v1.0.0-rc-1"}},
 		// Build metadata takes no part in comparison and is dropped on parse,
 		// but Raw keeps it verbatim.
-		{"v1.2.3+build.5", V{1, 2, 3, "", "v1.2.3+build.5"}},
-		{"v1.2.3-rc.1+build.5", V{1, 2, 3, "rc.1", "v1.2.3-rc.1+build.5"}},
+		{"v1.2.3+build.5", V{Major: 1, Minor: 2, Patch: 3, Pre: "", Raw: "v1.2.3+build.5"}},
+		{"v1.2.3-rc.1+build.5", V{Major: 1, Minor: 2, Patch: 3, Pre: "rc.1", Raw: "v1.2.3-rc.1+build.5"}},
 		// Leading zeros are not strictly semver, but real repos have them, so
 		// accept them.
-		{"v1.02.3", V{1, 2, 3, "", "v1.02.3"}},
-		{"  v1.2.3  ", V{1, 2, 3, "", "v1.2.3"}},
+		{"v1.02.3", V{Major: 1, Minor: 2, Patch: 3, Pre: "", Raw: "v1.02.3"}},
+		{"  v1.2.3  ", V{Major: 1, Minor: 2, Patch: 3, Pre: "", Raw: "v1.2.3"}},
 	}
 	for _, c := range cases {
 		got, err := Parse(c.in)

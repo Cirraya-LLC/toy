@@ -158,14 +158,16 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 		res.err = err
 		return res
 	}
-	// The client picks versions with `git ls-remote --tags` + semver (spec §2), so the
-	// release tag has to look like v?X.Y.Z. A tag like jqlang/jq's `jq-1.8.2` parses to
-	// nothing -- the entry generates fine, and then `toy install` dies at step one with
-	// "no semver version among these tags", where nothing hints that the tag SHAPE is the
-	// problem. Same class of judgement as unstableBinPath: an entry nobody can install
-	// does not belong in the index.
-	if _, verr := semver.Parse(info.Tag); verr != nil {
-		res.err = fmt.Errorf("the latest release is tagged %q, which is not semver (it has to look like v1.2.3). "+
+	// The client picks versions with `git ls-remote --tags` + semver (spec §2), so a
+	// release tag has to be something semver can find a version in. Since the
+	// prefixed-tag fallback landed that includes jqlang/jq's `jq-1.8.2` shape, but
+	// not a tag with no version in it at all. Checking here rather than letting it
+	// through is the same judgement as unstableBinPath: an entry nobody can install
+	// does not belong in the index, and `toy install` failing at step one gives no
+	// hint that the tag SHAPE was the problem.
+	if _, verr := semver.Max([]string{info.Tag}, true); verr != nil {
+		res.err = fmt.Errorf("the latest release is tagged %q, and semver can find no version in it "+
+			"(it has to look like v1.2.3, or carry one after a package name like jq-1.8.2). "+
 			"The client picks versions with `git ls-remote --tags` + semver, so it would not recognise a "+
 			"single version here -- listing this repo produces an entry nobody can install", tomlSafe(info.Tag, 64))
 		return res
