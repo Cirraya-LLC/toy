@@ -52,6 +52,7 @@ func commands() []command {
 		{"keygen", "", "generate an ed25519 key pair", runKeygen},
 		{"publish", "[--inline] [--source github:owner/repo] [dir]", "read toy.toml, sign it, print an index entry", runPublish},
 		{"serve", "[--addr host:port]", "serve the local cache as a mirror", runServe},
+		{"prune", "[--all] [--dry-run]", "reclaim the download cache", runPrune},
 		{"doctor", "", "check PATH, directory permissions and index reachability", runDoctor},
 	}
 }

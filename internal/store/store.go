@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -777,4 +778,92 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// CacheEntry is one file in the download cache. The name is the sha256 of the
+// contents, which is what makes the cache directory a mirror as it stands
+// (spec §8) -- toy serve does nothing but hand these files out by name.
+type CacheEntry struct {
+	SHA256 string
+	Bytes  int64
+	InUse  bool // referenced by the manifest of a package that is still installed
+}
+
+// CacheEntries lists the cache with each file marked as still in use or not.
+//
+// "In use" means an installed package's manifest records that sha256. Everything
+// else is a version somebody upgraded past, or a package they uninstalled:
+// uninstall deliberately leaves the bytes behind, because they are
+// content-addressed and they are what toy serve mirrors. That is a good reason
+// to keep some of them and no reason at all to keep every one forever with no
+// way to see the total -- which is what this exists to fix.
+func (s *Store) CacheEntries() ([]CacheEntry, error) {
+	ms, err := s.ListManifests()
+	if err != nil {
+		return nil, err
+	}
+	used := make(map[string]bool, len(ms))
+	for _, m := range ms {
+		if m.SHA256 != "" {
+			used[strings.ToLower(m.SHA256)] = true
+		}
+	}
+	des, err := os.ReadDir(s.CacheDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: cannot read the cache directory %s: %w", s.CacheDir(), err)
+	}
+	out := make([]CacheEntry, 0, len(des))
+	for _, de := range des {
+		if de.IsDir() || !isSHA256Name(de.Name()) {
+			continue // Not ours; leave anything we did not put here alone.
+		}
+		info, err := de.Info()
+		if err != nil {
+			continue // Vanished between ReadDir and Info; nothing to report.
+		}
+		out = append(out, CacheEntry{SHA256: de.Name(), Bytes: info.Size(), InUse: used[de.Name()]})
+	}
+	slices.SortFunc(out, func(a, b CacheEntry) int { return strings.Compare(a.SHA256, b.SHA256) })
+	return out, nil
+}
+
+// PruneCache deletes cached downloads. With all set, everything goes; otherwise
+// only the entries no installed package refers to.
+//
+// Only files whose name is a sha256 are ever touched. The cache directory is the
+// one place where a stray name would be a user's own file, and deleting
+// something we did not write is not a thing this command gets to do.
+func (s *Store) PruneCache(all bool) (removed int, freed int64, err error) {
+	es, err := s.CacheEntries()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, e := range es {
+		if e.InUse && !all {
+			continue
+		}
+		p := filepath.Join(s.CacheDir(), e.SHA256)
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, freed, fmt.Errorf("store: cannot delete %s: %w", p, err)
+		}
+		removed++
+		freed += e.Bytes
+	}
+	return removed, freed, nil
+}
+
+// isSHA256Name reports whether a file name is exactly 64 lowercase hex digits.
+func isSHA256Name(n string) bool {
+	if len(n) != 64 {
+		return false
+	}
+	for _, c := range n {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

@@ -341,6 +341,17 @@ echo "== uninstall =="
 check "the symlink is gone"                   "! test -e '$TOY_HOME/bin/hello'"
 check "the cache stays (content-addressed, and it doubles as a mirror dir)" "ls '$TOY_HOME/cache' | grep -qE '^[0-9a-f]{64}'"
 
+echo "== prune: the cache only ever grows, so it has to be reclaimable =="
+"$TOY" install local:test/hello >/dev/null 2>&1 || true
+before=$(ls "$TOY_HOME/cache" 2>/dev/null | wc -l)
+check "the cache holds the download"                    "[ '$before' -ge 1 ]"
+check "doctor states the cache size"                    "'$TOY' doctor 2>&1 | grep -qi 'download cache'"
+"$TOY" uninstall hello >/dev/null 2>&1 || true
+check "uninstall keeps the bytes (it is what toy serve mirrors)" "[ \$(ls '$TOY_HOME/cache' | wc -l) -ge 1 ]"
+check "--dry-run deletes nothing"                       "'$TOY' prune --dry-run >/dev/null 2>&1 && [ \$(ls '$TOY_HOME/cache' | wc -l) -ge 1 ]"
+"$TOY" prune >/dev/null 2>&1
+check "prune reclaims what nothing refers to"           "[ \$(ls '$TOY_HOME/cache' | wc -l) -eq 0 ]"
+
 echo "== doctor / keygen / serve =="
 check "doctor runs"                           "'$TOY' doctor"
 # The platform is NEUTRAL INFORMATION, not a check: a musl box is neither right nor

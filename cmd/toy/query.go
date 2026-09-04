@@ -831,6 +831,7 @@ func runDoctor(ctx context.Context, args []string) error {
 	checks = append(checks, qryCheckIndexes(ctx, cfg)...)
 	checks = append(checks, qryCheckLinks(st))
 	checks = append(checks, qryCheckManifests(st)...)
+	checks = append(checks, qryCheckCache(st))
 
 	ui.Info("Checking %s", st.Root)
 	ui.Info("")
@@ -1085,4 +1086,32 @@ func qryPlural(n int, one, many string) string {
 		return fmt.Sprintf("%d %s", n, one)
 	}
 	return fmt.Sprintf("%d %s", n, many)
+}
+
+// qryCheckCache reports what the download cache adds up to.
+//
+// Never a ✗: a large cache is not a fault, and uninstall keeps those bytes on
+// purpose (they are content-addressed and they are what `toy serve` mirrors,
+// spec §8). But it only ever grows, and a number nobody can see is a number
+// nobody reclaims -- so doctor states it, and points at `toy prune` once there is
+// something worth reclaiming.
+func qryCheckCache(st *store.Store) qryCheck {
+	es, err := st.CacheEntries()
+	if err != nil {
+		return qryCheck{ok: false, title: "cannot read the download cache", note: err.Error()}
+	}
+	var total, reclaimable int64
+	var n, rn int
+	for _, e := range es {
+		total, n = total+e.Bytes, n+1
+		if !e.InUse {
+			reclaimable, rn = reclaimable+e.Bytes, rn+1
+		}
+	}
+	c := qryCheck{ok: true, title: fmt.Sprintf("download cache: %s in %s", prnSize(total), prnCount(n, "file"))}
+	if rn > 0 {
+		c.note = fmt.Sprintf("%s of that is no longer used by anything installed. `toy prune` reclaims it "+
+			"(those bytes are also what `toy serve` hands out, so pruning leaves it less to mirror)", prnSize(reclaimable))
+	}
+	return c
 }
