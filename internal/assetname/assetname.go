@@ -179,8 +179,11 @@ func UnpackableSuffix(name string) string {
 	if strings.HasSuffix(l, ".tar.gz") || strings.HasSuffix(l, ".tgz") {
 		return ""
 	}
-	for _, sfx := range []string{".bz2", ".bz", ".xz", ".lzma", ".zst", ".zstd",
-		".lz4", ".br", ".7z", ".rar", ".gz", ".tar.xz", ".txz",
+	// .bz2 and a bare .gz are handled: compress/bzip2 and compress/gzip are both in
+	// the standard library, so they cost no dependency (§10). .xz is not, and a
+	// library for it would break that rule -- so .tar.xz stays refused.
+	for _, sfx := range []string{".bz", ".xz", ".lzma", ".zst", ".zstd",
+		".lz4", ".br", ".7z", ".rar", ".tar.xz", ".txz",
 		".deb", ".rpm", ".apk", ".pkg", ".msi", ".dmg", ".snap"} {
 		if strings.HasSuffix(l, sfx) {
 			return sfx

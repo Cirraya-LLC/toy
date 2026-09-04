@@ -5,6 +5,7 @@ package archive
 import (
 	"archive/tar"
 	"archive/zip"
+	"compress/bzip2"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ const (
 	kindTar
 	kindZip
 	kindTarXz
+	kindTarBz2
 )
 
 // formatOf decides the format from the file name alone, never from the content.
@@ -50,6 +52,8 @@ func formatOf(name string) kind {
 	switch {
 	case strings.HasSuffix(n, ".tar.gz"), strings.HasSuffix(n, ".tgz"):
 		return kindTarGz
+	case strings.HasSuffix(n, ".tar.bz2"), strings.HasSuffix(n, ".tbz2"), strings.HasSuffix(n, ".tbz"):
+		return kindTarBz2
 	case strings.HasSuffix(n, ".tar.xz"):
 		return kindTarXz
 	case strings.HasSuffix(n, ".tar"):
@@ -277,6 +281,16 @@ func (e *extractor) run(src string) error {
 		}
 		defer gz.Close()
 		return e.untar(gz)
+	case kindTarBz2:
+		f, err := os.Open(src)
+		if err != nil {
+			return fmt.Errorf("archive: cannot open %s: %w", filepath.Base(src), err)
+		}
+		defer f.Close()
+		// compress/bzip2 is decompress-only and returns no error here; a corrupt
+		// stream surfaces while reading, which untar reports with the member it
+		// was on.
+		return e.untar(bzip2.NewReader(f))
 	default: // kindTar
 		f, err := os.Open(src)
 		if err != nil {
@@ -660,4 +674,87 @@ func readZipLinkTarget(f *zip.File) (string, error) {
 		return "", fmt.Errorf("%w: %s claims to be a symlink but its target exceeds %d bytes", ErrTraversal, f.Name, maxLinkTargetBytes)
 	}
 	return string(b), nil
+}
+
+// SingleFileCompression reports the compression on a single compressed file --
+// not a container, one file squeezed. restic ships
+// `restic_0.19.1_linux_amd64.bz2` and nothing else for linux/amd64, and several
+// projects ship a bare `.gz` the same way.
+//
+// Returns "" for a tarball: `.tar.gz` is a container and goes through Extract.
+//
+// Judged on the NAME, so callers pass the original asset name: a downloaded file
+// sits in the cache under its sha256 and carries no suffix at all.
+func SingleFileCompression(name string) string {
+	n := strings.ToLower(filepath.Base(name))
+	if formatOf(n) != kindNone {
+		return "" // a container, not a squeezed single file
+	}
+	switch {
+	case strings.HasSuffix(n, ".bz2"):
+		return "bz2"
+	case strings.HasSuffix(n, ".gz"):
+		return "gz"
+	}
+	return ""
+}
+
+// Decompress writes the single file inside src to dst.
+//
+// The output is capped at MaxTotalBytes exactly as extraction is. A single
+// compressed file is the easiest decompression bomb there is -- bzip2 reaches
+// ratios in the thousands, so a few hundred kilobytes downloaded and checksummed
+// can fill a disk. The cap has to be on bytes WRITTEN, never on any length the
+// file claims about itself.
+// Decompress writes the single file inside src to dst. name is the original asset
+// name -- src is the cache path, which is a bare sha256 with no suffix to read.
+func Decompress(src, name, dst string) error { return decompressTo(src, name, dst, MaxTotalBytes) }
+
+// decompressTo carries the limit as a parameter so a test can prove the bomb
+// guard with a small budget instead of really writing two gigabytes -- the same
+// shape Extract/extractTo use.
+func decompressTo(src, name, dst string, limit int64) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("archive: cannot open %s: %w", src, err)
+	}
+	defer f.Close()
+
+	var r io.Reader
+	switch SingleFileCompression(name) {
+	case "bz2":
+		r = bzip2.NewReader(f)
+	case "gz":
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("archive: %s is not valid gzip: %w", src, err)
+		}
+		defer zr.Close()
+		r = zr
+	default:
+		return fmt.Errorf("%w: %s carries no compression this can undo", ErrUnsupported, name)
+	}
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		return fmt.Errorf("archive: cannot write %s: %w", dst, err)
+	}
+	n, cerr := io.Copy(out, io.LimitReader(r, limit+1))
+	closeErr := out.Close()
+	if cerr != nil {
+		os.Remove(dst)
+		return fmt.Errorf("archive: cannot unpack %s: %w", src, cerr)
+	}
+	if closeErr != nil {
+		os.Remove(dst)
+		return fmt.Errorf("archive: cannot write %s: %w", dst, closeErr)
+	}
+	if n > limit {
+		os.Remove(dst)
+		return fmt.Errorf("%w: %s expands past the %d byte limit; the partial file was deleted. "+
+			"The count is the bytes actually written, not anything the file claims about itself",
+			ErrTooLarge, src, limit)
+	}
+	// O_CREATE's mode is filed down by umask, and this file has to be runnable.
+	return os.Chmod(dst, 0o755)
 }

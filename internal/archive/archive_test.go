@@ -136,8 +136,8 @@ func TestIsArchive(t *testing.T) {
 		{"/a/b/c.tar.gz", true},
 		{"tinyserve", false},
 		{"tool.exe", false},
-		{"x.gz", false}, // bare gzip is not an archive; install it as a single file
-		{"x.tar.bz2", false},
+		{"x.gz", false},     // bare gzip is not an archive; install it as a single file
+		{"x.tar.bz2", true}, // bzip2 decompression is in the standard library, so this one we handle
 		{"", false},
 	}
 	for _, c := range cases {
@@ -474,7 +474,9 @@ func TestUnderLimitStillWorks(t *testing.T) {
 
 func TestUnsupportedFormats(t *testing.T) {
 	dest := t.TempDir()
-	for _, name := range []string{"pkg.tar.xz", "tinyserve", "pkg.tar.bz2"} {
+	// .tar.bz2 came off this list: compress/bzip2 is in the standard library.
+	// .tar.xz stays -- xz is not, and a library for it would break §10.
+	for _, name := range []string{"pkg.tar.xz", "tinyserve"} {
 		p := filepath.Join(t.TempDir(), name)
 		if err := os.WriteFile(p, []byte("whatever"), 0o644); err != nil {
 			t.Fatalf("writing the file failed: %v", err)

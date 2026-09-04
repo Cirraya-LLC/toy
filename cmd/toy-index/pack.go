@@ -58,7 +58,7 @@ func installable(name string) bool {
 	if assetname.UnpackableSuffix(name) != "" {
 		return false
 	}
-	if archive.IsArchive(name) {
+	if archive.IsArchive(name) || archive.SingleFileCompression(name) != "" {
 		return true
 	}
 	return assetname.Classify(name).Platform != ""

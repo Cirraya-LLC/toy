@@ -696,6 +696,15 @@ func insUnpack(tf *toyfile.Toyfile, it insItem, pkgDir string) error {
 		return insCopy(it.path, filepath.Join(pkgDir, it.name), 0o755)
 	case archive.IsArchive(it.asset):
 		return insExtract(it.path, it.asset, pkgDir)
+	case archive.SingleFileCompression(it.asset) != "":
+		// One binary, squeezed, with no container around it -- restic ships
+		// restic_0.19.1_linux_amd64.bz2 and nothing else for linux/amd64. It lands
+		// at the [bin] path for the same reason a bare binary does, below.
+		dst, err := insSingleTarget(tf, it, pkgDir)
+		if err != nil {
+			return err
+		}
+		return archive.Decompress(it.path, it.asset, dst)
 	default:
 		// Bare binary: land it at the path [bin] names, not under the asset name.
 		//
@@ -710,15 +719,9 @@ func insUnpack(tf *toyfile.Toyfile, it insItem, pkgDir string) error {
 		//
 		// Do this only when [bin] has exactly one entry: with several, picking one
 		// is a guess, so keep the old behaviour and let store.Link fail loudly.
-		dst := filepath.Base(it.asset)
-		if len(tf.Bin) == 1 {
-			for _, target := range tf.Bin {
-				dst = target // toyfile already guarantees no absolute path and no ..
-			}
-		}
-		full := filepath.Join(pkgDir, dst)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return fmt.Errorf("cannot create the directory %s: %w", filepath.Dir(full), err)
+		full, err := insSingleTarget(tf, it, pkgDir)
+		if err != nil {
+			return err
 		}
 		return insCopy(it.path, full, 0o755)
 	}
@@ -1228,4 +1231,22 @@ func insStaleEntryNote(res *resolved, err error) string {
 		"come from " + where + ", not from the author, and they are probably out of date — " +
 		"the author most likely renamed their release assets. This is ours to fix, not theirs: " +
 		"please report it at " + issueURL + " and we will regenerate the entry."
+}
+
+// insSingleTarget is where a one-file artifact lands: the path on the right of
+// [bin] when there is exactly one of them, and the asset's own name otherwise.
+// Shared by the bare-binary and the single-compressed-file cases, which have the
+// same problem for the same reason -- see the comment in insUnpack.
+func insSingleTarget(tf *toyfile.Toyfile, it insItem, pkgDir string) (string, error) {
+	dst := filepath.Base(it.asset)
+	if len(tf.Bin) == 1 {
+		for _, target := range tf.Bin {
+			dst = target // toyfile already guarantees no absolute path and no ..
+		}
+	}
+	full := filepath.Join(pkgDir, dst)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return "", fmt.Errorf("cannot create the directory %s: %w", filepath.Dir(full), err)
+	}
+	return full, nil
 }
