@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 
@@ -866,4 +867,45 @@ func isSHA256Name(n string) bool {
 		}
 	}
 	return true
+}
+
+// WithPackageLock runs fn holding an exclusive lock for one package id.
+//
+// Two `toy install` runs of the same package used to race in the staging
+// directory: both extract into <version>.new, one renames it into place, and the
+// other is left chmod-ing files that are no longer there. The state left behind
+// was fine -- one winner, a working command -- but the loser exited non-zero with
+// `chmod ...: no such file or directory`, which reads like a broken filesystem
+// rather than "another install is doing this right now". A Makefile installing
+// packages in parallel fails for no reason a user can act on.
+//
+// Under the lock the second run simply waits, then takes the ordinary "already at
+// this version" path.
+//
+// The lock file lives beside the manifest and is never deleted: unlinking it
+// would let a third process create and lock a fresh file at the same path while
+// the first two still hold the old inode. flock is released by the kernel when a
+// process dies, so a stale file locks nothing.
+//
+// Locking is per package. Two different packages install concurrently with no
+// contention at all, which is the common case and the one worth keeping fast.
+func (s *Store) WithPackageLock(id string, fn func() error) error {
+	mp, err := s.manifestPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(mp), 0o755); err != nil {
+		return fmt.Errorf("store: cannot create %s: %w", filepath.Dir(mp), err)
+	}
+	lockPath := mp + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("store: cannot open the install lock %s: %w", lockPath, err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("store: cannot lock %s: %w", lockPath, err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
 }

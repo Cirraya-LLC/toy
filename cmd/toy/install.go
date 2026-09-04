@@ -327,7 +327,43 @@ type insItem struct {
 //
 // Whatever force actually waives MUST be printed, one line each (iron law 8): a
 // silent waiver is the same as having no check.
+// insPerform holds a per-package lock for the whole download-and-place sequence.
+// Two concurrent installs of the same package used to collide in the staging
+// directory: both extract into <version>.new, one renames it into place, and the
+// other chmods files that are no longer there. The result on disk was fine, but
+// the loser exited non-zero saying `chmod ...: no such file or directory`, which
+// reads like a broken filesystem rather than "somebody else is installing this".
+// Under the lock the second run waits and then takes the ordinary "already at
+// this version" path. Different packages never contend.
 func insPerform(ctx context.Context, st *store.Store, cfg store.Config, res *resolved, old *store.Manifest, force bool) error {
+	return st.WithPackageLock(insPackageID(res), func() error {
+		// Read the state again now that the lock is held. The caller's check ran
+		// outside it, so four concurrent runs all saw "not installed", queued up,
+		// and the three losers went on to install a second time -- landing on
+		// "a link with that name already exists", which is true and unhelpful.
+		// A lock only means something when the decision and the action are inside it.
+		fresh, ferr := insExisting(st, res)
+		appeared := ferr == nil && fresh != nil && fresh.ID == insPackageID(res) &&
+			// The caller looked and saw nothing, or saw a different version. Either
+			// way, what is on disk now arrived while this run was waiting.
+			(old == nil || old.Tag != fresh.Tag) &&
+			// And it is the same thing we were about to install. A bare URL carries
+			// no tag at all, which is exactly the case the first version of this
+			// check missed.
+			(res.Tag == "" || fresh.Tag == res.Tag)
+		if appeared {
+			at := fresh.Tag
+			if at == "" {
+				at = fresh.Version
+			}
+			ui.Info("%s was installed at %s by another run while this one waited, nothing to do", fresh.Name, at)
+			return nil
+		}
+		return insPerformLocked(ctx, st, cfg, res, old, force)
+	})
+}
+
+func insPerformLocked(ctx context.Context, st *store.Store, cfg store.Config, res *resolved, old *store.Manifest, force bool) error {
 	if insTrustDowngraded(old, res) {
 		if !force {
 			return fmt.Errorf("this install of %s trusts less than the last one did: it was %q, now it is %q. "+
