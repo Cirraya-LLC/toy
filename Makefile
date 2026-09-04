@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 BIN   := ./toy
 
-.PHONY: all fmt build vet test e2e e2e-inline check index-check index-gen site snapshot verify-toyfile clean
+.PHONY: all fmt build vet test index-urls e2e e2e-inline check index-check index-gen site snapshot verify-toyfile clean
 
 all: check
 
@@ -35,6 +35,11 @@ check: fmt build vet test e2e e2e-inline
 # It belongs to the scheduled index-check.yml line, not to what runs on every commit.
 #   make index-check                          everything
 #   make index-check ARGS="--only owner/repo" one entry (this is how PRs run it)
+# Every declared platform's download URL, not just this machine's. index-check is
+# stronger where it can run; this one is the only thing that sees darwin from linux.
+index-urls:
+	@bash scripts/index-urls.sh $(ARGS)
+
 index-check:
 	bash scripts/index-check.sh $(ARGS)
 
