@@ -71,9 +71,20 @@ peer discovery.
 the mirror list as the bottleneck. Even then the answer isn't a DHT — it's a static
 "known mirrors" list.
 
-### No Windows
+### Linux and macOS only
 
-v1 is Linux + macOS only.
+Asked and settled on 2026-09-01. The answer is different for each platform, so all
+four are here rather than a blanket "cross-platform later".
+
+**Android already works** — under Termux, which is a Linux userland, so toy resolves
+`linux/arm64` and nothing needs building. Outside Termux there is nothing that
+could be built: a non-rooted Android gives a user no PATH to put a binary on, and
+the app sandbox will not run a downloaded executable from a shell.
+
+**iOS cannot work.** No shell, no user-writable executable pages, and App Store
+terms forbid downloading and running code. This one is "will not", not "not yet".
+
+**Windows is the real question**, and the answer for now is still no.
 
 Not because it doesn't matter, but because Windows symlinks (developer mode or
 admin), the `.exe` suffix, PATH semantics, and "how does an unpacked file become a
@@ -83,8 +94,18 @@ onto this model.
 `toy init` **skips Windows assets and says why** rather than dropping them
 silently — that's the door left open.
 
-**What would change our mind**: someone actually asking. Unlike the three above,
-this one is "not yet", not "no".
+The shelf is not the problem: ripgrep, fzf, bat and delta all ship Windows
+binaries. The cost is that it lands on the symlink model. Windows needs admin
+rights or developer mode to create symlinks, so the usual answer is generating
+`.cmd`/`.exe` shims the way scoop and chocolatey do — and a shim does not behave
+like a symlink for uninstall, for the shadow check, or for `toy prune`'s reference
+counting. The concrete build blocker is `syscall.Flock` in `internal/sign`, which
+pins that package to unix.
+
+**What would change our mind**: someone actually asking, once macOS is verified.
+Nineteen index entries have only ever been installed on linux/amd64; darwin is
+address-level evidence and nothing more. Opening a third platform while a promised
+one is unverified makes the surface wider, not sounder.
 
 ### No x86-64 microarchitecture levels (v2/v3/v4)
 
@@ -180,4 +201,5 @@ No dates. Ordered by "someone actually needs it":
 3. Ownership verification on the index side — i.e. make `✓ signed` actually able to
    say "the owner of this repo signed it".
 4. Extend `--json` to `list` / `info`.
-5. Windows, if someone asks.
+5. Windows, if someone asks — see "No Windows" above for what it actually costs.
+   Android already works under Termux; iOS cannot work at all.
