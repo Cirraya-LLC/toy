@@ -32,7 +32,9 @@ import (
 	"github.com/Cirraya-LLC/toy/internal/platform"
 	"github.com/Cirraya-LLC/toy/internal/ref"
 	"github.com/Cirraya-LLC/toy/internal/store"
+	"github.com/Cirraya-LLC/toy/internal/toyfile"
 	"github.com/Cirraya-LLC/toy/internal/ui"
+	"sort"
 )
 
 const (
@@ -233,8 +235,27 @@ func qryLookupInstalled(idx map[string]store.Manifest, keys ...string) (store.Ma
 
 // ---------------------------------------------------------------- toy list
 
+// qryInstalled is one row of `toy list --json`. Deliberately not store.Manifest:
+// a field added to the manifest later must not automatically appear in an output
+// format we have promised, and the manifest holds things (pkg_dir, the symlink
+// paths) that are this machine's business and not a script's.
+type qryInstalled struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Source  string `json:"source"`
+	Trust   string `json:"trust"`
+	Signer  string `json:"signer,omitempty"`
+	SHA256  string `json:"sha256,omitempty"`
+}
+
 func runList(ctx context.Context, args []string) error {
-	if len(args) > 0 {
+	fs := qryFlags("list")
+	asJSON := fs.Bool("json", false, "machine-readable output on stdout")
+	if err := insParseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
 		return errUsage
 	}
 	st, _, err := openStore()
@@ -244,6 +265,25 @@ func runList(ctx context.Context, args []string) error {
 	ms, err := st.ListManifests()
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		out := make([]qryInstalled, 0, len(ms))
+		for _, m := range ms {
+			name := m.Name
+			if name == "" {
+				name = m.Repo
+			}
+			out = append(out, qryInstalled{
+				ID: m.ID, Name: name, Version: m.Version, Source: m.ID,
+				Trust: m.Trust, Signer: m.Signer, SHA256: m.SHA256,
+			})
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(struct {
+			Count     int            `json:"count"`
+			Installed []qryInstalled `json:"installed"`
+		}{len(out), out})
 	}
 	if len(ms) == 0 {
 		ui.Info("Nothing installed yet.")
@@ -450,7 +490,37 @@ func qryNoIndexHelp() {
 
 // ---------------------------------------------------------------- toy info
 
+// qryInfo is `toy info --json`. Like the other two, deliberately not the internal
+// struct: what resolve() carries around is ours to change, and what a script
+// parses is not.
+type qryInfo struct {
+	Ref              string   `json:"ref"`
+	Name             string   `json:"name"`
+	Desc             string   `json:"desc,omitempty"`
+	License          string   `json:"license,omitempty"`
+	Homepage         string   `json:"homepage,omitempty"`
+	Version          string   `json:"version,omitempty"`
+	Tag              string   `json:"tag,omitempty"`
+	Trust            string   `json:"trust"`
+	Signer           string   `json:"signer,omitempty"`
+	Index            string   `json:"index,omitempty"`
+	PackagingFrom    string   `json:"packaging_from"` // "author" or "index" -- see spec §5.1
+	Platforms        []string `json:"platforms"`
+	CurrentPlatform  string   `json:"current_platform"`
+	HasBuildForThis  bool     `json:"has_build_for_this_platform"`
+	ChecksumDeclared bool     `json:"checksum_declared"`
+	Commands         []string `json:"commands"`
+	Installed        bool     `json:"installed"`
+	InstalledVersion string   `json:"installed_version,omitempty"`
+}
+
 func runInfo(ctx context.Context, args []string) error {
+	fs := qryFlags("info")
+	asJSON := fs.Bool("json", false, "machine-readable output on stdout")
+	if err := insParseFlags(fs, args); err != nil {
+		return err
+	}
+	args = fs.Args()
 	if len(args) != 1 {
 		return errUsage
 	}
@@ -587,6 +657,9 @@ func runInfo(ctx context.Context, args []string) error {
 
 	qryTable(rows, 16, 0)
 	ui.Info("")
+	if *asJSON {
+		return qryInfoJSON(st, res, tf, r)
+	}
 	// The trust level goes through ui.Trust, so it is worded exactly like the line
 	// printed after an install (spec §4, iron law 8).
 	ui.Trust(res.Trust, insTrustDetail(res))
@@ -1114,4 +1187,36 @@ func qryCheckCache(st *store.Store) qryCheck {
 			"(those bytes are also what `toy serve` hands out, so pruning leaves it less to mirror)", prnSize(reclaimable))
 	}
 	return c
+}
+
+func qryInfoJSON(st *store.Store, res *resolved, tf *toyfile.Toyfile, r ref.Ref) error {
+	cands := platform.Candidates()
+	_, _, matched, aerr := tf.AssetFor(cands, res.Version.Number(), res.Tag)
+	cmds := make([]string, 0, len(tf.Bin)+len(tf.Script))
+	for n := range tf.Bin {
+		cmds = append(cmds, n)
+	}
+	for n := range tf.Script {
+		cmds = append(cmds, n)
+	}
+	sort.Strings(cmds)
+
+	from := "author"
+	if tf.Origin == toyfile.OriginIndex {
+		from = "index"
+	}
+	out := qryInfo{
+		Ref: r.String(), Name: tf.Name, Desc: tf.Desc, License: tf.License,
+		Homepage: tf.Homepage, Version: res.Version.Number(), Tag: res.Tag,
+		Trust: res.Trust, Signer: res.Signer, Index: res.IndexName,
+		PackagingFrom: from, Platforms: tf.Platforms(),
+		CurrentPlatform: platform.Base(), HasBuildForThis: aerr == nil && matched != "",
+		ChecksumDeclared: len(tf.SHA256) > 0, Commands: cmds,
+	}
+	if m, err := st.LoadManifest(res.Ref.String()); err == nil {
+		out.Installed, out.InstalledVersion = true, m.Version
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
