@@ -176,20 +176,67 @@ var companionSuffixes = []string{
 // before this list is consulted.
 func UnpackableSuffix(name string) string {
 	l := strings.ToLower(name)
-	if strings.HasSuffix(l, ".tar.gz") || strings.HasSuffix(l, ".tgz") {
-		return ""
+	// Everything toy can actually open, listed here so this function stays a pure
+	// name check with no dependency on internal/archive. It has to mirror
+	// archive.formatOf plus archive.SingleFileCompression; adding a format there
+	// without adding it here makes that format unreachable for the generator.
+	for _, ok := range []string{".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tbz",
+		".tar", ".zip", ".bz2", ".gz"} {
+		if strings.HasSuffix(l, ok) {
+			return ""
+		}
 	}
-	// .bz2 and a bare .gz are handled: compress/bzip2 and compress/gzip are both in
-	// the standard library, so they cost no dependency (§10). .xz is not, and a
-	// library for it would break that rule -- so .tar.xz stays refused.
 	for _, sfx := range []string{".bz", ".xz", ".lzma", ".zst", ".zstd",
 		".lz4", ".br", ".7z", ".rar", ".tar.xz", ".txz",
-		".deb", ".rpm", ".apk", ".pkg", ".msi", ".dmg", ".snap"} {
+		".deb", ".rpm", ".apk", ".pkg", ".msi", ".dmg", ".snap", ".flatpak"} {
 		if strings.HasSuffix(l, sfx) {
 			return sfx
 		}
 	}
+	// The named list above will never be complete -- .flatpak was missing until
+	// goreleaser shipped one and it was installed as a bare binary, exactly the way
+	// restic's .bz2 had been. So the real test is the other way round: a bare
+	// binary in the wild HAS NO EXTENSION (jq-linux-amd64, yq_linux_amd64), and
+	// anything that ends in something extension-shaped is a format we have not
+	// recognized. Refusing an unknown one is the safe direction; assuming it is
+	// executable is how both of those got as far as a symlink on PATH.
+	if ext := trailingExtension(l); ext != "" {
+		return ext
+	}
 	return ""
+}
+
+// trailingExtension returns the final dot-segment when it looks like a file
+// extension, and "" otherwise.
+//
+// Extension-shaped means letters and digits only, with at least one letter --
+// which keeps the version tails that make up most asset names out of it:
+// `caddy_2.7.6_linux_amd64` ends in `6_linux_amd64` (underscores) and `tool-1.2.3`
+// ends in `3` (no letter). Neither is an extension, and both are perfectly good
+// bare binaries.
+func trailingExtension(l string) string {
+	i := strings.LastIndexByte(l, '.')
+	if i < 0 || i == len(l)-1 {
+		return ""
+	}
+	seg := l[i+1:]
+	if len(seg) > 10 {
+		return "" // too long to be an extension; more likely part of a name
+	}
+	letter := false
+	for _, c := range seg {
+		switch {
+		case c >= 'a' && c <= 'z':
+			letter = true
+		case c >= '0' && c <= '9':
+		default:
+			return "" // '_' or '-' means this is a name segment, not an extension
+		}
+	}
+	if !letter {
+		return ""
+	}
+	return "." + seg
 }
 
 // foreignOS reports whether the goos detect returned is a foreign system.
