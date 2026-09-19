@@ -139,3 +139,28 @@ func TestRsvApplySignatureOnlyTrustsAVerifiedSignature(t *testing.T) {
 		})
 	}
 }
+
+// --version with a package-name-prefixed tag. Pinning jq-1.8.1 used to return a
+// V with no prefix recorded, so {version} expanded to "jq-1.8.1" -- a 404 for any
+// repo whose asset names carry the version -- and the package directory was named
+// after the whole tag. And "1.8.1", the obvious way to ask, found nothing.
+func TestPinningAPrefixedTag(t *testing.T) {
+	tags := []string{"jq-1.8.0", "jq-1.8.1", "jq-1.8.2"}
+	for _, want := range []string{"jq-1.8.1", "1.8.1", "v1.8.1"} {
+		v, err := rsvPickVersion(tags, want, "jq")
+		if err != nil {
+			t.Fatalf("--version %s: %v", want, err)
+		}
+		if v.Raw != "jq-1.8.1" || v.Number() != "1.8.1" {
+			t.Errorf("--version %s: Raw %q Number %q, want jq-1.8.1 and 1.8.1", want, v.Raw, v.Number())
+		}
+	}
+	// The bare number must not reach a sub-project's tag.
+	if _, err := rsvPickVersion([]string{"15.2.0", "wincolor-0.1.6"}, "0.1.6", "ripgrep"); err == nil {
+		t.Error("--version 0.1.6 on ripgrep found wincolor-0.1.6, which is a different project")
+	}
+	// A tag with no version in it is still installable when named outright.
+	if v, err := rsvPickVersion([]string{"nightly"}, "nightly", "tool"); err != nil || v.Raw != "nightly" {
+		t.Errorf("--version nightly: %v %q", err, v.Raw)
+	}
+}

@@ -483,16 +483,20 @@ func rsvPickVersion(tags []string, want, repo string) (semver.V, error) {
 	if want == "" {
 		return semver.Max(tags, false, repo)
 	}
+	num := strings.TrimPrefix(want, "v")
 	for _, t := range tags {
 		// "v1.2.3" and "1.2.3" name the same tag; accept either spelling.
-		if t == want || strings.TrimPrefix(t, "v") == strings.TrimPrefix(want, "v") {
-			v, err := semver.Parse(t)
-			if err != nil {
-				// The user named this tag, so install it. Not being semver only
-				// affects "which is newer" comparisons, not this install. Keep
-				// Raw — that is what {version} expands from.
-				return semver.V{Raw: t}, nil
-			}
+		if t == want || strings.TrimPrefix(t, "v") == num {
+			return rsvPinned(t, repo), nil
+		}
+	}
+	// "1.8.1" for jq, whose tags are jq-1.8.1: the number without the repository's
+	// own prefix names the same release, the way "1.2.3" names "v1.2.3". Only a
+	// prefix that IS the repository name -- in ripgrep, wincolor-0.1.6 is another
+	// project, and --version 0.1.6 must not find it.
+	for _, t := range tags {
+		if v, err := semver.Max([]string{t}, true, repo); err == nil && v.Prefix != "" &&
+			semver.PrefixNamesRepo(v.Prefix, repo) && v.Number() == num {
 			return v, nil
 		}
 	}
@@ -584,4 +588,17 @@ func rsvFingerprint(hexKey string) string {
 		return ""
 	}
 	return sign.Fingerprint(ed25519.PublicKey(b))
+}
+
+// rsvPinned parses a tag the user named with --version. It goes through the same
+// parser as picking the newest, so a prefix is stripped the same way: returning a
+// bare {Raw: "jq-1.8.1"} made {version} expand to "jq-1.8.1" and named the package
+// directory after the whole tag, so a pinned install and an unpinned one of the
+// same release disagreed on both. A tag carrying no version at all ("nightly") is
+// still installable -- the user named it -- it just cannot be compared.
+func rsvPinned(tag, repo string) semver.V {
+	if v, err := semver.Max([]string{tag}, true, repo); err == nil {
+		return v
+	}
+	return semver.V{Raw: tag}
 }

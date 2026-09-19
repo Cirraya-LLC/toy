@@ -217,7 +217,7 @@ func Max(tags []string, allowPre bool, repo string) (V, error) {
 		v, err := Parse(t)
 		if err != nil {
 			pv, perr := parsePrefixed(t)
-			if perr != nil || !prefixIsRepo(pv.Prefix, repo) {
+			if perr != nil || !PrefixNamesRepo(pv.Prefix, repo) {
 				continue // non-semver tags are everywhere; skip rather than treat as 0.0.0
 			}
 			v = pv
@@ -284,10 +284,10 @@ func highest(vs []V) (V, bool) {
 	return best, found
 }
 
-// prefixIsRepo reports whether a tag prefix names this repository. Compared with
+// PrefixNamesRepo reports whether a tag prefix names this repository. Compared with
 // '-', '_' and '.' ignored and case folded, because gping-v1.21.0, gping_1.21.0
 // and GPing-1.21.0 are all the project talking about itself.
-func prefixIsRepo(prefix, repo string) bool {
+func PrefixNamesRepo(prefix, repo string) bool {
 	if repo == "" {
 		return false
 	}
