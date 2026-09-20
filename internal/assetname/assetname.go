@@ -442,6 +442,7 @@ func Infer(files []string, forceVersion string) Result {
 	if len(hits) == 0 {
 		return res
 	}
+	hits = keepOneFamily(hits, &res)
 
 	res.Version = strings.TrimPrefix(strings.TrimSpace(forceVersion), "v")
 	if res.Version == "" {
@@ -613,3 +614,136 @@ func commonPrefix(assets []Asset) string {
 	}
 	return p
 }
+
+// keepOneFamily drops assets that belong to a DIFFERENT product shipped in the
+// same release.
+//
+// atuin publishes both `atuin-<triple>.tar.gz` (the CLI) and
+// `atuin-server-<triple>.tar.gz` (the server), and not for every platform in both
+// families. Nothing here noticed, because the two never collide on a platform key
+// -- they divide them up. The entry that came out installed the server on
+// linux/amd64 and the CLI on darwin/arm64, with one [bin] line that could only be
+// right for one of them. **One entry that installs a different program depending
+// on the machine is worse than an entry that does not install at all**, and it was
+// invisible until the index was installed on a second platform.
+//
+// The family is the part of the name before the first os/arch word. Everything a
+// normal project ships lands in one family (musl and gnu come after the arch), so
+// this changes nothing for them.
+func keepOneFamily(hits []Asset, res *Result) []Asset {
+	groups := map[string][]Asset{}
+	stems := []string{}
+	for _, h := range hits {
+		st := familyStem(h.File)
+		if _, seen := groups[st]; !seen {
+			stems = append(stems, st)
+		}
+		groups[st] = append(groups[st], h)
+	}
+	if len(groups) < 2 {
+		return hits
+	}
+	sort.Strings(stems)
+
+	// Only the add-on shape is resolved: one stem that every other stem extends,
+	// which is exactly atuin / atuin-server. Two unrelated names (a_… and b_…) have
+	// no principled winner, so they are left alone -- picking one would be a guess,
+	// and Infer already declines to derive a package name in that case.
+	//
+	// ponytail: a release of foo-cli-* and foo-server-* with no bare foo-* stays
+	// mixed. Give it a rule when one actually shows up.
+	base := stems[0]
+	for _, st := range stems[1:] {
+		if !strings.HasPrefix(st, base+"-") && !strings.HasPrefix(st, base+"_") {
+			return hits
+		}
+	}
+
+	for _, st := range stems[1:] {
+		for _, h := range groups[st] {
+			h.Skip = "belongs to " + st + ", a different program in the same release; this entry carries " +
+				base + ". Package it separately if you want it"
+			h.Notable = true
+			h.Platform = ""
+			res.Skipped = append(res.Skipped, h)
+		}
+	}
+	return groups[base]
+}
+
+// familyStem is the part of an asset name before the first os or arch word --
+// "atuin-server" for atuin-server-x86_64-apple-darwin.tar.gz, "atuin" for
+// atuin-aarch64-apple-darwin.tar.gz. A name with no recognized word returns the
+// whole name, which simply puts it in a family of its own.
+//
+// It scans the string rather than the token list on purpose: tokens() splits on
+// '_' too, so "x86_64" arrives as "x86" and "64" and matches nothing, and the cut
+// then landed after the arch instead of before it -- which split one program's
+// own variants into several families.
+func familyStem(file string) string {
+	l := strings.ToLower(file)
+	cut := -1
+	for _, table := range []map[string]string{osWords, archWords} {
+		for w := range table {
+			if i := delimitedIndex(l, w); i >= 0 && (cut < 0 || i < cut) {
+				cut = i
+			}
+		}
+	}
+	if cut <= 0 {
+		return l
+	}
+	return trimVersionTail(strings.Trim(l[:cut], "-_."))
+}
+
+// trimVersionTail drops a trailing version segment from a stem.
+//
+// chezmoi ships the same program two ways -- `chezmoi-linux-amd64` (a bare binary)
+// and `chezmoi_0.20.0_linux_arm64.tar.gz` (a tarball) -- so without this the stems
+// are "chezmoi" and "chezmoi_0.20.0", the second reads as an add-on of the first,
+// and regenerating that entry would silently drop three platforms.
+func trimVersionTail(stem string) string {
+	i := strings.LastIndexAny(stem, "-_")
+	if i < 0 {
+		return stem
+	}
+	seg := stem[i+1:]
+	if !looksLikeVersion(seg) {
+		return stem
+	}
+	return stem[:i]
+}
+
+func looksLikeVersion(seg string) bool {
+	seg = strings.TrimPrefix(seg, "v")
+	if seg == "" || seg[0] < '0' || seg[0] > '9' {
+		return false
+	}
+	for _, c := range seg {
+		if (c < '0' || c > '9') && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// delimitedIndex finds w in s where both sides are a separator or the end of the
+// string, so "arm" does not match inside "armv7" and "win" not inside "window".
+func delimitedIndex(s, w string) int {
+	for from := 0; ; {
+		i := strings.Index(s[from:], w)
+		if i < 0 {
+			return -1
+		}
+		i += from
+		before := i == 0 || isSep(s[i-1])
+		end := i + len(w)
+		after := end == len(s) || isSep(s[end])
+		if before && after {
+			return i
+		}
+		from = i + 1
+	}
+}
+
+func isSep(b byte) bool { return b == '-' || b == '_' || b == '.' }

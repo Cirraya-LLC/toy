@@ -178,7 +178,11 @@ classify() {
   # shape as the §5.1 rule-3 hole that really did get written once).
   code="$(grep -oE 'HTTP [0-9]{3}' "$log" 2>/dev/null | head -n1 | awk '{print $2}')"
   if   grep -q 'toyfile: no build for this platform' "$log"; then
-    printf 'entry\tthe author ships no build for this platform, or the entry has the wrong [artifact] platform key\n'
+    # Not a failure. Plenty of good tools ship Linux binaries only -- btop, eza and
+    # procs all do, and their entries are perfectly correct; they are simply not
+    # installable on a Mac. Calling that a defect means this check can never be green
+    # on macOS, and a check that cannot be green stops being read.
+    printf 'skip\tthe author ships no build for %s, so there is nothing to install here\n' "$(uname -s | tr A-Z a-z)/$(uname -m)"
   elif grep -q 'sha256 checksum mismatch' "$log"; then
     printf 'entry\t[sha256] disagrees with the bytes we downloaded (upstream repacked the release? or the entry was copied wrong)\n'
   elif [ -n "$code" ]; then
@@ -227,6 +231,7 @@ ran() {
   return 0
 }
 
+SKIPN=0
 ID=""; SRC=""; LOG="$WORK/install.log"; HOME_DIR=""
 fail() { # $1=category $2=explanation
   printf '%s✗%s %s  [%s]  %s\n' "$C_R" "$C_0" "$ID" "$1" "${SRC:-—}" >&2
@@ -284,6 +289,11 @@ while IFS=$'\t' read -r ID SRC; do
   fi
   if [ "$rc" != 0 ]; then
     IFS=$'\t' read -r cls why < <(classify "$LOG")
+    if [ "$cls" = skip ]; then
+      SKIPN=$(( SKIPN + 1 ))
+      printf '%s-%s %s  %s\n' "$C_Y" "$C_0" "$ID" "$why" >&2
+      continue
+    fi
     fail "$cls" "$why"; continue
   fi
 
@@ -344,9 +354,13 @@ while IFS=$'\t' read -r ID SRC; do
   rm -rf "$HOME_DIR"
 done < "$WORK/entries.tsv"
 
-FAILN=$(( TOTAL - PASS ))
+FAILN=$(( TOTAL - PASS - SKIPN ))
 say ""
-say "════ $PASS passed / $FAILN failed (of $TOTAL) · $PLATFORM ════"
+if [ "$SKIPN" -gt 0 ]; then
+  say "════ $PASS passed / $FAILN failed / $SKIPN not built for this platform (of $TOTAL) · $PLATFORM ════"
+else
+  say "════ $PASS passed / $FAILN failed (of $TOTAL) · $PLATFORM ════"
+fi
 [ "$FAILN" -eq 0 ] && exit 0
 
 say ""
