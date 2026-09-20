@@ -265,6 +265,20 @@ while IFS=$'\t' read -r ID SRC; do
 
   tmo "$TIMEOUT" "$LOG" "$TOY" install "$ID"
   rc=$?
+  # The PATH shadow check (iron rule 5) fires when THIS MACHINE already carries a
+  # command of the same name, and a CI runner ships jq, yq, shellcheck and kind
+  # preinstalled. That is toy working, and it says nothing about the entry -- the
+  # old advice here, "pick another [bin] name", would have meant renaming jq's
+  # command. Install into the throwaway TOY_HOME anyway and carry on: every later
+  # step addresses the binary by its full path under that home, so the system copy
+  # is never what gets run.
+  if [ "$rc" != 0 ] && [ "$rc" != 124 ] && grep -q 'shadow' "$LOG"; then
+    shadowed=1
+    tmo "$TIMEOUT" "$LOG" "$TOY" install --force "$ID"
+    rc=$?
+  else
+    shadowed=0
+  fi
   if [ "$rc" = 124 ]; then
     fail "network" "install exceeded the ${TIMEOUT}s ceiling and was aborted (download too slow, or stuck on one hop)"; continue
   fi
@@ -323,7 +337,9 @@ while IFS=$'\t' read -r ID SRC; do
     : >"$LOG"; fail "runtime" "symlinks left behind in bin/ after uninstall"; continue
   fi
 
-  printf '%s✓%s %s  (%s)\n' "$C_G" "$C_0" "$ID" "$(printf '%s ' "${links[@]##*/}" | sed 's/ $//')" >&2
+  note=""
+  [ "$shadowed" = 1 ] && note="  [this machine already had that command; installed with --force]"
+  printf '%s✓%s %s  (%s)%s\n' "$C_G" "$C_0" "$ID" "$(printf '%s ' "${links[@]##*/}" | sed 's/ $//')" "$note" >&2
   PASS=$((PASS+1))
   rm -rf "$HOME_DIR"
 done < "$WORK/entries.tsv"

@@ -23,8 +23,15 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=$((fail+1)); }
 # runner leaves nothing to go on, and guessing from the assertion name is how an
 # afternoon disappears. Most checks are `<command> | grep -q <pattern>`, so re-run
 # the part before the first pipe -- that is the output the pattern was looking at.
+# A check asserts "does the output contain X". The producer's exit code is not part of
+# that assertion -- but under `set -o pipefail` it silently becomes part of it: `grep -q`
+# exits the moment it matches, the producer gets SIGPIPE and dies with 141, and the
+# pipeline is reported as failed even though the text matched on line one. It is a race
+# (has the producer finished writing before grep leaves?), so it passes on a fast machine
+# and fails on a CI runner -- on a different check each run, which is the worst way for a
+# test to be wrong. The subshell turns pipefail off for the assertion only.
 check(){
-  if eval "$2" >/dev/null 2>&1; then ok "$1"; return; fi
+  if ( set +o pipefail; eval "$2" ) >/dev/null 2>&1; then ok "$1"; return; fi
   bad "$1"
   printf '      command: %s\n' "$2"
   eval "${2%%|*}" 2>&1 | head -8 | sed 's/^/      > /'

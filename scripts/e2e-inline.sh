@@ -30,7 +30,15 @@ TOY="$W/toy"
 pass=0; fail=0
 ok(){  printf '  \033[32m✓\033[0m %s\n' "$1"; pass=$((pass+1)); }
 bad(){ printf '  \033[31m✗\033[0m %s\n' "$1"; fail=$((fail+1)); }
-chk(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
+# pipefail off for the assertion: `grep -q` leaves as soon as it matches, the producer
+# gets SIGPIPE and exits 141, and the pipeline reads as failed even when the text was
+# there. A race, so it shows up on CI and not here. See the same note in e2e.sh.
+chk(){
+  if ( set +o pipefail; eval "$2" ) >/dev/null 2>&1; then ok "$1"; return; fi
+  bad "$1"
+  printf '      command: %s\n' "$2"
+  ( set +o pipefail; eval "${2%%|*}" ) 2>&1 | head -8 | sed 's/^/      > /'
+}
 mode(){ echo "$1" > "$SRV/MODE"; }
 
 # A server that emits exactly the status line it is told to. Raw sockets, because
