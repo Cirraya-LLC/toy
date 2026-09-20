@@ -48,7 +48,7 @@ const insNoVersion = "unversioned"
 // unpack or chmod +x -> symlink (refusing to shadow) -> write the manifest ->
 // print the trust level.
 func runInstall(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	fs := newFlagSet("install")
 	// These two flags say two different things; do not merge them back into one
 	// (see the comment above insPerform). --reinstall is an everyday operation,
 	// --force means "I checked it myself, let the safety check through".
@@ -133,7 +133,7 @@ func runInstall(ctx context.Context, args []string) error {
 // It does NOT touch the cache: that is content-addressed, and it doubles as the
 // directory `toy serve` mirrors.
 func runUninstall(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	fs := newFlagSet("uninstall")
 	if err := insParseFlags(fs, args); err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func runUninstall(ctx context.Context, args []string) error {
 // and only runs the install flow when there is something newer. With no argument it
 // does all of them, reporting each one; a failure on one does not stop the rest.
 func runUpdate(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs := newFlagSet("update")
 	if err := insParseFlags(fs, args); err != nil {
 		return err
 	}
@@ -1222,8 +1222,8 @@ func insParseFlags(fs *flag.FlagSet, args []string) error {
 			n := 0
 			fs.VisitAll(func(*flag.Flag) { n++ })
 			if n > 0 {
-				fmt.Fprintf(os.Stderr, "options for toy %s (they go before the positional arguments):\n", fs.Name())
-				fs.SetOutput(os.Stderr)
+				fmt.Fprintf(ui.Output(), "options for toy %s (they go before the positional arguments):\n", fs.Name())
+				fs.SetOutput(ui.Output())
 				fs.PrintDefaults()
 			}
 		} else {

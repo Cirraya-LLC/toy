@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 
 	"github.com/Cirraya-LLC/toy/internal/ui"
@@ -20,7 +19,7 @@ import (
 // ones a reinstall would otherwise re-download, and they are the ones worth
 // mirroring.
 func runPrune(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
+	fs := newFlagSet("prune")
 	all := fs.Bool("all", false, "delete every cached download, including the ones installed packages use")
 	dry := fs.Bool("dry-run", false, "print what would be deleted and delete nothing")
 	if err := insParseFlags(fs, args); err != nil {

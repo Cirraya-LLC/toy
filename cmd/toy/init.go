@@ -22,7 +22,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -51,7 +50,7 @@ type iniAsset struct {
 // ctx goes unused: this command goes nowhere online and execs nothing (see the top
 // of the file).
 func runInit(_ context.Context, args []string) error {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs := newFlagSet("init")
 	dist := fs.String("dist", "", "directory holding the release assets (defaults to dist/ under the project directory)")
 	name := fs.String("name", "", "tool name; inferred from the directory or asset names if omitted")
 	version := fs.String("version", "", "version of this batch of assets; read from the file names if omitted")

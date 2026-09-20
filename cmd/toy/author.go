@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"maps"
 	"net"
@@ -29,7 +28,7 @@ import (
 // runKeygen generates a key pair into ~/.toy/keys and prints the public key and its
 // fingerprint. It refuses to overwrite an existing one.
 func runKeygen(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
+	fs := newFlagSet("keygen")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
 		return errUsage
 	}
@@ -97,7 +96,7 @@ func autSignMessage(id, source string, toyTOML []byte) []byte {
 // (store.TrustIndexed). It is how the index gets off the ground at all — of the
 // thousands of CLI tools out there, not one has a toy.toml.
 func runPublish(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
+	fs := newFlagSet("publish")
 	source := fs.String("source", "", "the entry's source, like github:owner/repo; inferred from the git origin if omitted")
 	inline := fs.Bool("inline", false, "inline this toy.toml verbatim into the entry: packaging instructions for a repository that is NOT yours (it steps aside the moment upstream ships its own toy.toml)")
 	// Borrow install's parsing: only that makes -h print the two descriptions above,
@@ -417,7 +416,7 @@ const autShutdownGrace = 5 * time.Second
 // after its own sha256). Because the content is address-by-hash, this mirror does not
 // need to be trusted at all. Spec §8.
 func runServe(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs := newFlagSet("serve")
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on. The default is local-only; use 0.0.0.0:8080 to serve others")
 	if err := insParseFlags(fs, args); err != nil {
 		return err

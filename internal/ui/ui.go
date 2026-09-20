@@ -365,3 +365,19 @@ func humanBytes(n int64) string {
 	}
 	return fmt.Sprintf("%d B", n) // unreachable
 }
+
+// SetOutput redirects this package's output and returns a function that puts it
+// back. It exists for tests: out is unexported, and without this the only way to
+// capture what ui prints was to swap file descriptor 2 -- which needs syscall.Dup3
+// on Linux and syscall.Dup2 on macOS, neither of which exists on the other. That
+// portability trap cost a red macOS CI leg; three lines here removed it.
+func SetOutput(w io.Writer) func() {
+	prev := out
+	out = w
+	return func() { out = prev }
+}
+
+// Output is where this package writes. Callers that hand human-readable text to
+// another package -- flag's usage output is the only one -- point it here, so
+// spec §9 has exactly one answer to "where does human output go".
+func Output() io.Writer { return out }

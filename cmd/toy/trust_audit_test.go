@@ -5,10 +5,10 @@ package main
 // length limit" is enough to make it lie.
 
 import (
-	"os"
 	"strings"
-	"syscall"
 	"testing"
+
+	"github.com/Cirraya-LLC/toy/internal/ui"
 
 	"github.com/Cirraya-LLC/toy/internal/store"
 )
@@ -78,40 +78,16 @@ func visibleCols(s string, width int) string {
 	return string(r[:width])
 }
 
-// captureStderr swaps out fd 2. ui.out binds the *os.File that is os.Stderr at
-// init time, so the only place to intercept is the file descriptor — assigning to
-// os.Stderr does nothing.
+// captureStderr collects what ui prints while fn runs.
+//
+// This used to swap file descriptor 2, on the belief that ui bound os.Stderr at
+// init time and could not be intercepted any other way. ui.out is an io.Writer
+// package variable, so it can -- and the fd version needed syscall.Dup3, which
+// does not exist on macOS, so the whole test package failed to compile there.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, err := syscall.Dup(2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Dup3(int(w.Fd()), 2, 0); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan string, 1)
-	go func() {
-		var b strings.Builder
-		buf := make([]byte, 4096)
-		for {
-			n, err := r.Read(buf)
-			b.Write(buf[:n])
-			if err != nil {
-				break
-			}
-		}
-		done <- b.String()
-	}()
+	var b strings.Builder
+	defer ui.SetOutput(&b)()
 	fn()
-	_ = syscall.Dup3(saved, 2, 0)
-	_ = syscall.Close(saved)
-	w.Close()
-	s := <-done
-	r.Close()
-	return s
+	return b.String()
 }

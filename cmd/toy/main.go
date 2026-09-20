@@ -88,7 +88,7 @@ func main() {
 		case errors.Is(err, errUsage):
 			// Subcommands that take no arguments (list / doctor / keygen) have
 			// an empty usage string, and concatenating it leaves a trailing space.
-			fmt.Fprintln(os.Stderr, strings.TrimSpace("usage: toy "+c.name+" "+c.usage))
+			fmt.Fprintln(ui.Output(), strings.TrimSpace("usage: toy "+c.name+" "+c.usage))
 			os.Exit(2)
 		case errors.Is(err, context.Canceled):
 			ui.Warn("cancelled")
@@ -104,11 +104,21 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "toy %s — install the small tools nobody packaged for you. Nothing in a package is ever executed.\n\nusage:\n  toy <command> [args]\n\ncommands:\n", Version)
-	w := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(ui.Output(), "toy %s — install the small tools nobody packaged for you. Nothing in a package is ever executed.\n\nusage:\n  toy <command> [args]\n\ncommands:\n", Version)
+	w := tabwriter.NewWriter(ui.Output(), 0, 0, 2, ' ', 0)
 	for _, c := range commands() {
 		fmt.Fprintf(w, "  %s %s\t%s\n", c.name, c.usage, c.summary)
 	}
 	w.Flush()
-	fmt.Fprintf(os.Stderr, "\na package reference can be written as:\n  Derrity/tinyserve          look it up in the indexes\n  github:Derrity/tinyserve   go straight to that host\n  https://…/toy.toml         a plain URL, nothing vouched for\n")
+	fmt.Fprintf(ui.Output(), "\na package reference can be written as:\n  Derrity/tinyserve          look it up in the indexes\n  github:Derrity/tinyserve   go straight to that host\n  https://…/toy.toml         a plain URL, nothing vouched for\n")
+}
+
+// newFlagSet is flag.NewFlagSet with its usage output pointed at ui. Spec §9 says
+// human-readable text goes to stderr through ui; flag writes straight to
+// os.Stderr by default, which put `toy install -h` outside the one place that
+// decides where such text lands.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(ui.Output())
+	return fs
 }

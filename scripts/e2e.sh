@@ -18,7 +18,17 @@ TOY="$WORK/toy"
 pass=0; fail=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=$((fail+1)); }
-check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
+# On failure, show what the command actually printed. A bare ✗ is only actionable
+# on the machine you are sitting at: a check that passes here and fails on a CI
+# runner leaves nothing to go on, and guessing from the assertion name is how an
+# afternoon disappears. Most checks are `<command> | grep -q <pattern>`, so re-run
+# the part before the first pipe -- that is the output the pattern was looking at.
+check(){
+  if eval "$2" >/dev/null 2>&1; then ok "$1"; return; fi
+  bad "$1"
+  printf '      command: %s\n' "$2"
+  eval "${2%%|*}" 2>&1 | head -8 | sed 's/^/      > /'
+}
 
 # macOS has no sha256sum (only shasum); Linux often has no shasum. Accept either.
 sha256_of() {

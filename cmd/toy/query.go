@@ -56,7 +56,7 @@ const (
 // (errUsage), so the flag package's own usage output is switched off and only its
 // error line survives.
 func qryFlags(name string) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs := newFlagSet(name)
 	fs.Usage = func() {}
 	return fs
 }
