@@ -281,9 +281,10 @@ func runList(ctx context.Context, args []string) error {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(struct {
+			Format    int            `json:"format"`
 			Count     int            `json:"count"`
 			Installed []qryInstalled `json:"installed"`
-		}{len(out), out})
+		}{jsonFormatVersion, len(out), out})
 	}
 	if len(ms) == 0 {
 		ui.Info("Nothing installed yet.")
@@ -322,6 +323,15 @@ func runList(ctx context.Context, args []string) error {
 	ui.Info("%d installed. `toy info <ref>` for details, `toy update` to upgrade.", len(ms))
 	return nil
 }
+
+// jsonFormatVersion is stamped on every --json envelope.
+//
+// The index format carries one and these did not, which is the wrong way round:
+// the index is a file people read with their eyes, while --json exists precisely
+// so a script can depend on the shape. Without it a renamed field breaks that
+// script silently, with no way to tell "old toy" from "changed contract". Bump it
+// when a field is removed or its meaning changes; adding a field is not a bump.
+const jsonFormatVersion = 1
 
 // ---------------------------------------------------------------- toy search
 
@@ -462,10 +472,11 @@ func qrySearchJSON(query string, hits []qrySearchHit) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(struct {
+		Format  int            `json:"format"`
 		Query   string         `json:"query"`
 		Count   int            `json:"count"`
 		Results []qrySearchHit `json:"results"`
-	}{query, len(hits), hits})
+	}{jsonFormatVersion, query, len(hits), hits})
 }
 
 // qryNoIndexHelp explains what "no index configured" means and gives commands that
@@ -494,6 +505,9 @@ func qryNoIndexHelp() {
 // struct: what resolve() carries around is ours to change, and what a script
 // parses is not.
 type qryInfo struct {
+	// Format is the envelope version; Version below is the package's own. They are
+	// deliberately different keys -- "version" already means the package here.
+	Format           int      `json:"format"`
 	Ref              string   `json:"ref"`
 	Name             string   `json:"name"`
 	Desc             string   `json:"desc,omitempty"`
@@ -1206,7 +1220,7 @@ func qryInfoJSON(st *store.Store, res *resolved, tf *toyfile.Toyfile, r ref.Ref)
 		from = "index"
 	}
 	out := qryInfo{
-		Ref: r.String(), Name: tf.Name, Desc: tf.Desc, License: tf.License,
+		Format: jsonFormatVersion, Ref: r.String(), Name: tf.Name, Desc: tf.Desc, License: tf.License,
 		Homepage: tf.Homepage, Version: res.Version.Number(), Tag: res.Tag,
 		Trust: res.Trust, Signer: res.Signer, Index: res.IndexName,
 		PackagingFrom: from, Platforms: tf.Platforms(),
