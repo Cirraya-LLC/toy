@@ -42,13 +42,6 @@ archives:
 checksum:
   name_template: checksums.txt
 
-# An -rc / -beta tag is marked pre-release on GitHub instead of becoming "Latest".
-# toy itself already skips pre-releases when picking a version (semver.Max with
-# allowPre=false), so without this the release page and the installer would
-# disagree about which release is current.
-release:
-  prerelease: auto
-
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
 
@@ -61,6 +54,11 @@ changelog:
       - "^chore:"
 
 release:
+  # An -rc / -beta tag is marked pre-release on GitHub instead of becoming "Latest".
+  # toy itself already skips pre-releases when picking a version (semver.Max with
+  # allowPre=false), so without this the release page and the installer would
+  # disagree about which release is current.
+  prerelease: auto
   footer: |
     ---
     Install toy with toy: `toy install github:Cirraya-LLC/toy`
