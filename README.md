@@ -240,7 +240,7 @@ one if you have Go.
 
 ```bash
 # pick your platform: linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64
-V=1.0.0; P=linux_amd64
+V=0.1.0; P=linux_amd64
 BASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V
 
 curl -fLO $BASE/toy_${V}_${P}.tar.gz

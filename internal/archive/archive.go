@@ -574,6 +574,9 @@ func (e *extractor) untar(r io.Reader) error {
 		if err != nil {
 			return err
 		}
+		if macMetadata(rel) {
+			continue // tar.Reader skips the unread body on the next Next()
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := e.mkdirAll(full); err != nil {
@@ -628,6 +631,9 @@ func (e *extractor) unzip(zr *zip.Reader) error {
 		full, rel, err := e.resolve(f.Name)
 		if err != nil {
 			return err
+		}
+		if macMetadata(rel) {
+			continue
 		}
 		mode := f.Mode()
 		switch {
@@ -757,4 +763,32 @@ func decompressTo(src, name, dst string, limit int64) error {
 	}
 	// O_CREATE's mode is filed down by umask, and this file has to be runnable.
 	return os.Chmod(dst, 0o755)
+}
+
+// macMetadata reports whether a member is macOS filesystem metadata rather than
+// part of the package: an AppleDouble file (`._name`) or anything under
+// `__MACOSX/`.
+//
+// Recent macOS stamps every file an app creates with a com.apple.provenance
+// attribute, and the system tar (bsdtar) writes such attributes out as `._name`
+// members -- including `._<dir>` beside a wrapper directory. That is a second
+// top-level entry, so stripping the wrapper rightly refused, and an author who
+// packed a release with `tar czf` on a Mac shipped an archive toy could not
+// install. Finder's "Compress" does the same thing with a `__MACOSX/` tree.
+// `tar tzf` on a Mac hides these members when listing, which is how it stayed
+// invisible; CI's macOS runner never saw it because its files carry no such
+// attribute.
+//
+// Checked after resolve(), so a traversal attempt still rejects the whole archive
+// even when it is named like metadata. Skipping only ever writes less.
+func macMetadata(rel string) bool {
+	if strings.HasPrefix(filepath.Base(rel), "._") {
+		return true
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		if seg == "__MACOSX" {
+			return true
+		}
+	}
+	return false
 }

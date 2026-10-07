@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -21,8 +22,21 @@ import (
 // install fails, and by then nobody is reading docs.
 const issueURL = "https://github.com/Cirraya-LLC/toy/issues"
 
-// Version is injected with -ldflags.
+// Version is injected with -ldflags by the release build.
 var Version = "dev"
+
+// `go install` never runs the release build, so without this every user who
+// installed the way the README calls easiest would report "toy dev" -- in bug
+// reports too, where the version is the first thing anyone asks for. Go already
+// records the module version in the binary; read it back.
+func init() {
+	if Version != "dev" {
+		return
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		Version = strings.TrimPrefix(bi.Main.Version, "v")
+	}
+}
 
 type command struct {
 	name    string
