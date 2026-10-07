@@ -253,6 +253,12 @@ tar -xzf toy_${V}_${P}.tar.gz
 install -m 0755 toy ~/.local/bin/toy           # or any directory on your PATH
 ```
 
+**On a Mac, download with `curl` as above, not with a browser.** A browser marks the file as
+quarantined, `tar` carries that onto the extracted `toy`, and Gatekeeper refuses to run it —
+the binary is signed ad hoc, not notarized. If it happened anyway:
+`xattr -d com.apple.quarantine toy`. (Packages toy installs for you are fetched over HTTP and
+never quarantined, the same as every other command-line installer.)
+
 `checksums.txt` and the binary come from the same release, so it guards against "altered in
 transit", not against "the publisher is the problem". **The only defense against the latter
 is the signature on the release page and this repo's history** — which is exactly what toy
