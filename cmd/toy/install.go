@@ -126,7 +126,10 @@ func runInstall(ctx context.Context, args []string) error {
 		ui.Warn("this is a downgrade: %s currently has %s, and %s is older. "+
 			"If you did not mean to go back a version, check whether upstream pulled the newer tag", old.Name, old.Tag, res.Tag)
 	}
-	return insPerform(ctx, st, cfg, res, old, *force)
+	if err := insPerformOrPrevious(ctx, st, cfg, r, res, old, *force); !errors.Is(err, insErrUpToDate) {
+		return err
+	}
+	return nil
 }
 
 // runUninstall reads the manifest and removes the symlinks and the pkg directory.
@@ -270,7 +273,7 @@ func insUpdateOne(ctx context.Context, st *store.Store, cfg store.Config, m stor
 	}
 	ui.Step("%s %s → %s", m.Name, m.Tag, res.Tag)
 	old := m
-	return insPerform(ctx, st, cfg, res, &old, false)
+	return insPerformOrPrevious(ctx, st, cfg, r, res, &old, false)
 }
 
 // insIsNewer reports whether the remote tag is newer than the installed one.
@@ -421,9 +424,6 @@ func insPerformLocked(ctx context.Context, st *store.Store, cfg store.Config, re
 				// Iron law 4: a mismatch is always refused. fetch has already put
 				// the expected and actual values into the error.
 				return fmt.Errorf("checksum mismatch on %s: it does not match the sha256 declared in toy.toml, so nothing was installed: %w", it.asset, err)
-			}
-			if note := insStaleEntryNote(res, err); note != "" {
-				ui.Warn("%s", note)
 			}
 			return err
 		}
@@ -1285,4 +1285,53 @@ func insSingleTarget(tf *toyfile.Toyfile, it insItem, pkgDir string) (string, er
 		return "", fmt.Errorf("cannot create the directory %s: %w", filepath.Dir(full), err)
 	}
 	return full, nil
+}
+
+// insPerformOrPrevious installs res, and when that fails because res's release file
+// is not there, installs the release before it instead.
+//
+// A tag routinely goes up before its release files do: the author pushes the tag and
+// CI spends the next hour building and uploading. rclone's v1.75.2 was tagged at 09:45
+// UTC and its first file arrived at 10:50, and for that whole window `toy install
+// rclone` failed for everyone -- with a note blaming a renamed asset and asking them to
+// report it. toy picks versions from tags and never asks a forge's API whether a
+// release is published (spec §2), so it cannot see this coming; it can only recover,
+// and say plainly that it did.
+//
+// Only when the version was picked rather than asked for (res.PrevTag is empty after
+// --version), and only on a definite 404: a 500 or a timeout is upstream having a bad
+// day, and moving someone to an older release over it would be wrong.
+func insPerformOrPrevious(ctx context.Context, st *store.Store, cfg store.Config, r ref.Ref, res *resolved, old *store.Manifest, force bool) error {
+	err := insPerform(ctx, st, cfg, res, old, force)
+	if err == nil || res.PrevTag == "" || !errors.Is(err, os.ErrNotExist) {
+		insWarnStale(res, err)
+		return err
+	}
+	// The wording is read by scripts/index-check.sh to tell "still publishing" from
+	// "renamed"; keep "<name> <tag> is tagged, but its release file" intact.
+	ui.Warn("%s %s is tagged, but its release file is not there. Usually upstream is still publishing it -- "+
+		"tags often go up well before the files do -- though it can also mean the file was renamed. "+
+		"Installing %s, the release before it; `toy update` moves to %s once its files are up",
+		res.Repo, res.Tag, res.PrevTag, res.Tag)
+	r.Version = res.PrevTag
+	prev, perr := resolve(ctx, st, cfg, r)
+	if perr != nil {
+		return fmt.Errorf("%w (and the release before it, %s, did not resolve either: %v)", err, res.PrevTag, perr)
+	}
+	if old != nil && old.ID == insPackageID(prev) && old.Tag == prev.Tag {
+		ui.Info("%s is already at %s, nothing to do", old.Name, old.Tag)
+		return insErrUpToDate
+	}
+	err = insPerform(ctx, st, cfg, prev, old, force)
+	insWarnStale(prev, err)
+	return err
+}
+
+// insWarnStale prints the "this index entry is probably out of date" note when err is
+// the kind of failure it describes. It runs once the fallback has had its chance: a
+// missing file for a release that is merely still being published is not stale.
+func insWarnStale(res *resolved, err error) {
+	if note := insStaleEntryNote(res, err); note != "" {
+		ui.Warn("%s", note)
+	}
 }

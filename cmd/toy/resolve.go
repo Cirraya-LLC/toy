@@ -35,9 +35,12 @@ type resolved struct {
 	Repo     string
 	Tag      string   // the tag as written, usually with a v
 	Version  semver.V //
-	Toyfile  *toyfile.Toyfile
-	Raw      []byte       // the verbatim bytes of toy.toml — what the author's signature covers (see autSignMessage)
-	Entry    *index.Entry // set only when this came through an index, nil otherwise
+	// PrevTag is the release before Tag, set only when Tag was picked rather than
+	// named with --version. It is what to fall back to when Tag's files are not up yet.
+	PrevTag string
+	Toyfile *toyfile.Toyfile
+	Raw     []byte       // the verbatim bytes of toy.toml — what the author's signature covers (see autSignMessage)
+	Entry   *index.Entry // set only when this came through an index, nil otherwise
 	// IndexName is which index this record came from. A signature is vouched for by
 	// that index and nothing else (whoever can edit that JSON can swap the public
 	// key), so the trust line has to be able to name which index is vouching.
@@ -333,6 +336,14 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", r.String(), err)
 	}
+	// When the version was picked rather than asked for, remember the one before it:
+	// a tag routinely goes up before its release files do (insPerformOrPrevious).
+	prevTag := ""
+	if r.Version == "" {
+		if p, err := semver.Max(rsvWithout(tags, v.Raw), false, r.Repo); err == nil {
+			prevTag = p.Raw
+		}
+	}
 
 	rawURL := h.RawURL(r.Owner, r.Repo, v.Raw, "toy.toml")
 	if rawURL == "" {
@@ -371,10 +382,22 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string)
 		Repo:     r.Repo,
 		Tag:      v.Raw,
 		Version:  v,
+		PrevTag:  prevTag,
 		Toyfile:  tf,
 		Raw:      raw,
 		Trust:    trust,
 	}, nil
+}
+
+// rsvWithout is tags minus one of them.
+func rsvWithout(tags []string, drop string) []string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t != drop {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // rsvViaURL is the plain-URL route: nothing is vouched for, and there is no such
