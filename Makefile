@@ -57,7 +57,7 @@ index-gen:
 # The static site (site/). Two jobs: copy index/toy-index.json to site/index.json and
 # validate it, then generate three static pages from index.template.html + i18n.json
 # (Simplified Chinese / Traditional Chinese / English).
-# Cloudflare Pages' build command is exactly this one script; its output directory is site.
+# .github/workflows/pages.yml runs exactly this script and publishes site/ to GitHub Pages.
 site:
 	bash scripts/build-site.sh
 

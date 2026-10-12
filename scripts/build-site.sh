@@ -4,12 +4,12 @@
 #      a second version; the two would inevitably drift, and drift means the site lists
 #      packages that cannot be installed).
 #   2. Generate three static pages from site/index.template.html + site/i18n.json
-#      (Simplified Chinese / Traditional Chinese / English).
+#      (English at the site root, Simplified Chinese at /zh-Hans/, Traditional at /zh-Hant/).
 #      **No hand-maintaining three HTML files** (they would drift), and **no pure
 #      client-side switching** either: with JS disabled only one language would survive,
 #      SEO would only ever see one, and this site's no-JS degradation is tested.
 #
-# Cloudflare Pages: build command `bash scripts/build-site.sh`, output directory `site`.
+# Published by .github/workflows/pages.yml to GitHub Pages at https://toy.cirraya.com.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -40,11 +40,14 @@ echo "✓ $dst — version $version, $packages entries, byte-identical to $src"
 python3 - <<'PY'
 import html, json, os, re, sys
 
-LANGS = ["zh-Hans", "zh-Hant", "en"]          # the first is the default, served at the site root
-OUT   = {"zh-Hans": ".", "zh-Hant": "zh-Hant", "en": "en"}
+LANGS = ["en", "zh-Hans", "zh-Hant"]          # the first is the default, served at the site root
+OUT   = {"en": ".", "zh-Hans": "zh-Hans", "zh-Hant": "zh-Hant"}
+# hreflang wants fully qualified URLs; the language switcher and everything else stay
+# relative, so a local preview still navigates locally.
+SITE  = "https://toy.cirraya.com"
 # Endonyms on purpose: a reader looking for their own language scans for the name written
 # in that language, not for an English label they may not read.
-NAME  = {"zh-Hans": "简体", "zh-Hant": "繁體", "en": "English"}
+NAME  = {"en": "English", "zh-Hans": "简体", "zh-Hant": "繁體"}
 HREF  = {l: "/" if OUT[l] == "." else "/" + OUT[l] + "/" for l in LANGS}
 
 i18n = json.load(open("site/i18n.json", encoding="utf-8"))
@@ -69,8 +72,8 @@ for lang in LANGS:
     # All three hreflangs point at each other, plus x-default for the default language
     # (the self-referential one has to be there too).
     alt = "\n".join(
-        f'<link rel="alternate" hreflang="{l}" href="{HREF[l]}">' for l in LANGS
-    ) + f'\n<link rel="alternate" hreflang="x-default" href="{HREF[LANGS[0]]}">'
+        f'<link rel="alternate" hreflang="{l}" href="{SITE}{HREF[l]}">' for l in LANGS
+    ) + f'\n<link rel="alternate" hreflang="x-default" href="{SITE}{HREF[LANGS[0]]}">'
 
     # The language switcher is three ordinary links — it works with JS disabled.
     items = []

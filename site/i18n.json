@@ -231,9 +231,9 @@
     "en": "Option 2: download the release binary and check the hash yourself"
   },
   "inst_dl_code": {
-    "zh-Hans": "# 换成你的平台：linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64\nV=1.0.0; P=linux_amd64\nBASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V\n\ncurl -fLO $BASE/toy_${V}_${P}.tar.gz\ncurl -fLO $BASE/checksums.txt\n\n# 核对哈希。这一步不是可选的 —— 跳过它，你就是在无条件信任那条下载链路。\nsha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c\n\ntar -xzf toy_${V}_${P}.tar.gz\ninstall -m 0755 toy ~/.local/bin/toy",
-    "zh-Hant": "# 換成你的平台：linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64\nV=1.0.0; P=linux_amd64\nBASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V\n\ncurl -fLO $BASE/toy_${V}_${P}.tar.gz\ncurl -fLO $BASE/checksums.txt\n\n# 核對雜湊。這一步不是可選的 —— 跳過它，你就是在無條件信任那條下載鏈路。\nsha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c\n\ntar -xzf toy_${V}_${P}.tar.gz\ninstall -m 0755 toy ~/.local/bin/toy",
-    "en": "# pick your platform: linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64\nV=1.0.0; P=linux_amd64\nBASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V\n\ncurl -fLO $BASE/toy_${V}_${P}.tar.gz\ncurl -fLO $BASE/checksums.txt\n\n# Check the hash. This step is not optional -- skip it and you are trusting\n# the download path unconditionally.\nsha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c\n\ntar -xzf toy_${V}_${P}.tar.gz\ninstall -m 0755 toy ~/.local/bin/toy"
+    "zh-Hans": "# 换成你的平台：linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64\nV=0.1.0; P=linux_amd64\nBASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V\n\ncurl -fLO $BASE/toy_${V}_${P}.tar.gz\ncurl -fLO $BASE/checksums.txt\n\n# 核对哈希。这一步不是可选的 —— 跳过它，你就是在无条件信任那条下载链路。\nsha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c\n\ntar -xzf toy_${V}_${P}.tar.gz\ninstall -m 0755 toy ~/.local/bin/toy",
+    "zh-Hant": "# 換成你的平台：linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64\nV=0.1.0; P=linux_amd64\nBASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V\n\ncurl -fLO $BASE/toy_${V}_${P}.tar.gz\ncurl -fLO $BASE/checksums.txt\n\n# 核對雜湊。這一步不是可選的 —— 跳過它，你就是在無條件信任那條下載鏈路。\nsha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c\n\ntar -xzf toy_${V}_${P}.tar.gz\ninstall -m 0755 toy ~/.local/bin/toy",
+    "en": "# pick your platform: linux_amd64 / linux_arm64 / darwin_amd64 / darwin_arm64\nV=0.1.0; P=linux_amd64\nBASE=https://github.com/Cirraya-LLC/toy/releases/download/v$V\n\ncurl -fLO $BASE/toy_${V}_${P}.tar.gz\ncurl -fLO $BASE/checksums.txt\n\n# Check the hash. This step is not optional -- skip it and you are trusting\n# the download path unconditionally.\nsha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c\n\ntar -xzf toy_${V}_${P}.tar.gz\ninstall -m 0755 toy ~/.local/bin/toy"
   },
   "inst_dl_aria": {
     "zh-Hans": "复制下载并校验的命令",
@@ -241,9 +241,9 @@
     "en": "Copy the download-and-verify commands"
   },
   "inst_m2_fine_html": {
-    "zh-Hans": "<code>checksums.txt</code> 和二进制来自同一个 release，所以它挡的是「传输过程中被改了」，不是「发布的人本身有问题」。这就是引导悖论的实际形状。",
-    "zh-Hant": "<code>checksums.txt</code> 和二進位檔來自同一個 release，所以它擋的是「傳輸過程中被改掉」，不是「發布的人本身有問題」。這就是啟動悖論的實際形狀。",
-    "en": "<code>checksums.txt</code> ships from the same release as the binary, so it defends against tampering in transit, not against the publisher. That is the bootstrap paradox in its concrete form."
+    "zh-Hans": "<code>checksums.txt</code> 和二进制来自同一个 release，所以它挡的是「传输过程中被改了」，不是「发布的人本身有问题」。这就是引导悖论的实际形状。 在 Mac 上请照上面用 <code>curl</code> 下载，别用浏览器：浏览器会给文件打上隔离标记，<code>tar</code> 会把它带到解出来的 <code>toy</code> 上，Gatekeeper 就不让这个临时签名的二进制运行。已经这样了的话：<code>xattr -d com.apple.quarantine toy</code>。",
+    "zh-Hant": "<code>checksums.txt</code> 和二進位檔來自同一個 release，所以它擋的是「傳輸過程中被改掉」，不是「發布的人本身有問題」。這就是啟動悖論的實際形狀。 在 Mac 上請照上面用 <code>curl</code> 下載，別用瀏覽器：瀏覽器會替檔案加上隔離標記，<code>tar</code> 會把它帶到解出來的 <code>toy</code> 上，Gatekeeper 就不讓這個臨時簽署的二進位檔執行。已經這樣了的話：<code>xattr -d com.apple.quarantine toy</code>。",
+    "en": "<code>checksums.txt</code> ships from the same release as the binary, so it defends against tampering in transit, not against the publisher. That is the bootstrap paradox in its concrete form. On a Mac, download with <code>curl</code> as above, not a browser: a browser quarantines the file, <code>tar</code> carries that onto <code>toy</code>, and Gatekeeper refuses the ad-hoc-signed binary. If it happened anyway: <code>xattr -d com.apple.quarantine toy</code>."
   },
   "nocurl_html": {
     "zh-Hans": "<strong>这里不会有 <code>curl | bash</code> 安装脚本。</strong>那正是这个项目要反的东西 —— 把整台机器交给一个没人看过的脚本。",

@@ -1,0 +1,57 @@
+# Publishes site/ to GitHub Pages at https://toy.cirraya.com.
+#
+# The site hosts /index.json, which is what the client fetches, so this is a deploy of
+# the index as much as of a web page: whoever can push to main can change what
+# `toy search` finds. Entries are checked before they land (index-check.yml on the PR).
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "index/toy-index.json"
+      - "scripts/build-site.sh"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and never cancel one halfway: a half-finished deploy is worse
+# than a late one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Copies the index byte for byte and generates the three language pages; it
+      # fails the job rather than publish an index the client cannot read.
+      - run: bash scripts/build-site.sh
+
+      # Publish what the site serves, not the sources it is built from. Listing what
+      # to leave out (rather than what to keep) means a file added to site/ later is
+      # published without anyone remembering to add it here.
+      - name: assemble _site
+        run: |
+          set -euo pipefail
+          mkdir _site
+          cp -R site/. _site/
+          rm _site/README.md _site/index.template.html _site/i18n.json
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

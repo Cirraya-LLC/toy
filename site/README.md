@@ -9,19 +9,27 @@ It does two things, and **the first one is a feature, not decoration**:
 2. **Landing page + package browsing** — discovery is this product's differentiator,
    and that section reads the same `/index.json` at runtime
 
-Three languages: `zh-Hans` (site root) / `zh-Hant` (`/zh-Hant/`) / `en` (`/en/`).
+Three languages: `en` (site root) / `zh-Hans` (`/zh-Hans/`) / `zh-Hant` (`/zh-Hant/`).
+
+Live at **https://toy.cirraya.com** (GitHub Pages).
 
 ---
 
-## Deploying to Cloudflare Pages
+## Deploying
 
-Connect this repo in Pages, then:
+`.github/workflows/pages.yml` does it on every push to `main` that touches `site/`, the
+index, or the build script: it runs `scripts/build-site.sh`, drops the sources
+(`README.md`, `index.template.html`, `i18n.json`) and publishes the rest to GitHub Pages.
+The repository's Pages source is "GitHub Actions" and its custom domain is
+`toy.cirraya.com`, a DNS `CNAME` to `cirraya-llc.github.io`. If that DNS sits behind
+Cloudflare it must stay **DNS only**: proxied, GitHub cannot issue the certificate.
 
-| Setting | Value |
-| --- | --- |
-| Build command | `bash scripts/build-site.sh` |
-| Build output directory | `site` |
-| Root directory | leave empty (repo root) |
+**Pushing to `main` deploys the index**, so push access to this repository is the
+credential that decides what `toy search` finds. Treat it that way.
+
+GitHub Pages serves `/index.json` as `application/json` with
+`Access-Control-Allow-Origin: *` and `Cache-Control: max-age=600`, and none of that is
+configurable there. Ten minutes is fine for an index.
 
 The build script does two things:
 
@@ -35,8 +43,8 @@ The build script does two things:
 2. Generates three pages from `index.template.html` + `i18n.json` (next section).
 
 **Everything generated is in `.gitignore`**: `site/index.json`, `site/index.html`,
-`site/zh-Hant/`, `site/en/`. What's maintained by hand in the repo is only
-`index.template.html`, `i18n.json`, `style.css`, `app.js`, `404.html`, `_headers`.
+`site/zh-Hans/`, `site/zh-Hant/`. What's maintained by hand in the repo is only
+`index.template.html`, `i18n.json`, `style.css`, `app.js`, `404.html`.
 
 ---
 
@@ -46,9 +54,9 @@ The build script does two things:
 site/index.template.html   one template, copy slots written as {{key}}
 site/i18n.json             one content file, one key in three languages
         ↓  the python3 block in scripts/build-site.sh
-site/index.html            zh-Hans (default, site root)
+site/index.html            en (default, site root)
+site/zh-Hans/index.html
 site/zh-Hant/index.html
-site/en/index.html
 ```
 
 **We do not hand-maintain three HTML files** — they will drift, and this site carries
@@ -68,7 +76,9 @@ A few rules:
 - **The language switcher is three ordinary links** (`.langnav`), not a JS dropdown —
   it works with JS off.
 - **All three pages carry complete `hreflang`** (including `x-default` pointing at
-  Simplified) plus their own self-referential entry.
+  English) plus their own self-referential entry. Those are the only absolute URLs
+  (`https://toy.cirraya.com/...`, which hreflang requires); every link a reader follows
+  is relative, so a local preview stays local.
 - Subdirectory pages reference `../style.css` / `../app.js`; **the index is always an
   absolute `/index.json`** (which is what the client fetches too).
 - **`app.js` hardcodes copy in no language.** The few strings it needs (the copy
@@ -96,13 +106,14 @@ and sync these four lines**, or the site starts saying something toy doesn't say
 `internal/store/store.go`:
 
 ```go
-const DefaultIndexURL = ""    // ← change to "https://<your-domain>/index.json"
+const DefaultIndexURL = ""    // ← becomes "https://toy.cirraya.com/index.json"
 ```
 
 Before that change, a new user has to run `toy index add` themselves; after it,
 `toy search` works out of the box.
 
-**Why it's empty right now**: shipping an address that isn't live yet means every
+**Change it only once that URL really answers with the index** (DNS resolved,
+certificate issued), then cut a release. Shipping an address that isn't live yet means every
 new user sees a red cross the first time they run `toy doctor` — and that isn't
 their fault. "No index configured" is a legitimate state: `doctor` reports it
 neutrally rather than ✗, and `toy install github:owner/repo` never goes through the
@@ -116,8 +127,8 @@ make index-check          # installs, runs and uninstalls every entry for real �
 git commit && git push    # Pages rebuilds automatically
 ```
 
-`_headers` sets `Cache-Control: max-age=300` on `/index.json`, so an index update
-takes at most five minutes to go live. No waiting a day.
+GitHub Pages caches for ten minutes, so an index update is live within about that
+long after the deploy finishes.
 
 ## Local preview
 
