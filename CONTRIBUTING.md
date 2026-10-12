@@ -7,9 +7,10 @@ different ways.
 - **The index** — one JSON file, `index/toy-index.json`, listing packages people
   can install. Most of it describes software we do not own.
 
-the design notes is the specification. It is long because it records *why* things are
-the way they are, not just what they are. You do not need to read it front to
-back; the sections referenced below are the ones that matter for a given change.
+The reasoning behind most decisions lives next to the code that carries it: in
+comments that say *why*, and in the regression tests, many of which open with what
+went wrong and what the test now guards. Keep that reasoning when you change
+something, and add to it.
 
 ---
 
@@ -25,29 +26,44 @@ it builds a fake forge on the local filesystem — it never touches the network 
 never touches your real `~/.toy`.
 
 There are exactly two third-party dependencies, and adding a third needs a real
-argument (the design notes §10). Most of what a package manager wants is already in the
+argument. Most of what a package manager wants is already in the
 standard library; `compress/bzip2` and `crypto/ed25519` are both there.
 
 ---
 
 ## Changing the tool
 
-**Read the eight iron rules first** (the design notes §1). They are short, and a change
-that breaks one is a change that removes the reason this project exists. The one
-that surprises people: **nothing from a package is ever executed** — there is no
-install hook, no build step, no post-install anything, and there never will be.
+**Read the eight iron rules first.** A change that breaks one removes the reason
+this project exists.
 
-Then, before you open the file you came here to edit:
+1. **Nothing from a package is ever executed** — no install hook, no build step,
+   no post-install anything, and there never will be.
+2. **Nothing is built from source.** A release binary, a single-file script, or an
+   error.
+3. **No dependencies between packages.** Every package is self-contained.
+4. **A declared sha256 is enforced**; without one, the first download's hash is
+   pinned and a later change is refused.
+5. **A command already on PATH is never shadowed** unless the user passes `--force`.
+6. **Versions are immutable**: once a hash is recorded for a version, it never
+   points anywhere else.
+7. **Extraction blocks path traversal**: `../`, absolute paths and symlinks that
+   lead out of the package are refused.
+8. **The trust level is printed, honestly**, on every install. The client is the
+   only security boundary.
 
-- **§13** says which package owns what. The boundaries are real; a fix in the
-  wrong package is usually a sign the problem is somewhere else.
-- **§14** is a list of things that went wrong and what was done about them. If
-  you are about to change extraction, symlinking, checksums, tag resolution or
-  terminal output, the relevant subsection will save you a bad afternoon.
+Each package under `internal/` owns one thing — `archive` extraction, `fetch`
+downloads, `store` the `~/.toy` layout and symlinks, `sign` signatures and pinning,
+`ui` everything a human reads. A fix that has to reach across several of them is
+usually a sign the problem is somewhere else.
+
+If you are about to change extraction, symlinking, checksums, tag resolution or
+terminal output, read the comments on the functions you are touching and the
+`*_audit_test.go` files first. They record what went wrong before, and why the code
+is shaped the way it is.
 
 **Every non-trivial change wants a test that fails without it.** Comment the fix
-out and run the test; if it still passes, the test is decoration. Several
-subsections of §14 exist because a green suite proved nothing.
+out and run the test; if it still passes, the test is decoration. Several of the
+regression tests here exist because a green suite proved nothing.
 
 Comments here carry reasoning, not restatement. "This uses a lock" is noise;
 "this is under the lock because two concurrent installs each read and rewrite the
@@ -58,7 +74,7 @@ someone removing it.
 
 ## Adding something to the index
 
-Most entries are **inline entries** (the design notes §5.1): we write the packaging
+Most entries are **inline entries**: we write the packaging
 instructions for a repository that has no `toy.toml` of its own. That is how the
 index can be useful before anybody has adopted us, and it is also the part with
 real obligations attached.

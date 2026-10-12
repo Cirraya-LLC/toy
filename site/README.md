@@ -136,13 +136,13 @@ toy search disk && toy install muesli/duf && duf --version
 
 ## Rules for changing copy
 
-**Every piece of copy has to be backed by something in the design notes / `SECURITY.md` /
+**Every piece of copy has to be backed by something in `SECURITY.md` or
 `README.md`.** These three above all — breaking any one of them is worse than not
 having the site at all:
 
 - **No `curl | bash` install script. Ever.** That is precisely the thing this project
   exists to reject.
-- **Every package must be marked as an inlined entry** (the design notes §5.1). Dropping
+- **Every package must be marked as an inlined entry**. Dropping
   that marker from the site means we imply endorsement on the web page while the
   client honestly downgrades — that is us lying, and "we don't lie" is this product's
   most expensive asset.

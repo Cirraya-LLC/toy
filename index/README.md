@@ -56,9 +56,9 @@ cd your-project && toy publish     # prints an entry you can paste straight in
 ### Generating entries in bulk
 
 `cmd/toy-index` is the maintainer's generator: feed it a list of `owner/repo` and it
-produces **inlined entries** (§5.1) ready to drop into this JSON. It is a
+produces **inlined entries** ready to drop into this JSON. It is a
 **separate binary, not a `toy` subcommand** — the `toy` client never uses a host's
-REST API (spec §2), while an offline batch job may (reasoning in the design notes §14.11).
+REST API, while an offline batch job may.
 
 ```bash
 make index-gen ARGS="--repos index/repos.txt"            # only add new entries
@@ -69,7 +69,7 @@ export GITHUB_TOKEN=...   # without a token you get 60 requests/hour and hit the
 
 One `owner/repo` per line, `#` starts a comment (`index/repos.txt` doesn't exist yet
 — make your own; the cold-start source is scraped awesome-lists, which are already
-in exactly this format, see the design notes §11). When it finishes, **read the report**,
+in exactly this format). When it finishes, **read the report**,
 especially the last section: the command names this batch will put on PATH.
 
 Two things it **deliberately does not do**. Don't remove them:
@@ -94,7 +94,7 @@ author has no idea we listed them. Therefore:
    relationship with us. Generated entries are always inlined, so what the client
    displays is the **downgraded** "packaging instructions come from the index"
    marker, never `✓ signed` — that checkmark belongs only to an author who signed
-   with their own key (§14.3). We copy `desc` verbatim from upstream; we don't write
+   with their own key. We copy `desc` verbatim from upstream; we don't write
    a recommendation on its behalf.
 2. **If a maintainer asks to be delisted, delist them. No questions.** Deleting an
    entry only means it stops being findable — `toy install github:owner/repo` still
@@ -111,7 +111,7 @@ author has no idea we listed them. Therefore:
    the one step in the whole pipeline that cannot be automated: `reservedLinkNames`
    blocks `git`, and the PATH shadow check blocks commands that already exist on
    this machine — but a name that does **not yet** exist on PATH can be claimed
-   (that is exactly the shape of the critical finding in §14.1). The generator's
+   (that is exactly the shape of the most serious finding the security audit turned up). The generator's
    report lists this batch's names separately at the end, precisely so a human takes
    that look.
 
@@ -151,8 +151,8 @@ passed two gates**:
 2. **Actually installing**: `scripts/index-check.sh` installed, ran, and uninstalled
    all 19 on linux/amd64 (glibc) — **19 passed / 0 failed**.
 
-This round doubled as real-hardware acceptance for three things: §14.13 (stripping
-the top-level directory), §3.1 (glibc falling back to musl), and i686. The
+This round doubled as real-hardware acceptance for three things: stripping
+the top-level directory, glibc falling back to musl, and i686. The
 cargo-dist projects — ripgrep / fd / bat / delta / eza / zoxide — were all
 uninstallable last round; this round, **on a glibc machine, we installed the musl
 build and stripped that `ripgrep-15.2.0-x86_64-unknown-linux-musl/` layer**, and
@@ -189,7 +189,7 @@ GitHub's auto-attached source tarballs don't count as assets, and toy doesn't bu
 from source (iron law 2), so this repo can't be listed right now — when it ships
 binaries again, rerun the generator. No code change needed.
 
-### The names on the left of `[bin]`: a human looked (§14.9, item 2)
+### The names on the left of `[bin]`: a human looked
 
 `reservedLinkNames` blocks `git`, and the PATH shadow check blocks commands that
 **already exist** on this machine. What's left for a human is "the name is too
@@ -243,7 +243,7 @@ exactly this way, and listing had only verified it on linux/amd64, so nobody saw
 
 `insUnpack` now drops a single file at the path on the right of `[bin]`
 (`yq = "yq"`), which holds on every platform. The generator's matching special case
-is gone. The lesson is written up in the design notes §14.14.
+is gone.
 
 
 ## What deleting an entry does

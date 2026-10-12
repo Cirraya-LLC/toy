@@ -12,7 +12,7 @@ builds:
     binary: toy
     # CGO_ENABLED=0 is the one line here that must not change: a fully static binary runs
     # on both glibc and musl, so shipping only the two-segment key (linux/amd64) is enough
-    # and no separate /musl build is needed. See the design notes §3.1.
+    # and no separate /musl build is needed.
     env:
       - CGO_ENABLED=0
     flags:
@@ -25,7 +25,7 @@ builds:
     goarch:
       - amd64
       - arm64
-    # Spec §11: no Windows in v1. It is absent from goos above, so nothing to exclude here.
+    # No Windows in v1. It is absent from goos above, so nothing to exclude here.
 
 archives:
   - id: toy

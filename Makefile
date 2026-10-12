@@ -46,8 +46,8 @@ index-check:
 # Bulk-generate index entries (cmd/toy-index). **Deliberately not part of check** — it
 # needs the network and calls host APIs. It is an offline batch job a maintainer runs by
 # hand, not something every commit runs.
-# The client (cmd/toy) never uses an API; why these are two separate binaries is in
-# the design notes §14.11.
+# The client (cmd/toy) never uses an API. Keeping the generator a separate binary is what
+# keeps that rule checkable: grep cmd/toy and internal/ for API URLs and expect nothing.
 #   make index-gen ARGS="--repos index/repos.txt"
 #   make index-gen ARGS="--repos index/repos.txt --update --probe"
 # Without $GITHUB_TOKEN you get 60 requests/hour and hit the rate limit fast.

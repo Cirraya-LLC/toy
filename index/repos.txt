@@ -1,12 +1,12 @@
 # Seed list for the toy index -- one owner/repo per line, # starts a comment.
-# Source: the usual "modern CLI tools" awesome-lists (the cold-start method in the design notes §11).
+# Source: the usual "modern CLI tools" awesome-lists.
 # See index/README.md for how to run it. Always pass --probe; without it the right-hand
 # side of [bin] is a guess.
 
 junegunn/fzf              # already in the index
 mikefarah/yq              # already in the index
 
-# The cargo-dist / Rust batch (only acceptable once §14.13 strips the top-level directory)
+# The cargo-dist / Rust batch (only acceptable once extraction strips the top-level directory)
 BurntSushi/ripgrep
 sharkdp/fd
 sharkdp/bat

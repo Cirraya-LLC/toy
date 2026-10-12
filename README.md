@@ -216,7 +216,7 @@ the bytes came from** — not needing to trust it isn't the same as not needing 
 ## What we don't do
 
 No building from source, no inter-package dependencies, no P2P/DHT, no Windows (for now).
-Every one of those was cut on purpose; the reasoning is in the design notes.
+Every one of those was cut on purpose.
 
 ## Installing toy itself
 

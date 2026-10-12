@@ -110,8 +110,8 @@ one is unverified makes the surface wider, not sounder.
 ### No x86-64 microarchitecture levels (v2/v3/v4)
 
 It requires parsing CPUID, the standard library won't do it, and pulling in a
-library violates the dependency policy (exactly two third-party deps, see
-the design notes §10). `toy doctor` prints one hint. That's all.
+library violates the dependency policy (exactly two third-party deps).
+`toy doctor` prints one hint. That's all.
 
 ### Ratings are not a leaderboard
 
