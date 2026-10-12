@@ -1,6 +1,5 @@
 # toy
 
-<!-- Swap OWNER/REPO once the repo is pushed and the badge goes live. -->
 [![ci](https://github.com/Cirraya-LLC/toy/actions/workflows/ci.yml/badge.svg)](https://github.com/Cirraya-LLC/toy/actions/workflows/ci.yml)
 
 **Install the small tools nobody packages for you. Nothing is executed at install time.**
