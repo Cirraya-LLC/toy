@@ -63,10 +63,18 @@ jobs:
 
       - name: index-check (only the entries that changed)
         if: github.event_name == 'pull_request' && steps.only.outputs.skip != '1'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # see the note on the step below
         run: bash scripts/index-check.sh --only "${{ steps.only.outputs.ids }}"
 
       - name: index-check (everything)
         if: github.event_name != 'pull_request'
+        # Only read when toy had to fall back past a tag whose files were missing: the
+        # script then asks GitHub how long ago that release was published, to tell
+        # "still uploading" from "upstream renamed its assets". The token is only there
+        # for the rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/index-check.sh
 
       # index-check above installs and runs, which it can only do for the platform

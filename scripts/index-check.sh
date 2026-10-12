@@ -232,6 +232,39 @@ ran() {
 }
 
 SKIPN=0
+# release_state tells "upstream is still publishing" from "upstream renamed the file",
+# for a tag whose release file was missing. toy falls back to the release before it in
+# that case, so the install succeeds either way -- which would hide a rename from this
+# check forever. Asking is fine here (this is our maintenance job, not the client) and
+# happens only on that fallback.
+#
+# A draft, a missing release, or one published in the last six hours: still
+# publishing (some projects publish first and upload after). Published longer ago and
+# still without the file: renamed. Only GitHub can be asked; elsewhere it is assumed to
+# be still publishing, and a rename there shows up as the same note day after day.
+release_state() { # $1=source $2=tag -> prints pending|renamed
+  case "$1" in github:*) ;; *) echo pending; return ;; esac
+  local url="https://api.github.com/repos/${1#github:}/releases/tags/$2" json
+  # Two spellings rather than an optional array: macOS's bash 3.2 treats an empty
+  # "${arr[@]}" as unbound under set -u.
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    json=$(curl -fsS --max-time 20 -H "Authorization: Bearer $GITHUB_TOKEN" "$url" 2>/dev/null) || json=""
+  else
+    json=$(curl -fsS --max-time 20 "$url" 2>/dev/null) || json=""
+  fi
+  printf '%s' "$json" | python3 -c '
+import datetime, json, sys
+try:
+    r = json.load(sys.stdin)
+except Exception:
+    print("pending"); sys.exit()
+p = r.get("published_at")
+if r.get("draft") or not p:
+    print("pending"); sys.exit()
+age = datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(p.replace("Z", "+00:00"))
+print("renamed" if age.total_seconds() > 6 * 3600 else "pending")' 2>/dev/null || echo pending
+}
+
 ID=""; SRC=""; LOG="$WORK/install.log"; HOME_DIR=""
 fail() { # $1=category $2=explanation
   printf '%s✗%s %s  [%s]  %s\n' "$C_R" "$C_0" "$ID" "$1" "${SRC:-—}" >&2
@@ -297,6 +330,17 @@ while IFS=$'\t' read -r ID SRC; do
     fail "$cls" "$why"; continue
   fi
 
+  # toy fell back to the release before the newest tag (its file was missing). Find
+  # out whether that tag is still being published or its file was renamed.
+  pending=""
+  if grep -q ' is tagged, but its release file' "$LOG"; then
+    newtag=$(sed -n 's/^warning: [^ ]* \([^ ]*\) is tagged, but its release file.*/\1/p' "$LOG" | head -n 1)
+    if [ "$(release_state "$SRC" "$newtag")" = renamed ]; then
+      fail "entry" "the newest release $newtag has been published for hours, but has no file the entry names — upstream renamed its assets; regenerate this entry"; continue
+    fi
+    pending="  [$newtag is tagged but its files are not up yet; checked the release before it]"
+  fi
+
   # Symlinks: this TOY_HOME is brand new, so everything in bin/ came from the entry we
   # just installed.
   links=()
@@ -347,8 +391,8 @@ while IFS=$'\t' read -r ID SRC; do
     : >"$LOG"; fail "runtime" "symlinks left behind in bin/ after uninstall"; continue
   fi
 
-  note=""
-  [ "$shadowed" = 1 ] && note="  [this machine already had that command; installed with --force]"
+  note="$pending"
+  [ "$shadowed" = 1 ] && note="$note  [this machine already had that command; installed with --force]"
   printf '%s✓%s %s  (%s)%s\n' "$C_G" "$C_0" "$ID" "$(printf '%s ' "${links[@]##*/}" | sed 's/ $//')" "$note" >&2
   PASS=$((PASS+1))
   rm -rf "$HOME_DIR"
