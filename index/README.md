@@ -3,18 +3,21 @@
 One JSON file. The client downloads the whole thing and **searches locally**. It
 holds pointers, never substance — the git address in `source` is always the truth.
 
-v1 just uses a file, and **toy preconfigures no index at all** — if you want search,
-add one yourself:
+**This file is the public index.** Every push to `main` that changes it is published
+byte for byte to https://toy.cirraya.com/index.json (`.github/workflows/pages.yml`),
+which is the index toy comes configured with (`DefaultIndexURL` in
+`internal/store/store.go`). So **merging an entry here ships it to every user's
+`toy search`** within about ten minutes — that is why entries are checked before they land.
+
+To try a change locally before that:
 
 ```bash
 toy index add local ./index/toy-index.json     # a bare path is expanded to file:///absolute/path
 toy index add local file:///absolute/path/index/toy-index.json   # spelling it out works too
 ```
 
-Hosting it on any static host later (object storage, GitHub raw, your own server)
-means changing one URL and **not a single byte of client code** — all it has ever
-known is "a URL". To make it everyone's default index, the thing you change is the
-`DefaultIndexURL` constant in `internal/store/store.go`. Nothing else.
+The client has only ever known "a URL", so moving the index to another host is a DNS
+change for `toy.cirraya.com`, not a client change.
 
 An entry's `source` may only be a host form (`github:owner/repo`) or an **`https://`**
 bare URL. The index is remote content: allowing `file://` would let any index order

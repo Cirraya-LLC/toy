@@ -238,13 +238,13 @@ func rsvViaIndex(ctx context.Context, st *store.Store, cfg store.Config, r ref.R
 		return nil, err
 	}
 	id := r.ID()
-	// With no index configured at all — the default state, see store.DefaultIndexURL
-	// — saying "not found in the indexes" would be false: we did not look anywhere
+	// With no index configured at all — a legal state, see store.DefaultIndexURL —
+	// saying "not found in the indexes" would be false: we did not look anywhere
 	// (iron law 8).
 	if len(cfg.Indexes) == 0 {
 		return nil, fmt.Errorf("no index is configured, so %s cannot be looked up. "+
-			"Add one with `toy index add <name> <url>` (the url can be https://… or the path to a local json file). "+
-			"And if you know where the repository is, `toy install github:%s` never needed an index", id, id)
+			"Add the public one with `toy index add default %s` (a config.toml written by toy 0.1.0 has none). "+
+			"And if you know where the repository is, `toy install github:%s` never needed an index", id, store.DefaultIndexURL, id)
 	}
 	for _, idx := range idxs {
 		e, ok := idx.Find(id)

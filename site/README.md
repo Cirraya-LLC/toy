@@ -101,23 +101,20 @@ table. "Translating" them into Simplified or Traditional Chinese would be forgin
 client output on a web page. **If you change `Trust()` in `internal/ui`, come back
 and sync these four lines**, or the site starts saying something toy doesn't say.
 
-## The **one constant** to change after deploying
+## The client points here
 
 `internal/store/store.go`:
 
 ```go
-const DefaultIndexURL = ""    // ← becomes "https://toy.cirraya.com/index.json"
+const DefaultIndexURL = "https://toy.cirraya.com/index.json"
 ```
 
-Before that change, a new user has to run `toy index add` themselves; after it,
-`toy search` works out of the box.
-
-**Change it only once that URL really answers with the index** (DNS resolved,
-certificate issued), then cut a release. Shipping an address that isn't live yet means every
-new user sees a red cross the first time they run `toy doctor` — and that isn't
-their fault. "No index configured" is a legitimate state: `doctor` reports it
-neutrally rather than ✗, and `toy install github:owner/repo` never goes through the
-index anyway.
+Since 0.1.1 every new install searches this site's `/index.json` out of the box, and
+that address is compiled into every binary shipped since — **it has to keep
+answering**. Moving hosts is a DNS change for `toy.cirraya.com`; changing the path
+or the domain strands every installed client. "No index configured" stays a
+legitimate state (removed by the user, or a config written by 0.1.0): `doctor`
+reports it neutrally rather than ✗ and prints the line that adds it back.
 
 ## After the index changes
 

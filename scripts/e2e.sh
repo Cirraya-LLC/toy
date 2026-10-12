@@ -48,20 +48,28 @@ echo "== build =="
 ( cd "$ROOT" && go build -o "$TOY" ./cmd/toy )
 ok "toy builds"
 
-echo "== fresh store: no index configured at all =="
-# The built-in index is empty now (store.DefaultIndexURL). Having no index is a valid
-# state, not a failure: search must say how to add one, and doctor must not print a ✗
-# for it. Use a separate TOY_HOME so the config.toml written further down can't skew it.
+echo "== fresh store: the built-in index, and life without one =="
+# A brand-new store gets exactly one index, the public one (store.DefaultIndexURL).
+# Asserted from config.toml, so this script stays offline. Then remove it: no index
+# at all is a legal state (the user removed it, or the config was written by toy
+# 0.1.0, which shipped without one), so search must say how to add it back and
+# doctor must not print a ✗ for it. A separate TOY_HOME so nothing below skews it.
 FRESH="$WORK/fresh"
-check "search on a fresh store says 'no index configured', not 'no matches'" \
+TOY_HOME="$FRESH" "$TOY" index list >"$WORK/fresh-list.log" 2>&1 || true
+check "a fresh store comes with the public index, named default" \
+      "grep -q 'https://toy.cirraya.com/index.json' '$FRESH/config.toml' && \
+       grep -q 'default' '$WORK/fresh-list.log'"
+TOY_HOME="$FRESH" "$TOY" index rm default >/dev/null 2>&1 || true
+check "with it removed, config.toml carries no index" \
+      "! grep -q '^\[\[index\]\]' '$FRESH/config.toml'"
+check "search with no index says 'no index configured', not 'no matches'" \
       "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'No index is configured'"
-check "search shows a toy index add example (with file://)" \
-      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'toy index add' && \
-       TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'file://'"
+check "search gives the line that adds the public index back" \
+      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -qF 'toy index add default https://toy.cirraya.com/index.json'"
+check "search also shows a local example (with file://)" \
+      "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'file://'"
 check "search points out that github: needs no index" \
       "TOY_HOME='$FRESH' '$TOY' search json 2>&1 | grep -q 'toy install github:owner/repo'"
-check "the default config.toml it writes carries no built-in index" \
-      "! grep -q '^\[\[index\]\]' '$FRESH/config.toml'"
 # doctor still fails on an unconfigured PATH, so only assert that "no index" isn't a ✗.
 # doctor's exit code is 1 anyway (PATH), and set -o pipefail would fail the whole
 # pipeline over it — which is not what's being asserted here. Write to a file, then grep.

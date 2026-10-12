@@ -101,9 +101,9 @@
 
   "pkg_h2": { "zh-Hans": "索引里现在有什么", "zh-Hant": "索引裡現在有什麼", "en": "What's in the index" },
   "pkg_lede_html": {
-    "zh-Hans": "这份索引就挂在 <a href=\"/index.json\"><code>/index.json</code></a>，客户端整份下载后本地搜索。加进去：",
-    "zh-Hant": "這份索引就掛在 <a href=\"/index.json\"><code>/index.json</code></a>，用戶端整份下載後在本機搜尋。加進去：",
-    "en": "The index is one file at <a href=\"/index.json\"><code>/index.json</code></a>. The client downloads all of it and searches locally. Add it:"
+    "zh-Hans": "这份索引就挂在 <a href=\"/index.json\"><code>/index.json</code></a>，客户端整份下载后本地搜索。toy 装好就带着它（名字叫 <code>default</code>），<code>toy search</code> 直接就能搜。toy 0.1.0 写出来的配置里没有它，补上：",
+    "zh-Hant": "這份索引就掛在 <a href=\"/index.json\"><code>/index.json</code></a>，用戶端整份下載後在本機搜尋。toy 裝好就帶著它（名稱是 <code>default</code>），<code>toy search</code> 直接就能搜。toy 0.1.0 寫出來的設定裡沒有它，補上：",
+    "en": "The index is one file at <a href=\"/index.json\"><code>/index.json</code></a>. The client downloads all of it and searches locally, and toy comes configured with it as <code>default</code> &mdash; <code>toy search</code> already reads it. A config written by toy 0.1.0 has no index; add it:"
   },
   "pkg_copy_aria": {
     "zh-Hans": "复制 toy index add 命令",
@@ -262,9 +262,9 @@
     "en": "Copy the three post-install commands"
   },
   "inst_after_fine_html": {
-    "zh-Hans": "<strong>v1 一个索引都不预置</strong> —— 与其塞一个拉不到的地址让你第一次 <code>toy doctor</code> 就看见一条红叉，不如老实说没有。没有索引不影响装东西：<code>toy install github:owner/repo</code> 那条路本来就不经过索引。",
-    "zh-Hant": "<strong>v1 一個索引都不預設</strong> —— 與其塞一個拉不到的位址，讓你第一次跑 <code>toy doctor</code> 就看見一條紅叉，不如老實說沒有。沒有索引不影響安裝：<code>toy install github:owner/repo</code> 那條路本來就不經過索引。",
-    "en": "<strong>v1 ships with no index configured.</strong> Shipping a URL that 404s would put a red cross in your very first <code>toy doctor</code> for a problem that isn't yours; saying &ldquo;none yet&rdquo; is more useful. No index does not mean no installs &mdash; <code>toy install github:owner/repo</code> never goes through an index anyway."
+    "zh-Hans": "toy 装好就带着本站的索引，所以 <code>toy search</code> 马上能用，<code>toy doctor</code> 也会检查它连不连得上。要是 doctor 说「no index configured」（toy 0.1.0 写的配置就是这样），没有坏掉，它会给出加上的那一行。没有索引也从来不影响装东西：<code>toy install github:owner/repo</code> 那条路本来就不经过索引。",
+    "zh-Hant": "toy 裝好就帶著本站的索引，所以 <code>toy search</code> 馬上能用，<code>toy doctor</code> 也會檢查它連不連得上。要是 doctor 說「no index configured」（toy 0.1.0 寫的設定就是這樣），沒有壞掉，它會給出加上的那一行。沒有索引也從來不影響安裝：<code>toy install github:owner/repo</code> 那條路本來就不經過索引。",
+    "en": "toy comes configured with the index on this site, so <code>toy search</code> works right away and <code>toy doctor</code> checks it is reachable. If doctor says &ldquo;no index configured&rdquo; (a config written by toy 0.1.0), nothing is broken &mdash; it prints the line that adds it. And no index never meant no installs: <code>toy install github:owner/repo</code> does not go through one."
   },
 
   "arch_h2": { "zh-Hans": "底下的架构", "zh-Hant": "底下的架構", "en": "How it's put together" },

@@ -15,8 +15,6 @@ const t = (k, vars) => {
   return s;
 };
 
-// The site's own address, substituted into the `toy index add` examples.
-for (const el of document.querySelectorAll('[data-host]')) el.textContent = location.host;
 
 /* ---------- copy button ---------- */
 

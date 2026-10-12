@@ -144,9 +144,9 @@ Until then, don't claim more for that checkmark than it earns.
 
 ### 2. Index cold start
 
-**v1 ships with no index preconfigured**, because the public index isn't hosted
-anywhere yet. `DefaultIndexURL` is an empty string constant — once the index is
-live, changing that **one constant** is the whole job.
+**The public index is live** at https://toy.cirraya.com/index.json and toy comes
+configured with it (since 0.1.1). It is `index/toy-index.json` in this repo, published
+by the site deploy. What is left is filling it.
 
 The cold-start plan is **scraping awesome-lists** rather than waiting for people to
 register: those lists are already in `owner/repo` form, which is exactly what an
@@ -195,11 +195,10 @@ issue.
 
 No dates. Ordered by "someone actually needs it":
 
-1. Host the public index, fill in that empty constant, scrape a round of
-   awesome-lists for the cold start.
+1. Scrape more awesome-lists into the public index for the cold start (it is hosted
+   and preconfigured since 0.1.1).
 2. Verify the musl / Rosetta fallbacks on real hardware.
 3. Ownership verification on the index side — i.e. make `✓ signed` actually able to
    say "the owner of this repo signed it".
-4. Extend `--json` to `list` / `info`.
-5. Windows, if someone asks — see "No Windows" above for what it actually costs.
+4. Windows, if someone asks — see "No Windows" above for what it actually costs.
    Android already works under Termux; iOS cannot work at all.

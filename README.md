@@ -9,8 +9,9 @@ toy install github:Derrity/tinyserve   # know where the repo is? install it
 tinyserve                              # it just works
 ```
 
-To find tools by name (`toy search json`, `toy install Derrity/tinyserve`) you need an
-index first — **v1 ships with none**. See "Install from anywhere" below.
+Finding tools by name (`toy search json`, `toy install jqlang/jq`) goes through the public
+index at [toy.cirraya.com](https://toy.cirraya.com), which toy comes configured with.
+See "Install from anywhere" below.
 
 ---
 
@@ -163,16 +164,19 @@ waiting for their authors. The cost is stated in the open — a package installe
 drops to the third trust tier, and the install says which half wasn't written by the author.
 The moment upstream has its own `toy.toml`, the inlined copy yields unconditionally.
 
-**v1 preloads no index at all**, because the public one isn't live yet — better to admit
-that than to ship an address that won't resolve and give you a red X on your very first
-`toy doctor`. Add one yourself to turn search on (an index is just a JSON file; `https://`
-and a local path work the same):
+**toy comes configured with one index**, `default`:
+[toy.cirraya.com/index.json](https://toy.cirraya.com/index.json), published straight from
+`index/toy-index.json` in this repo. You can browse it on [the site](https://toy.cirraya.com).
+Add more, or drop it (an index is just a JSON file; `https://` and a local path work the same):
 
 ```bash
-toy index add local ./index/toy-index.json          # the seed index in this repo
-toy index add community https://example.com/index.json
 toy index list                                       # what's configured
+toy index add local ./index/toy-index.json           # any other index, here a local file
+toy index rm default                                 # search nothing but your own
 ```
+
+A config written by toy 0.1.0 has no index, because 0.1.0 shipped without one:
+`toy index add default https://toy.cirraya.com/index.json` adds it.
 
 Having no index doesn't stop you installing anything: `toy install github:owner/repo` never
 goes through an index in the first place.
@@ -272,8 +276,8 @@ export PATH="$HOME/.toy/bin:$PATH"   # put this in ~/.bashrc / ~/.zshrc
 toy doctor
 ```
 
-`doctor` will say "no index configured" — that's the default state, not a fault, and it
-doesn't affect installing anything.
+`doctor` checks that the index is reachable. If it says "no index configured", nothing is
+broken — that only affects search; it prints the line that adds the public one.
 
 ## License
 

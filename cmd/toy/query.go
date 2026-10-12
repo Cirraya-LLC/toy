@@ -377,9 +377,10 @@ func runSearch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// No index configured at all is THE DEFAULT STATE, not a failure (see
-	// store.DefaultIndexURL). Carrying on would print "no package in the indexes
-	// matches X" — which is false, because we did not look anywhere (iron law 8).
+	// No index configured at all is a legal state, not a failure (the user removed
+	// it, or the config predates store.DefaultIndexURL). Carrying on would print "no
+	// package in the indexes matches X" — which is false, because we did not look
+	// anywhere (iron law 8).
 	if len(cfg.Indexes) == 0 {
 		qryNoIndexHelp()
 		if *asJSON {
@@ -482,17 +483,20 @@ func qrySearchJSON(query string, hits []qrySearchHit) error {
 // qryNoIndexHelp explains what "no index configured" means and gives commands that
 // can be copied as they stand.
 //
-// This is a legal state, not a fault: the built-in index is currently empty
-// (store.DefaultIndexURL), and `toy install github:owner/repo` never goes through an
+// This is a legal state, not a fault: the user removed the built-in index, or the
+// config.toml was written by toy 0.1.0, which shipped without one
+// (store.DefaultIndexURL). `toy install github:owner/repo` never goes through an
 // index from end to end. So this only covers "how to add one" and "you can install
 // without one", and prints not a single ✗.
 func qryNoIndexHelp() {
-	ui.Info("No index is configured, so there is nothing to search. This is the default, not a fault.")
+	ui.Info("No index is configured, so there is nothing to search. Nothing is broken.")
 	ui.Info("")
-	ui.Info("Add one (the name is local to you, pick anything):")
+	ui.Info("Add the public index (toy 0.1.0 wrote a config without it):")
+	ui.Info("    toy index add default %s", store.DefaultIndexURL)
+	ui.Info("")
+	ui.Info("Or any other one (the name is local to you, pick anything):")
 	ui.Info("    toy index add local file:///absolute/path/toy-index.json   # a local file")
 	ui.Info("    toy index add local ./index/toy-index.json                # a bare path works too, it becomes file://")
-	ui.Info("    toy index add community https://example.com/index.json")
 	ui.Info("")
 	ui.Info("An index is only a directory; the host is the source of truth. If you know where the")
 	ui.Info("repository is, you never needed an index in the first place:")
@@ -1044,16 +1048,16 @@ func qryCheckGit(binDir string) qryCheck {
 
 func qryCheckIndexes(ctx context.Context, cfg store.Config) []qryCheck {
 	if len(cfg.Indexes) == 0 {
-		// Nothing is wrong with this machine: the built-in index is currently
-		// empty (store.DefaultIndexURL), and reporting a ✗ would show every new
-		// user a red cross on their first check-up and leave them thinking they
-		// broke the install. State it neutrally and still give the way forward
-		// (iron law 8: say it plainly, but do not pin it on the innocent).
+		// Nothing is wrong with this machine: the index was removed, or the
+		// config.toml predates the built-in one (toy 0.1.0 shipped without it,
+		// store.DefaultIndexURL). A ✗ would leave them thinking they broke the
+		// install. State it neutrally and still give the way forward (iron law 8:
+		// say it plainly, but do not pin it on the innocent).
 		return []qryCheck{{
 			ok:    true,
 			title: "no index configured (`toy search` has nothing to search yet)",
-			note: "this is the default and it does not affect `toy install github:owner/repo` — that route never goes through an index. " +
-				"To start searching, run `toy index add <name> <url>` (the url can be https://… or the path to a local json file)",
+			note: "this does not affect `toy install github:owner/repo` — that route never goes through an index. " +
+				"To search the public index, run `toy index add default " + store.DefaultIndexURL + "` (a config.toml written by toy 0.1.0 has none)",
 		}}
 	}
 	out := make([]qryCheck, 0, len(cfg.Indexes))

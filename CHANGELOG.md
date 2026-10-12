@@ -5,6 +5,31 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-12
+
+### Added
+
+- **toy comes configured with the public index**, `default` →
+  https://toy.cirraya.com/index.json, so `toy search` and `toy install owner/repo` work
+  on a new install without `toy index add`. The site and the index are published from
+  this repository by GitHub Pages. A `config.toml` written by 0.1.0 has no index —
+  `toy index add default https://toy.cirraya.com/index.json` adds it, and the
+  no-index messages in `search`, `install` and `doctor` now print exactly that line.
+
+### Fixed
+
+- **A tag pushed before its release files no longer breaks the install.** When toy
+  picked the newest version itself and that release's file is a definite 404, it
+  installs the release before it and says so, naming both; `toy update` waits quietly.
+  A pinned `--version` never falls back, and neither does a 500 or a timeout. (rclone
+  v1.75.2 was tagged an hour before its first file existed; every install in that hour
+  failed.)
+
+## [0.1.0] - 2026-10-12
+
+First public release. It contains everything below, including the September
+groundwork.
+
 ### Added
 
 - **Strip the single top-level directory on extract** (equivalent to
@@ -33,9 +58,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
   message asks the author to add an `[artifact]` line, and adding one wouldn't
   make it installable anyway.
 
-## [0.1.0] - 2026-09-01
+## Groundwork - 2026-09-01
 
-First release.
+Not a release of its own; all of it shipped in 0.1.0.
 
 ### Added
 
@@ -157,5 +182,6 @@ The rest of what was confirmed and fixed:
 - Dropped 613 lines of hand-written TOML parsing from `internal/store` (unnecessary
   once the dependency came back).
 
-[Unreleased]: https://github.com/Cirraya-LLC/toy/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Cirraya-LLC/toy/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Cirraya-LLC/toy/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Cirraya-LLC/toy/releases/tag/v0.1.0

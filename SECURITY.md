@@ -48,7 +48,10 @@ This section matters more than the one above.
   (that is built from the host template plus the tag), and they cannot claim a reserved
   name like `git` or a command already on your PATH. A package installed this way prints
   `⚠ packaging instructions come from the index`, and **that line is your only way to
-  notice**. If you do not want this tier, do not add third-party indexes:
+  notice**. The index toy comes configured with (`default`, https://toy.cirraya.com) is
+  published from this repository, so for it "write access" means push access to
+  `Cirraya-LLC/toy` — and today nearly all of its entries are of this kind. If you do not
+  want this tier, `toy index rm default` and add no third-party indexes:
   `github:owner/repo` never goes through an index at all.
 - **Your own PATH.** A fake `git` in any directory on your PATH will be executed —
   that is what PATH means. toy only guarantees that **the one directory packages can

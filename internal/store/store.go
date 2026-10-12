@@ -75,13 +75,17 @@ func TrustRank(level string) int {
 // here is the entire change, nothing else moves (spec §5: an index source "is
 // just a URL"; file:// and https:// take the same code path).
 //
-// It is empty right now, meaning NO INDEX IS PRECONFIGURED. The v1 index is the
-// local file in this repo (index/toy-index.json) and it has not been uploaded to
-// any static host yet. Shipping an address that 404s would hand every new user a
-// red cross on their first `toy doctor` / `toy search`, and that is not their
-// problem (iron law 8: never report our own state as the user's fault). Having no
-// index is a legal state: `toy install github:owner/repo` never touches an index.
-const DefaultIndexURL = ""
+// It is this repo's index/toy-index.json, published byte for byte by the site
+// deploy (.github/workflows/pages.yml). Only ever point it at an address that
+// already answers: it ships inside every binary, and an address that 404s hands
+// every new user a red cross on their first `toy doctor` / `toy search` for
+// something that is not their problem (iron law 8).
+//
+// It only reaches a store whose config.toml does not exist yet. A config written
+// by toy 0.1.0, when this was still empty, carries no index, and so does one where
+// the user removed it; both are legal states (`toy install github:owner/repo` never
+// touches an index), and the no-index help gives the line that adds it back.
+const DefaultIndexURL = "https://toy.cirraya.com/index.json"
 
 const defaultIndexName = "default"
 
