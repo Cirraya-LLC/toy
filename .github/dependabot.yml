@@ -1,0 +1,17 @@
+# Weekly pull requests that bump the Go modules and the GitHub Actions this repo uses.
+# toy has exactly two third-party dependencies and keeps it that way: these only move
+# versions, they never add anything. CI runs on each one like on any other PR.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"

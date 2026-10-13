@@ -105,8 +105,8 @@ Three obligations that come with listing other people's software:
    instructions came from the index and not from the author. That line is the
    only place a user can notice, so it does not get quieter.
 2. **If a maintainer asks to be delisted, delist them.** No conditions, no
-   discussion. There is a form for it. Remove the entry **and** add the repo to
-   `index/delisted.txt`, or the weekly discovery lists it again.
+   discussion. There is a form for it. `go run ./cmd/toy-index delist --reason "..."
+   owner/repo` removes the entry and records it, so the weekly discovery leaves it out.
 3. **Someone reads the command names on the left of `[bin]`.** Reserved names and
    the PATH shadow check block the dangerous cases automatically, but a name that
    is not on PATH *yet* is available to take. This is the one step in the pipeline

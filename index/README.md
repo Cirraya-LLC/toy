@@ -112,8 +112,11 @@ Two things it **deliberately does not do**. Don't remove them:
 on how many repos):
 
 1. **`toy-index discover`** searches GitHub by topic (`cli`, `command-line`,
-   `command-line-tool`, `tui`, `cli-app`), most stars first, at least 1000 stars and
-   pushed in the last two years. It keeps a repo only if `gen` would produce an entry
+   `command-line-tool`, `tui`, `cli-app`), most stars first, at least 1000 stars,
+   pushed in the last two years, and **created at least six months ago** -- a tool
+   people install from here should have a public track record. (The first run's top
+   AI agents were a few months old with star counts nobody could vouch for. Too new is
+   not "no": they come back on their own once old enough.) It keeps a repo only if `gen` would produce an entry
    for it, so the cap is spent on tools that ship something installable rather than
    on libraries that share the topic.
 2. **`toy-index gen --probe`** writes their entries into a scratch index.
@@ -126,8 +129,17 @@ on how many repos):
 GitHub holds the checks of a pull request opened by `github-actions[bot]` until a
 maintainer approves them; the discovery run approves its own right after opening it,
 and if that ever fails the PR shows **Approve and run** -- one click. The run that
-opened it is linked at the top, with every index-check log. **Review it like any other**: drop an entry you do not want (and add it to
-`index/declined.txt`, or next week's run proposes it again), then merge.
+opened it is linked at the top, with every index-check log. **Review it like any other**: check out its branch, take out what you do not
+want, push, merge.
+
+```bash
+go run ./cmd/toy-index decline --reason "a GUI app" owner/repo   # never proposed again
+go run ./cmd/toy-index delist --reason "maintainer asked, #12" owner/repo
+go run ./cmd/toy-index drop owner/repo                           # not now; may come back
+```
+
+Each removes the entry from `index/toy-index.json`; `decline` and `delist` also record
+the repo, with the reason and date, in `index/declined.txt` / `index/delisted.txt`.
 
 ```bash
 GITHUB_TOKEN=$(gh auth token) go run ./cmd/toy-index discover --max 20 --out /tmp/c.txt --review /tmp/r.txt
@@ -167,8 +179,9 @@ author has no idea we listed them. Therefore:
    entry only means it stops being findable — `toy install github:owner/repo` still
    installs it, and anyone who forks this file has a complete parallel index. When
    delisting costs that little, there is never a reason to argue with anyone.
-   **Delisting means two edits**: remove the entry, and add the repo to
-   `index/delisted.txt` -- otherwise the weekly discovery puts it back.
+   **Delist with `go run ./cmd/toy-index delist --reason "..." owner/repo`**: it removes
+   the entry and records the repo in `index/delisted.txt`, without which the weekly
+   discovery would put it back.
    A policy nobody can act on is not a policy, so there is a form for it:
    [Remove my project from the index](https://github.com/Cirraya-LLC/toy/issues/new?template=delist.yml).
    An entry going stale has its own form, because a stale inline entry is our

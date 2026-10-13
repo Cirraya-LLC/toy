@@ -265,7 +265,7 @@ func prReport(added []index.Entry, dropped map[string]string, runs []map[string]
 		b.WriteString("None flagged. Still read the Command column above: a name that is not on " +
 			"a machine yet can be claimed by whichever package gets there first.\n")
 	} else {
-		b.WriteString("Drop the entry from this branch (and add it to `index/declined.txt`) if the name is wrong:\n\n")
+		b.WriteString("If a name is wrong, `go run ./cmd/toy-index decline --reason \"...\" owner/repo` on this branch:\n\n")
 		for _, f := range flags {
 			fmt.Fprintf(&b, "- `%s` from %s: %s\n", mdCell(f.name), mdCell(f.id), f.why)
 		}
@@ -294,8 +294,8 @@ func prReport(added []index.Entry, dropped map[string]string, runs []map[string]
 		}
 		b.WriteString("\n</details>\n")
 	}
-	b.WriteString("\nTo keep a repository out for good, add it to `index/declined.txt` (not a fit) or " +
-		"`index/delisted.txt` (its maintainer asked).\n")
+	b.WriteString("\nTo take an entry out on this branch: `go run ./cmd/toy-index decline --reason \"...\" owner/repo` " +
+		"(not a fit, never proposed again), `delist` (its maintainer asked) or `drop` (not now).\n")
 	return b.String()
 }
 

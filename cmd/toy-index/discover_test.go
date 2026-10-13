@@ -25,8 +25,10 @@ func discoverServer(t *testing.T, byTopic map[string][]hit, repos map[string]fak
 	mux := http.NewServeMux()
 	mux.HandleFunc("/search/repositories", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
-		if !strings.Contains(q, "archived:false") || !strings.Contains(q, "stars:>=") {
-			t.Errorf("the search should filter archived repos and a star floor: %q", q)
+		for _, want := range []string{"archived:false", "stars:>=", "created:<="} {
+			if !strings.Contains(q, want) {
+				t.Errorf("the search should carry %q: %q", want, q)
+			}
 		}
 		topic := strings.TrimPrefix(strings.Fields(q)[0], "topic:")
 		var items []map[string]any
@@ -77,7 +79,8 @@ func TestDiscoverKeepsOnlyWhatGenWouldList(t *testing.T) {
 	idx.Upsert(index.Entry{ID: "in/index", Source: "github:in/index", Desc: "d"})
 
 	err := discover(t.Context(), discoverConfig{
-		topics: []string{"cli", "tui"}, minStars: 500, since: time.Now().AddDate(-2, 0, 0), max: 2,
+		topics: []string{"cli", "tui"}, minStars: 500, since: time.Now().AddDate(-2, 0, 0),
+		born: time.Now().AddDate(0, -6, 0), max: 2,
 		idx: idx, gh: newGitHub(srv.URL, "t"), out: out, review: review,
 		host:  host.Host{Release: "https://example.invalid/{owner}/{repo}/{tag}/{asset}"},
 		lists: lists{delisted: map[string]bool{"gone/away": true}, declined: map[string]bool{"no/thanks": true}},

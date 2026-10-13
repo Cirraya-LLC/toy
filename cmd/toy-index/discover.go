@@ -46,6 +46,7 @@ type discoverConfig struct {
 	topics   []string
 	minStars int
 	since    time.Time // last push no older than this
+	born     time.Time // created no later than this: a project needs a track record first
 	max      int       // stop after this many accepted repos
 	idx      *index.Index
 	lists    lists
@@ -68,6 +69,7 @@ func runDiscover(ctx context.Context, args []string) error {
 	topics := fs.String("topics", strings.Join(defaultTopics, ","), "")
 	minStars := fs.Int("min-stars", 1000, "")
 	days := fs.Int("pushed-within", 730, "")
+	minAge := fs.Int("min-age", 180, "")
 	max := fs.Int("max", 50, "")
 	idxPath := fs.String("index", filepath.Join("index", "toy-index.json"), "")
 	licenses := fs.String("licenses", filepath.Join("index", "licenses.txt"), "")
@@ -106,7 +108,8 @@ func runDiscover(ctx context.Context, args []string) error {
 		}
 	}
 	return discover(ctx, discoverConfig{
-		topics: ts, minStars: *minStars, since: time.Now().AddDate(0, 0, -*days), max: *max,
+		topics: ts, minStars: *minStars, since: time.Now().AddDate(0, 0, -*days),
+		born: time.Now().AddDate(0, 0, -*minAge), max: *max,
 		idx: idx, lists: ls, gh: newGitHub(*api, tok), host: gh, out: *out, review: *review,
 	})
 }
@@ -191,8 +194,12 @@ func searchAll(ctx context.Context, cfg discoverConfig) ([]searchItem, error) {
 	seen := map[string]bool{}
 	var all []searchItem
 	for _, topic := range cfg.topics {
-		q := fmt.Sprintf("topic:%s stars:>=%d archived:false fork:false mirror:false pushed:>=%s",
-			topic, cfg.minStars, cfg.since.Format("2006-01-02"))
+		// created:<= is the track-record rule. A tool people install from this index should
+		// have existed in public for a while: in the first run, half the AI agents near the
+		// top were a few months old with star counts nobody could vouch for. Too new is not
+		// "no" -- they come back on their own once old enough.
+		q := fmt.Sprintf("topic:%s stars:>=%d archived:false fork:false mirror:false pushed:>=%s created:<=%s",
+			topic, cfg.minStars, cfg.since.Format("2006-01-02"), cfg.born.Format("2006-01-02"))
 		for page := 1; page <= 10; page++ {
 			total, items, err := cfg.gh.search(ctx, q, page)
 			if err != nil {
@@ -259,8 +266,8 @@ func writePicks(path string, ps []pick, header string) error {
 
 func discoverReport(cfg discoverConfig, seen int, picked, toReview []pick, why map[string]int) {
 	ui.Info("")
-	ui.Info("Searched %d topics (stars >= %d, pushed since %s): %d distinct repositories.",
-		len(cfg.topics), cfg.minStars, cfg.since.Format("2006-01-02"), seen)
+	ui.Info("Searched %d topics (stars >= %d, pushed since %s, created by %s): %d distinct repositories.",
+		len(cfg.topics), cfg.minStars, cfg.since.Format("2006-01-02"), cfg.born.Format("2006-01-02"), seen)
 	keys := make([]string, 0, len(why))
 	for k := range why {
 		keys = append(keys, k)

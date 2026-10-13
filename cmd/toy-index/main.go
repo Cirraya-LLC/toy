@@ -50,6 +50,9 @@ var usageLines = []string{
 	"                          [--pushed-within 730] [--max 50] [--index index/toy-index.json]",
 	"       toy-index merge --from <generated.json> --results <tsv>[,<tsv>...] [--into index/toy-index.json]",
 	"                       [--report <pr-body.md>]",
+	"       toy-index decline --reason <why> owner/repo...   remove, and never propose again (index/declined.txt)",
+	"       toy-index delist  --reason <why> owner/repo...   its maintainer asked (index/delisted.txt)",
+	"       toy-index drop    owner/repo...                  remove for now; discovery may propose it again",
 	"",
 	"  --repos   Repo list, one owner/repo per line. # starts a comment (whole line or trailing); blank lines ignored",
 	"  --out     Index JSON to merge into (a new empty one is created if it does not exist)",
@@ -98,11 +101,13 @@ func run(ctx context.Context, args []string) error {
 		return runDiscover(ctx, args[1:])
 	case "merge":
 		return runMerge(ctx, args[1:])
+	case "decline", "delist", "drop":
+		return runRemove(ctx, args[0], args[1:])
 	case "-h", "--help", "help":
 		printUsage()
 		return nil
 	default:
-		return fmt.Errorf("unknown subcommand %q; the subcommands are gen, discover and merge", args[0])
+		return fmt.Errorf("unknown subcommand %q; the subcommands are gen, discover, merge, decline, delist and drop", args[0])
 	}
 }
 
