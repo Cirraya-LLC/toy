@@ -2,3 +2,5 @@
 # libraries, things whose release binaries are not the tool itself. One owner/repo per
 # line, with the reason. toy-index discover and gen skip them, so the weekly discovery
 # run stops proposing them. (A maintainer asking to be removed goes in delisted.txt.)
+anomalyco/opentui  # not a command-line tool: its release ships only example programs for a TUI library (2026-10-13)
+wtfutil/wtf  # the release ships two programs (tessera and wtf); the generator picked tessera, so the entry has to be written by hand (2026-10-13)
