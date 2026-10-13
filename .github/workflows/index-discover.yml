@@ -61,7 +61,7 @@ jobs:
           echo "ids=$ids" >> "$GITHUB_OUTPUT"
           echo "generated: ${ids:-nothing}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: discovered
           path: out/
@@ -89,7 +89,7 @@ jobs:
         run: |
           bash scripts/index-check.sh --index out/generated.json \
             --only "${{ needs.generate.outputs.ids }}" --results "out/results-${{ matrix.os }}.tsv" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: results-${{ matrix.os }}
           path: out/results-${{ matrix.os }}.tsv
