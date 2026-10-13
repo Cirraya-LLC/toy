@@ -124,7 +124,7 @@ func usage() {
 		fmt.Fprintf(w, "  %s %s\t%s\n", c.name, c.usage, c.summary)
 	}
 	w.Flush()
-	fmt.Fprintf(ui.Output(), "\na package reference can be written as:\n  Derrity/tinyserve          look it up in the indexes\n  github:Derrity/tinyserve   go straight to that host\n  https://…/toy.toml         a plain URL, nothing vouched for\n")
+	fmt.Fprintf(ui.Output(), "\na package reference can be written as:\n  Cirraya-LLC/TinyServe          look it up in the indexes\n  github:Cirraya-LLC/TinyServe   go straight to that host\n  https://…/toy.toml             a plain URL, nothing vouched for\n")
 }
 
 // newFlagSet is flag.NewFlagSet with its usage output pointed at ui. Spec §9 says

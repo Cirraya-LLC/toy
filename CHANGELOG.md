@@ -5,6 +5,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The example package is real again.** `Derrity/tinyserve`, the example in every
+  doc, pointed at a GitHub account that no longer exists. TinyServe now lives at
+  [Cirraya-LLC/TinyServe](https://github.com/Cirraya-LLC/TinyServe), ships its own
+  `toy.toml` and self-contained binaries, and the index carries it — its first entry
+  that points at an upstream `toy.toml` instead of inlining one.
+
 ## [0.1.1] - 2026-10-12
 
 ### Added

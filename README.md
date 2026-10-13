@@ -5,8 +5,8 @@
 **Install the small tools nobody packages for you. Nothing is executed at install time.**
 
 ```bash
-toy install github:Derrity/tinyserve   # know where the repo is? install it
-tinyserve                              # it just works
+toy install github:Cirraya-LLC/TinyServe   # know where the repo is? install it
+tinyserve                                  # it just works
 ```
 
 Finding tools by name (`toy search json`, `toy install jqlang/jq`) goes through the public
@@ -50,18 +50,21 @@ Drop a `toy.toml` at the root of your repo:
 
 ```toml
 name    = "tinyserve"
-desc    = "a very small static file server"
+desc    = "a tiny single-binary HTTP file server, stub HTTP server and TCP port forwarder"
 license = "MIT"
 
 [bin]
 tinyserve = "tinyserve"
 
 [artifact]
-"linux/amd64"  = "tinyserve_{version}_linux_amd64.tar.gz"
-"darwin/arm64" = "tinyserve_{version}_darwin_arm64.tar.gz"
+"linux/amd64"  = "tinyserve-{version}-linux-amd64.tar.gz"
+"linux/arm64"  = "tinyserve-{version}-linux-arm64.tar.gz"
+"darwin/amd64" = "tinyserve-{version}-darwin-amd64.tar.gz"
+"darwin/arm64" = "tinyserve-{version}-darwin-arm64.tar.gz"
 ```
 
-Push a tag, cut a release. **Done.**
+That is [TinyServe](https://github.com/Cirraya-LLC/TinyServe)'s actual `toy.toml`, minus
+comments. Push a tag, cut a release. **Done.**
 
 Already using goreleaser? You don't have to write that file by hand:
 
@@ -114,8 +117,8 @@ because that build *is* the one meant for you.
 ## toy tells you who you're trusting
 
 ```
-✓ signed · key a3f9… · registered in index community (this is not proof of github/Derrity)
-· source github.com/Derrity · unsigned      you're trusting GitHub's account system
+✓ signed · key a3f9… · registered in index community (this is not proof of github/Cirraya-LLC)
+· source github.com/Cirraya-LLC · unsigned  you're trusting GitHub's account system
 ⚠ packaging instructions from the index · bytes come from the author's release, but which asset and which command name come from the index
 ⚠ unsigned · first install, sha256 pinned   you trusted nothing, but a content change gets stopped
 ```
@@ -148,8 +151,8 @@ it's the index's) counts as a downgrade and stops for a `--force`.
 ## Install from anywhere
 
 ```bash
-toy install Derrity/tinyserve            # look it up in the index
-toy install github:Derrity/tinyserve     # skip the index, read the repo directly
+toy install Cirraya-LLC/TinyServe        # look it up in the index
+toy install github:Cirraya-LLC/TinyServe # skip the index, read the repo directly
 toy install gitlab:x/y                   # three lines of config adds another host
 toy install https://…/toy.toml           # fully bare
 ```

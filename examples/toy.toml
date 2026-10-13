@@ -1,4 +1,6 @@
 # A complete toy.toml example. Put it at the root of your repo, next to the README.
+# It is modeled on TinyServe's (github.com/Cirraya-LLC/TinyServe), which needs only four
+# [artifact] lines; the /musl lines below show an option it does not use.
 #
 # Note what isn't in here: no URL, no version, no host name --
 # pushing a tag and cutting a release IS the new version, and this file never changes.
@@ -6,7 +8,7 @@
 name     = "tinyserve"
 desc     = "a very small static file server"
 license  = "MIT"
-homepage = "https://github.com/Derrity/tinyserve"
+homepage = "https://github.com/Cirraya-LLC/TinyServe"
 
 # the name that shows up on PATH = the relative path inside the extracted package
 [bin]
@@ -21,12 +23,12 @@ tinyserve = "tinyserve"
 # to linux/amd64 (saying so out loud); an ordinary glibc box takes linux/amd64 with no
 # extra noise. Leaving /musl out is completely normal, most projects do.
 [artifact]
-"linux/amd64"       = "tinyserve_{version}_linux_amd64.tar.gz"
-"linux/amd64/musl"  = "tinyserve_{version}_linux_amd64_musl.tar.gz"
-"linux/arm64"       = "tinyserve_{version}_linux_arm64.tar.gz"
-"linux/arm64/musl"  = "tinyserve_{version}_linux_arm64_musl.tar.gz"
-"darwin/amd64"      = "tinyserve_{version}_darwin_amd64.tar.gz"
-"darwin/arm64"      = "tinyserve_{version}_darwin_arm64.tar.gz"
+"linux/amd64"       = "tinyserve-{version}-linux-amd64.tar.gz"
+"linux/amd64/musl"  = "tinyserve-{version}-linux-amd64-musl.tar.gz"
+"linux/arm64"       = "tinyserve-{version}-linux-arm64.tar.gz"
+"linux/arm64/musl"  = "tinyserve-{version}-linux-arm64-musl.tar.gz"
+"darwin/amd64"      = "tinyserve-{version}-darwin-amd64.tar.gz"
+"darwin/arm64"      = "tinyserve-{version}-darwin-arm64.tar.gz"
 
 # Optional. Present means verification is enforced: a mismatch refuses the install.
 # Leave it out and toy pins the actual hash on first install (TOFU), and still stops

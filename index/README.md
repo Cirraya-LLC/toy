@@ -30,12 +30,11 @@ were skipped).
 
 ```json
 {
-  "id":       "Derrity/tinyserve",
-  "source":   "github:Derrity/tinyserve",
-  "desc":     "a very small static file server",
-  "tags":     ["web", "server"],
-  "key":      "a3f9…",
-  "installs": 0
+  "id":       "Cirraya-LLC/TinyServe",
+  "source":   "github:Cirraya-LLC/TinyServe",
+  "desc":     "a tiny single-binary HTTP file server, stub HTTP server and TCP port forwarder",
+  "tags":     ["http", "server"],
+  "key":      "a3f9…"
 }
 ```
 
