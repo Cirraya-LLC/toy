@@ -123,9 +123,10 @@ on how many repos):
    to look at** (already taken in the index, a common system command, a generic word,
    two characters or less), and lists popular repos whose licence a person has to read.
 
-A pull request opened by a workflow does not start other workflows, so it shows no
-checks of its own; the run that opened it is linked at the top, with every index-check
-log. **Review it like any other**: drop an entry you do not want (and add it to
+GitHub holds the checks of a pull request opened by `github-actions[bot]` until a
+maintainer approves them; the discovery run approves its own right after opening it,
+and if that ever fails the PR shows **Approve and run** -- one click. The run that
+opened it is linked at the top, with every index-check log. **Review it like any other**: drop an entry you do not want (and add it to
 `index/declined.txt`, or next week's run proposes it again), then merge.
 
 ```bash

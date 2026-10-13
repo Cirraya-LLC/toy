@@ -223,8 +223,8 @@ func prReport(added []index.Entry, dropped map[string]string, runs []map[string]
 		"uninstalled by index-check on every platform this workflow has, with a licence that allows "+
 		"redistribution.\n\n", len(added))
 	if extras.runURL != "" {
-		// A pull request opened by a workflow does not start other workflows, so the
-		// checks that back it are in the run that opened it.
+		// The checks on the pull request itself wait for a maintainer's approval (it is
+		// opened by github-actions[bot]); the ones that already back it are in this run.
 		fmt.Fprintf(&b, "The index-check logs for every entry are in [the run that opened this](%s).\n\n", extras.runURL)
 	}
 

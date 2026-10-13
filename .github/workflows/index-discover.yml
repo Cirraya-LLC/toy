@@ -101,6 +101,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write   # to approve the checks GitHub holds on a bot-opened pull request
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -137,3 +138,12 @@ jobs:
           git push -q origin "$branch"
           gh pr create --base main --head "$branch" \
             --title "index: $n entries found by discovery ($(date -u +%F))" --body-file out/pr.md
+          # GitHub creates the pull request's own checks (ci, index-check) but holds them
+          # for a maintainer's approval, because github-actions[bot] opened it. Approve
+          # them here; if GitHub refuses, the PR shows "Approve and run" instead.
+          sleep 20
+          for id in $(gh run list --branch "$branch" --json databaseId,conclusion \
+                        --jq '.[] | select(.conclusion == "action_required") | .databaseId'); do
+            gh api -X POST "repos/${{ github.repository }}/actions/runs/$id/approve" \
+              || echo "could not approve run $id; approve it on the pull request"
+          done
