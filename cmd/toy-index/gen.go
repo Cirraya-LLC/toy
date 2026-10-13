@@ -12,13 +12,17 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/Cirraya-LLC/toy/internal/assetname"
+	"github.com/Cirraya-LLC/toy/internal/fetch"
 	"github.com/Cirraya-LLC/toy/internal/host"
 	"github.com/Cirraya-LLC/toy/internal/index"
 	"github.com/Cirraya-LLC/toy/internal/ref"
 	"github.com/Cirraya-LLC/toy/internal/semver"
+	"github.com/Cirraya-LLC/toy/internal/toyfile"
 	"github.com/Cirraya-LLC/toy/internal/ui"
 )
 
@@ -28,7 +32,8 @@ type genConfig struct {
 	update bool
 	probe  bool
 	prov   provider
-	host   host.Host // only --probe uses this: building the release download URL
+	host   host.Host // the release download URL for --probe, and the raw URL of upstream's toy.toml
+	lists  lists     // index/licenses.txt and index/delisted.txt
 }
 
 // genResult is how one repo ended up. Three ways: an entry, a deliberate skip, a failure.
@@ -36,7 +41,9 @@ type genResult struct {
 	id      string
 	entry   index.Entry
 	pack    pack
-	skip    string // non-empty = deliberately skipped (already in the index, would downgrade, ...)
+	skip    string   // non-empty = deliberately skipped (already in the index, would downgrade, ...)
+	pointer bool     // upstream ships its own toy.toml; the entry only says where to look
+	bins    []string // for a pointer entry: the command names upstream's toy.toml puts on PATH
 	err     error
 	written bool
 }
@@ -49,6 +56,9 @@ func runGen(ctx context.Context, args []string) error {
 	update := fs.Bool("update", false, "")
 	probe := fs.Bool("probe", false, "")
 	token := fs.String("token", "", "")
+	licenses := fs.String("licenses", filepath.Join("index", "licenses.txt"), "")
+	delisted := fs.String("delisted", filepath.Join("index", "delisted.txt"), "")
+	declined := fs.String("declined", filepath.Join("index", "declined.txt"), "")
 	api := fs.String("api", "", "") // host API root, for tests and self-hosted instances only
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 || strings.TrimSpace(*repos) == "" {
 		return errUsage
@@ -66,9 +76,13 @@ func runGen(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	ls, err := loadLists(*licenses, *delisted, *declined)
+	if err != nil {
+		return err
+	}
 	return gen(ctx, genConfig{
 		repos: list, out: *out, update: *update, probe: *probe,
-		prov: newGitHub(*api, tok), host: gh,
+		prov: newGitHub(*api, tok), host: gh, lists: ls,
 	})
 }
 
@@ -131,6 +145,18 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 	}
 	res.id = r.ID()
 
+	// A maintainer who asked to be delisted stays delisted, whatever list this line came
+	// from -- an automated batch putting them back would break the one promise the
+	// delist form makes.
+	if cfg.lists.delisted[foldRepo(res.id)] {
+		res.skip = "delisted at its maintainer's request (index/delisted.txt); never listed again"
+		return res
+	}
+	if cfg.lists.declined[foldRepo(res.id)] {
+		res.skip = "a reviewer decided it does not belong in the index (index/declined.txt)"
+		return res
+	}
+
 	// Decide on entries already in the index first, saving an API call.
 	if old, ok := idx.Find(res.id); ok {
 		switch {
@@ -158,6 +184,10 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 		res.err = err
 		return res
 	}
+	if info.License, err = decideLicence(res.id, info.License, info.LicState, cfg.lists.reviewed); err != nil {
+		res.err = err
+		return res
+	}
 	// The client picks versions with `git ls-remote --tags` + semver (spec §2), so a
 	// release tag has to be something semver can find a version in. Since the
 	// prefixed-tag fallback landed that includes jqlang/jq's `jq-1.8.2` shape, but
@@ -170,6 +200,32 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 			"(it has to look like v1.2.3, or carry one after a package name like jq-1.8.2). "+
 			"The client picks versions with `git ls-remote --tags` + semver, so it would not recognise a "+
 			"single version here -- listing this repo produces an entry nobody can install", tomlSafe(info.Tag, 64))
+		return res
+	}
+
+	// Upstream ships its own toy.toml: the right entry only says where to look. The
+	// client lets upstream win anyway (§5.1 rule 1), so an inlined copy would never be
+	// read; writing one anyway would only file the package a trust tier lower and leave
+	// a second copy of the packaging to rot.
+	switch tf, err := upstreamToyfile(ctx, cfg.host, r.Owner, r.Repo, info.Tag); {
+	case err != nil:
+		res.err = err
+		return res
+	case tf != nil:
+		res.pointer = true
+		for name := range tf.Bin {
+			res.bins = append(res.bins, name)
+		}
+		for name := range tf.Script {
+			res.bins = append(res.bins, name)
+		}
+		sort.Strings(res.bins)
+		res.entry = index.Entry{
+			ID:     res.id,
+			Source: "github:" + r.Owner + "/" + r.Repo,
+			Desc:   tomlSafe(info.Desc, descMax),
+			Stars:  info.Stars,
+		}
 		return res
 	}
 
@@ -217,6 +273,13 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 		}
 	}
 
+	if w := assetname.PlatformWord(p.binName); w != "" {
+		res.err = fmt.Errorf("the command name %q carries the platform word %q: the asset names fooled the "+
+			"inference, and under that name it would only ever be right on one kind of machine. "+
+			"Write this entry by hand (or get the author to add their own toy.toml)", p.binName, w)
+		return res
+	}
+
 	data, err := renderToyfile(p)
 	if err != nil {
 		res.err = err
@@ -231,6 +294,30 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 		Toyfile: string(data),
 	}
 	return res
+}
+
+// upstreamToyfile reads the toy.toml upstream ships at tag, through the same raw-URL
+// template the client uses. nil, nil means there is none.
+//
+// Only a definite 404 means "none". Anything else -- a 500, a timeout -- fails this repo
+// instead of falling through to an inline entry: guessing "absent" on a bad network day
+// is the §5.1 rule 3 mistake made at generation time, and the repo is retried next run.
+func upstreamToyfile(ctx context.Context, h host.Host, owner, repo, tag string) (*toyfile.Toyfile, error) {
+	if h.Raw == "" {
+		return nil, nil // a host with no raw template (only tests build one)
+	}
+	data, err := fetch.GetBytes(ctx, h.RawURL(owner, repo, tag, "toy.toml"), fetch.Options{Name: "toy.toml"})
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("cannot tell whether upstream ships its own toy.toml at %s, so not guessing: %w", tomlSafe(tag, 64), err)
+	}
+	tf, err := toyfile.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("upstream ships a toy.toml at %s that does not parse, so the client would refuse it too: %w", tomlSafe(tag, 64), err)
+	}
+	return tf, nil
 }
 
 func loadIndex(path string) (*index.Index, error) {
@@ -294,6 +381,8 @@ func report(cfg genConfig, rs []genResult, changed int) {
 			fmt.Fprintf(tw, "✗\t%s\t%v\n", r.id, r.err)
 		case r.skip != "":
 			fmt.Fprintf(tw, "-\t%s\t%s\n", r.id, r.skip)
+		case r.pointer:
+			fmt.Fprintf(tw, "✓\t%s\tpointer entry: upstream ships its own toy.toml (bin %s)\n", r.id, strings.Join(r.bins, ", "))
 		default:
 			how := "guessed"
 			if r.pack.binProbed {
@@ -340,9 +429,18 @@ func report(cfg genConfig, rs []genResult, changed int) {
 
 	ui.Info("")
 	if changed > 0 {
-		ui.Info("Wrote %d entries to %s. Every one is an inline entry (spec §5.1): whoever installs it sees", changed, cfg.out)
-		ui.Info("the downgraded trust level, and there is no [sha256] -- inline entries follow the upstream's")
-		ui.Info("newest tag, so pinning one version's bytes turns the next release into a checksum mismatch.")
+		pointers := 0
+		for _, r := range rs {
+			if r.written && r.pointer {
+				pointers++
+			}
+		}
+		ui.Info("Wrote %d entries to %s (%d inline, %d pointing at upstream's own toy.toml).", changed, cfg.out, changed-pointers, pointers)
+		if changed > pointers {
+			ui.Info("Whoever installs an inline entry sees the downgraded trust level (spec §5.1), and inline entries")
+			ui.Info("carry no [sha256] -- they follow upstream's newest tag, so pinning one version's bytes would turn")
+			ui.Info("the next release into a checksum mismatch.")
+		}
 	} else {
 		ui.Info("Nothing changed; %s was left untouched.", cfg.out)
 	}
@@ -360,7 +458,13 @@ func report(cfg genConfig, rs []genResult, changed int) {
 func reportBinNames(rs []genResult) []string {
 	var names []string
 	for _, r := range rs {
-		if r.written {
+		switch {
+		case !r.written:
+		case r.pointer:
+			for _, b := range r.bins {
+				names = append(names, fmt.Sprintf("%s\t← %s (its own toy.toml)", b, r.id))
+			}
+		default:
 			names = append(names, fmt.Sprintf("%s\t← %s", r.pack.binName, r.id))
 		}
 	}

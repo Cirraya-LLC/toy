@@ -1,0 +1,139 @@
+# Weekly index discovery: find command-line tools on GitHub that are not listed yet,
+# generate their entries, install every one on Linux and macOS, and open a pull request
+# with the ones that worked.
+#
+#   discover  GitHub search by topic, most stars first. Keeps only repos with a licence
+#             that allows redistribution, not in index/delisted.txt or declined.txt, and
+#             that gen would accept (cmd/toy-index/discover.go)
+#   gen       entries for them, with --probe: a real archive is unpacked for each
+#   check     index-check on both runners; --results says which installed and ran
+#   merge     passed somewhere and failed nowhere -> into index/toy-index.json
+#   pr        a pull request a person merges
+#
+# Merging stays a person's click. Every check here is automatic except one: whether the
+# command name an entry puts on PATH is one it should have (a name not on a machine yet
+# can be claimed). The pull request flags the doubtful ones at the top.
+name: index-discover
+
+on:
+  schedule:
+    - cron: "41 4 * * 1"   # Mondays, after a week of daily index-check runs
+  workflow_dispatch:
+    inputs:
+      max:
+        description: "new repositories per run, at most"
+        default: "40"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: index-discover
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.gen.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: discover and generate
+        id: gen
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          go run ./cmd/toy-index discover --max "${{ inputs.max || '40' }}" \
+            --out out/candidates.txt --review out/review.txt
+          # gen exits non-zero only when it produced nothing at all; that is a
+          # quiet week, not a broken run.
+          go run ./cmd/toy-index gen --repos out/candidates.txt --probe --out out/generated.json || true
+          ids=""
+          if [ -f out/generated.json ]; then
+            ids=$(python3 -c 'import json; print(",".join(e["id"] for e in json.load(open("out/generated.json"))["packages"]))')
+          fi
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "generated: ${ids:-nothing}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: discovered
+          path: out/
+
+  check:
+    needs: generate
+    if: needs.generate.outputs.ids != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: discovered
+          path: out
+      # Some entries failing is the point of this step, so its exit code is not the
+      # verdict; the results file is.
+      - name: install, run and uninstall every generated entry
+        run: |
+          bash scripts/index-check.sh --index out/generated.json \
+            --only "${{ needs.generate.outputs.ids }}" --results "out/results-${{ matrix.os }}.tsv" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.os }}
+          path: out/results-${{ matrix.os }}.tsv
+
+  pr:
+    needs: [generate, check]
+    if: needs.generate.outputs.ids != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: keep what installed
+        run: |
+          go run ./cmd/toy-index merge --from out/generated.json \
+            --results out/results-ubuntu-latest.tsv,out/results-macos-latest.tsv \
+            --review out/review.txt --report out/pr.md \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- index/toy-index.json; then
+            echo "nothing installed on both runners this week; no pull request"
+            exit 0
+          fi
+          n=$(grep -c '^| \[' out/pr.md || true)
+          branch="index/discover-$(date -u +%F)-${{ github.run_number }}"
+          git config user.name Cirraya
+          git config user.email tech@cirraya.com
+          git switch -c "$branch"
+          git add index/toy-index.json
+          git commit -q -m "index: add $n entries found by discovery"
+          git push -q origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "index: $n entries found by discovery ($(date -u +%F))" --body-file out/pr.md

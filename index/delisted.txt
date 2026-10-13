@@ -1,0 +1,4 @@
+# Repositories removed from the index because their maintainer asked. One owner/repo
+# per line, with the date and the issue. toy-index will never generate an entry for
+# them again, whatever list asks it to -- deleting the entry alone is not enough,
+# because the automatic discovery would add it back the following week.

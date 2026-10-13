@@ -551,6 +551,29 @@ func detect(file string) (key, goos string) {
 	}
 }
 
+// PlatformWord returns the first os, architecture or libc word in name, or "" when it
+// has none. A command name carrying one means the asset-name prefix it was cut from
+// still had the platform in it (yt-dlp ships `yt-dlp_linux_aarch64`): put on PATH under
+// that name it is only ever right for one machine, so toy-index refuses it rather than
+// leave it to a reviewer to notice. It lives here so the word lists stay in one place.
+func PlatformWord(name string) string {
+	toks := tokens(name)
+	for i, tok := range toks {
+		if i+1 < len(toks) {
+			if _, ok := archWords[tok+"_"+toks[i+1]]; ok {
+				return tok + "_" + toks[i+1]
+			}
+		}
+		_, isOS := osWords[tok]
+		_, isArch := archWords[tok]
+		_, isForeign := foreignWords[tok]
+		if isOS || isArch || isForeign || tok == "musl" || tok == "gnu" {
+			return tok
+		}
+	}
+	return ""
+}
+
 func tokens(s string) []string {
 	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return r == '-' || r == '_' || r == '.'

@@ -1,0 +1,12 @@
+# Licences a person read, for repositories whose licence file GitHub cannot identify
+# (it reports "other" / NOASSERTION). One `owner/repo SPDX-id` per line; say where you
+# read it. This names the licence -- it does not get anything past the allowlist in
+# cmd/toy-index/license.go.
+#
+# A repository with no licence file at all does not belong here: that is all rights
+# reserved, and it is not listed.
+
+jqlang/jq          MIT            # COPYING: the MIT text, plus notices for bundled code (2026-10-13)
+johnkerl/miller    BSD-2-Clause   # LICENSE.txt carries the SPDX line itself (2026-10-13)
+muesli/duf         MIT            # LICENSE: MIT License (2026-10-13)
+wader/fq           MIT            # LICENSE: MIT License, plus a notice for vendored code (2026-10-13)

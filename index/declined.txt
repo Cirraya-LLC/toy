@@ -1,0 +1,4 @@
+# Repositories a reviewer looked at and decided do not belong in the index: GUI apps,
+# libraries, things whose release binaries are not the tool itself. One owner/repo per
+# line, with the reason. toy-index discover and gen skip them, so the weekly discovery
+# run stops proposing them. (A maintainer asking to be removed goes in delisted.txt.)

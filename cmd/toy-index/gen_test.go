@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,15 +22,37 @@ type fakeRepo struct {
 	stars                   int
 	tag                     string
 	assets                  []string
-	missing                 bool // the repo itself 404s
-	noRelease               bool // the repo exists, but releases/latest 404s
-	rateLimited             bool // 403 with 0 remaining quota
+	missing                 bool   // the repo itself 404s
+	noRelease               bool   // the repo exists, but releases/latest 404s
+	rateLimited             bool   // 403 with 0 remaining quota
+	toyToml                 string // served as the raw toy.toml at the tag; empty means 404
+	rawStatus               int    // non-zero: the raw toy.toml answers with this status instead
 }
 
 // fakeAPI stands up a fake GitHub API. Every test goes through it; nothing hits the network.
 func fakeAPI(t *testing.T, repos map[string]fakeRepo) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(fakeHandler(repos))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func fakeHandler(repos map[string]fakeRepo) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// /raw/<owner>/<repo>/<ref>/toy.toml, the way a raw template expands.
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/raw/"); ok {
+			parts := strings.SplitN(rest, "/", 4)
+			repo := repos[parts[0]+"/"+parts[1]]
+			switch {
+			case repo.rawStatus != 0:
+				w.WriteHeader(repo.rawStatus)
+			case repo.toyToml == "" || len(parts) < 4 || parts[2] != repo.tag:
+				w.WriteHeader(http.StatusNotFound)
+			default:
+				io.WriteString(w, repo.toyToml)
+			}
+			return
+		}
 		p := strings.TrimPrefix(r.URL.Path, "/repos/")
 		latest := strings.HasSuffix(p, "/releases/latest")
 		id := strings.TrimSuffix(p, "/releases/latest")
@@ -49,11 +72,17 @@ func fakeAPI(t *testing.T, repos map[string]fakeRepo) *httptest.Server {
 		w.Header().Set("X-RateLimit-Remaining", "59")
 
 		if !latest {
+			// GitHub sends null for a repo with no licence file at all, which is what
+			// an empty license here means.
+			var lic any
+			if repo.license != "" {
+				lic = map[string]any{"spdx_id": repo.license}
+			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"description":      repo.desc,
 				"homepage":         repo.homepage,
 				"stargazers_count": repo.stars,
-				"license":          map[string]any{"spdx_id": repo.license},
+				"license":          lic,
 			})
 			return
 		}
@@ -66,9 +95,7 @@ func fakeAPI(t *testing.T, repos map[string]fakeRepo) *httptest.Server {
 			assets = append(assets, map[string]any{"name": a})
 		}
 		json.NewEncoder(w).Encode(map[string]any{"tag_name": repo.tag, "assets": assets})
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	})
 }
 
 func runFakeGen(t *testing.T, repos map[string]fakeRepo, list []string, out string, update bool) error {
@@ -256,8 +283,8 @@ func TestGenIsolatesFailuresAndClassifiesThem(t *testing.T) {
 		"Derrity/tinyserve": tinyserve,
 		"nobody/gone":       {missing: true},
 		"nobody/norelease":  {noRelease: true},
-		"nobody/sourceonly": {tag: "v1.0.0"},
-		"nobody/bare":       {tag: "v1.0.0", assets: []string{"jq-linux-amd64", "jq-macos-arm64"}},
+		"nobody/sourceonly": {tag: "v1.0.0", license: "MIT"},
+		"nobody/bare":       {tag: "v1.0.0", license: "MIT", assets: []string{"jq-linux-amd64", "jq-macos-arm64"}},
 		"nobody/limited":    {rateLimited: true},
 	}
 	list := []string{"Derrity/tinyserve", "nobody/gone", "nobody/norelease",
@@ -382,7 +409,7 @@ func TestGenAcceptsAPrefixedTagButNotATagWithNoVersion(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "idx.json")
 	if err := runFakeGen(t, map[string]fakeRepo{
 		"jqlang/jq": {
-			desc: "Command-line JSON processor", tag: "jq-1.8.2",
+			desc: "Command-line JSON processor", tag: "jq-1.8.2", license: "MIT",
 			assets: []string{"jq-linux-amd64", "jq-macos-arm64"},
 		},
 	}, []string{"jqlang/jq"}, out, false); err != nil {
@@ -398,7 +425,7 @@ func TestGenAcceptsAPrefixedTagButNotATagWithNoVersion(t *testing.T) {
 	out2 := filepath.Join(t.TempDir(), "idx2.json")
 	err := runFakeGen(t, map[string]fakeRepo{
 		"someone/rolling": {
-			desc: "ships from a moving tag", tag: "nightly",
+			desc: "ships from a moving tag", tag: "nightly", license: "MIT",
 			assets: []string{"tool_linux_amd64.tar.gz"},
 		},
 	}, []string{"someone/rolling"}, out2, false)
@@ -422,5 +449,21 @@ func TestReportListsTheNameThatActuallyLandsOnPATH(t *testing.T) {
 		pack: pack{name: "ripgrep", binName: "rg"},
 	}}); len(got) != 1 || !strings.HasPrefix(got[0], "rg\t") {
 		t.Fatalf("that column of the report = %v, want it to start with \"rg\"", got)
+	}
+}
+
+// yt-dlp ships bare binaries named yt-dlp_linux, yt-dlp_linux_aarch64, yt-dlp_macos.
+// The inference cut a command name out of one of them that still says linux_aarch64;
+// such an entry is refused, not written for a reviewer to catch.
+func TestGenRefusesACommandNameThatCarriesAPlatform(t *testing.T) {
+	r := fakeRepo{desc: "d", license: "Unlicense", tag: "2026.09.01", assets: []string{
+		"yt-dlp", "yt-dlp_linux", "yt-dlp_linux_aarch64", "yt-dlp_macos", "yt-dlp.exe",
+	}}
+	out := filepath.Join(t.TempDir(), "idx.json")
+	runFakeGen(t, map[string]fakeRepo{"yt-dlp/yt-dlp": r}, []string{"yt-dlp/yt-dlp"}, out, false)
+	if _, err := os.Stat(out); err == nil {
+		for _, e := range loadOut(t, out).Packages {
+			t.Errorf("wrote an entry whose command name carries a platform:\n%s", e.Toyfile)
+		}
 	}
 }

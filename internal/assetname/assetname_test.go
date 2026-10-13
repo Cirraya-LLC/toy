@@ -274,3 +274,26 @@ func TestInferSortsByPlatform(t *testing.T) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
 }
+
+// A command name that still carries a platform word came from an asset name the
+// inference did not fully understand. These are the shapes seen in real releases.
+func TestPlatformWord(t *testing.T) {
+	cases := map[string]string{
+		"yt-dlp_linux_aarch64":   "linux",
+		"gemini-darwin":          "darwin",
+		"officecli-linux-alpine": "linux",
+		"linux-x64":              "linux",
+		"tool_x86_64":            "x86_64",
+		"tool-musl":              "musl",
+		"rg":                     "",
+		"yt-dlp":                 "",
+		"tinyserve":              "",
+		"gh-dash":                "",
+		"winget":                 "", // a word containing "win" is not the word "win"
+	}
+	for name, want := range cases {
+		if got := PlatformWord(name); got != want {
+			t.Errorf("PlatformWord(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

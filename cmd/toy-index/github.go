@@ -41,7 +41,8 @@ const ghMaxBody = 4 << 20
 type repoInfo struct {
 	Desc     string
 	Homepage string
-	License  string
+	License  string       // SPDX identifier; empty unless LicState is licenceKnown
+	LicState licenceState // whether GitHub found a licence file, and could name it
 	Stars    int
 	Tag      string   // the latest release's tag, verbatim (usually with a v)
 	Assets   []string // asset filenames
@@ -105,7 +106,11 @@ func (c *ghClient) Fetch(ctx context.Context, owner, repo string) (repoInfo, err
 		Description string `json:"description"`
 		Homepage    string `json:"homepage"`
 		Stars       int    `json:"stargazers_count"`
-		License     struct {
+		// null when the repo has no licence file at all; spdx_id "NOASSERTION" (key
+		// "other") when it has one GitHub cannot match. The two mean different
+		// things -- all rights reserved versus "a person has to read it" -- so the
+		// pointer is what keeps them apart.
+		License *struct {
 			SPDX string `json:"spdx_id"`
 		} `json:"license"`
 	}
@@ -137,16 +142,10 @@ func (c *ghClient) Fetch(ctx context.Context, owner, repo string) (repoInfo, err
 	info := repoInfo{
 		Desc:     meta.Description,
 		Homepage: meta.Homepage,
-		License:  meta.License.SPDX,
 		Stars:    meta.Stars,
 		Tag:      rel.Tag,
 	}
-	// GitHub reports "NOASSERTION" for repos with no license. That is not an SPDX
-	// identifier, and writing it into toy.toml only makes readers think it names some
-	// kind of licence.
-	if info.License == "NOASSERTION" {
-		info.License = ""
-	}
+	info.License, info.LicState = licenceOf(meta.License)
 	for _, a := range rel.Assets {
 		info.Assets = append(info.Assets, a.Name)
 	}
@@ -210,5 +209,21 @@ func (c *ghClient) noteQuota(h http.Header) {
 	}
 	if v, err := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); err == nil && v > 0 {
 		c.reset = time.Unix(v, 0)
+	}
+}
+
+// licenceOf turns GitHub's licence object into an SPDX identifier and a state.
+// "NOASSERTION" is not an SPDX identifier, and writing it into toy.toml would only make
+// readers think it names some kind of licence.
+func licenceOf(l *struct {
+	SPDX string `json:"spdx_id"`
+}) (string, licenceState) {
+	switch {
+	case l == nil:
+		return "", licenceNone
+	case l.SPDX == "" || l.SPDX == "NOASSERTION":
+		return "", licenceUnrecognized
+	default:
+		return l.SPDX, licenceKnown
 	}
 }

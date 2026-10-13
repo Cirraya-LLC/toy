@@ -13,7 +13,7 @@
 #
 # Usage (options come first, same rule as toy's own CLI):
 #   scripts/index-check.sh [--index path-or-URL] [--only id[,id...]] [--timeout secs]
-#                          [--config file]
+#                          [--config file] [--results file]
 #
 # Exit codes: 0 all passed, 1 some failed, 2 bad arguments or environment.
 set -uo pipefail   # deliberately no -e: one failure must not abort the run; report all
@@ -22,6 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INDEX="$ROOT/index/toy-index.json"
 ONLY=""
 SEED_CONFIG=""   # config.toml template seeded into each throwaway TOY_HOME; see --config
+RESULTS=""       # --results: one "id<TAB>pass|fail|skip<TAB>detail" line per entry, for scripts
 TIMEOUT=300      # per-entry install ceiling. Downloads really can be slow, but a hang
                  # must not drag down the whole run
 SMOKE_TIMEOUT=15 # ceiling for a single smoke run
@@ -37,6 +38,8 @@ Usage: scripts/index-check.sh [options]
                         index is added. Use it to test non-default hosts ([hosts.*] for
                         a self-hosted gitea), and to let this script self-test offline
                         (a fake upstream over file://)
+  --results <file>      also write one line per entry, id<TAB>pass|fail|skip<TAB>detail,
+                        for a script to read (the discovery workflow keeps only passes)
   -h, --help            this text
 
 Options must come before arguments. Exit codes: 0 all passed, 1 some failed.
@@ -49,6 +52,7 @@ while [ $# -gt 0 ]; do
     --only)    [ $# -ge 2 ] || { usage; exit 2; }; ONLY="$2"; shift 2 ;;
     --timeout) [ $# -ge 2 ] || { usage; exit 2; }; TIMEOUT="$2"; shift 2 ;;
     --config)  [ $# -ge 2 ] || { usage; exit 2; }; SEED_CONFIG="$2"; shift 2 ;;
+    --results) [ $# -ge 2 ] || { usage; exit 2; }; RESULTS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
@@ -62,6 +66,7 @@ if [ -t 2 ]; then C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_0=$'\033[
 else C_G=''; C_R=''; C_Y=''; C_0=''; fi
 say() { printf '%s\n' "$*" >&2; }
 die() { printf '%s✗%s %s\n' "$C_R" "$C_0" "$*" >&2; exit 2; }
+if [ -n "$RESULTS" ]; then : > "$RESULTS" || die "cannot write --results file $RESULTS"; fi
 
 # tmo is a portable timeout: macOS ships no timeout(1), and the CI matrix includes macos.
 # A timeout returns 124 (same as GNU timeout) so it stays distinguishable from the
@@ -266,6 +271,13 @@ print("renamed" if age.total_seconds() > 6 * 3600 else "pending")' 2>/dev/null |
 }
 
 ID=""; SRC=""; LOG="$WORK/install.log"; HOME_DIR=""
+# result appends one machine-readable line for --results. Tabs and newlines in the
+# detail would break the format, so they become spaces.
+result() { # $1=pass|fail|skip $2=detail
+  [ -n "$RESULTS" ] || return 0
+  printf '%s\t%s\t%s\n' "$ID" "$1" "$(printf '%s' "$2" | tr '\t\n' '  ')" >> "$RESULTS"
+}
+
 fail() { # $1=category $2=explanation
   printf '%s✗%s %s  [%s]  %s\n' "$C_R" "$C_0" "$ID" "$1" "${SRC:-—}" >&2
   say "    $2"
@@ -279,6 +291,7 @@ fail() { # $1=category $2=explanation
   raw="$(grep -m1 '^error:' "$LOG" 2>/dev/null | tr -d '\t')"
   [ -n "$raw" ] || raw="$(tail -n 1 "$LOG" 2>/dev/null | tr -d '\t')"
   printf '%s\t%s\t%s\t%s\t%s\n' "$ID" "${SRC:-—}" "$1" "$2" "$raw" >> "$WORK/failures.txt"
+  result fail "$1: $2"
   rm -rf "$HOME_DIR"
 }
 
@@ -324,6 +337,7 @@ while IFS=$'\t' read -r ID SRC; do
     IFS=$'\t' read -r cls why < <(classify "$LOG")
     if [ "$cls" = skip ]; then
       SKIPN=$(( SKIPN + 1 ))
+      result skip "$why"
       printf '%s-%s %s  %s\n' "$C_Y" "$C_0" "$ID" "$why" >&2
       continue
     fi
@@ -395,6 +409,7 @@ while IFS=$'\t' read -r ID SRC; do
   [ "$shadowed" = 1 ] && note="$note  [this machine already had that command; installed with --force]"
   printf '%s✓%s %s  (%s)%s\n' "$C_G" "$C_0" "$ID" "$(printf '%s ' "${links[@]##*/}" | sed 's/ $//')" "$note" >&2
   PASS=$((PASS+1))
+  result pass "$(printf '%s ' "${links[@]##*/}" | sed 's/ $//')"
   rm -rf "$HOME_DIR"
 done < "$WORK/entries.tsv"
 

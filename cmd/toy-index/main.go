@@ -46,6 +46,10 @@ var errUsage = errors.New("usage")
 
 var usageLines = []string{
 	"Usage: toy-index gen --repos <file> [--out index/toy-index.json] [--update] [--probe] [--token <token>]",
+	"       toy-index discover --out <file> [--review <file>] [--topics a,b] [--min-stars 1000]",
+	"                          [--pushed-within 730] [--max 50] [--index index/toy-index.json]",
+	"       toy-index merge --from <generated.json> --results <tsv>[,<tsv>...] [--into index/toy-index.json]",
+	"                       [--report <pr-body.md>]",
 	"",
 	"  --repos   Repo list, one owner/repo per line. # starts a comment (whole line or trailing); blank lines ignored",
 	"  --out     Index JSON to merge into (a new empty one is created if it does not exist)",
@@ -54,6 +58,15 @@ var usageLines = []string{
 	"            overwrite throws those corrections away",
 	"  --probe   Download one linux/amd64 asset and unpack it, turning [bin] from a guess into a fact",
 	"  --token   Host API token; falls back to $GITHUB_TOKEN. Without one you hit the rate limit fast",
+	"",
+	"  gen and discover both refuse a repo whose licence does not allow redistribution (cmd/toy-index/license.go),",
+	"  and anything in index/delisted.txt. index/licenses.txt records licences a person read by hand.",
+	"",
+	"  discover searches GitHub by topic (most stars first) and writes the repos gen would accept to --out,",
+	"  up to --max of them; --review gets the ones whose licence file GitHub cannot identify.",
+	"",
+	"  merge moves into --into the generated entries that index-check (--results) passed somewhere and",
+	"  failed nowhere, and writes the pull request text, flagging command names a person should check.",
 	"",
 	"Flags go before positional arguments: Go's flag package stops parsing at the first non-flag argument.",
 }
@@ -81,11 +94,15 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "gen":
 		return runGen(ctx, args[1:])
+	case "discover":
+		return runDiscover(ctx, args[1:])
+	case "merge":
+		return runMerge(ctx, args[1:])
 	case "-h", "--help", "help":
 		printUsage()
 		return nil
 	default:
-		return fmt.Errorf("unknown subcommand %q; the only one is gen", args[0])
+		return fmt.Errorf("unknown subcommand %q; the subcommands are gen, discover and merge", args[0])
 	}
 }
 
