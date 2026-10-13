@@ -49,9 +49,17 @@ fails it downgrades to "from …" and says why.
 
 ## Adding one
 
-```bash
-cd your-project && toy publish     # prints an entry you can paste straight in
-```
+Every addition is a pull request; `index-check.yml` installs, runs and uninstalls the
+entries it touches on Linux and macOS, and a person merges it.
+
+- **The repo ships its own `toy.toml`**: add a pointer entry by hand, in id order, with
+  just `id`, `source` and `desc` (Cirraya-LLC/TinyServe is one). Upstream keeps the
+  packaging; nothing here can rot.
+- **It does not**: put `owner/repo` in `index/repos.txt` and run the generator below. It
+  writes a pointer entry by itself if it finds an upstream `toy.toml`.
+- **You are the author and want a signed entry**: `toy publish` in your repo prints one.
+
+Most additions arrive without anyone typing a repo name: see "Automatic discovery".
 
 ## How we maintain this index
 
@@ -69,10 +77,22 @@ make index-gen ARGS="--repos index/repos.txt --probe"    # also unpack real arch
 export GITHUB_TOKEN=...   # without a token you get 60 requests/hour and hit the limit fast
 ```
 
-One `owner/repo` per line, `#` starts a comment (`index/repos.txt` doesn't exist yet
-— make your own; the cold-start source is scraped awesome-lists, which are already
-in exactly this format). When it finishes, **read the report**,
-especially the last section: the command names this batch will put on PATH.
+One `owner/repo` per line, `#` starts a comment (`index/repos.txt` is the hand-kept
+seed list). When it finishes, **read the report**, especially the last section: the
+command names this batch will put on PATH.
+
+Before writing anything it refuses a repo when:
+
+- **its licence does not allow redistribution** (see "Licences" below);
+- it is in **`index/delisted.txt`** (its maintainer asked) or **`index/declined.txt`**
+  (a reviewer turned it down);
+- the **command name still carries a platform word** (`yt-dlp_linux_aarch64`,
+  `gemini-darwin`): the asset names fooled the inference, and that name would only be
+  right on one machine. Write such an entry by hand.
+
+And when upstream already ships a `toy.toml` at its latest tag, it writes a **pointer
+entry** instead of inlining one. Only a definite 404 counts as "no toy.toml"; a 500
+fails that repo rather than guessing.
 
 Two things it **deliberately does not do**. Don't remove them:
 
@@ -86,6 +106,50 @@ Two things it **deliberately does not do**. Don't remove them:
   upstream has its own `toy.toml`, and replacing that with an inlined one is a
   downgrade, not a refresh. `--update` does not override either.
 
+### Automatic discovery
+
+`index-discover.yml` runs every Monday (and on demand from the Actions tab, with a cap
+on how many repos):
+
+1. **`toy-index discover`** searches GitHub by topic (`cli`, `command-line`,
+   `command-line-tool`, `tui`, `cli-app`), most stars first, at least 1000 stars and
+   pushed in the last two years. It keeps a repo only if `gen` would produce an entry
+   for it, so the cap is spent on tools that ship something installable rather than
+   on libraries that share the topic.
+2. **`toy-index gen --probe`** writes their entries into a scratch index.
+3. **`index-check`** installs, runs and uninstalls each one on Linux and on macOS.
+4. **`toy-index merge`** keeps what passed somewhere and failed nowhere, and the run
+   opens a pull request. Its description lists every entry, **flags the command names
+   to look at** (already taken in the index, a common system command, a generic word,
+   two characters or less), and lists popular repos whose licence a person has to read.
+
+A pull request opened by a workflow does not start other workflows, so it shows no
+checks of its own; the run that opened it is linked at the top, with every index-check
+log. **Review it like any other**: drop an entry you do not want (and add it to
+`index/declined.txt`, or next week's run proposes it again), then merge.
+
+```bash
+GITHUB_TOKEN=$(gh auth token) go run ./cmd/toy-index discover --max 20 --out /tmp/c.txt --review /tmp/r.txt
+```
+
+runs the first step locally.
+
+### Licences
+
+toy never rehosts anything, so listing a project strictly needs no permission from its
+licence. The bar is higher on purpose: the index is something people install from, and
+`toy serve` lets anyone re-serve what they downloaded, which is redistribution. So an
+entry needs a licence that allows using and redistributing the binaries:
+**OSI-approved, or a public-domain dedication** (the allowlist is in
+`cmd/toy-index/license.go`; copyleft is fine). Source-available licences (BUSL, SSPL,
+Elastic, PolyForm, Commons Clause) are out, and **no licence at all means all rights
+reserved**, so that is out too.
+
+GitHub cannot identify every licence file (jq's COPYING, a dual MIT/Apache repo). Those
+are not refused for good: **a person reads the file** and, if it allows redistribution,
+adds `owner/repo SPDX-id  # where it was read` to **`index/licenses.txt`**. That names the
+licence; it does not get anything past the allowlist.
+
 ### Listing other people's software: three policies
 
 The overwhelming majority of entries point at **someone else's** repo, and the
@@ -93,15 +157,17 @@ author has no idea we listed them. Therefore:
 
 1. **Imply no endorsement.** Listing something says only "this package installs".
    It does not say we audited its code, and it does not say the author has any
-   relationship with us. Generated entries are always inlined, so what the client
-   displays is the **downgraded** "packaging instructions come from the index"
-   marker, never `✓ signed` — that checkmark belongs only to an author who signed
-   with their own key. We copy `desc` verbatim from upstream; we don't write
+   relationship with us. A generated entry is inlined unless upstream ships its own
+   `toy.toml`, so what the client displays is the **downgraded** "packaging
+   instructions come from the index" marker or the host tier, never `✓ signed` —
+   that checkmark belongs only to an author who signed with their own key. We copy `desc` verbatim from upstream; we don't write
    a recommendation on its behalf.
 2. **If a maintainer asks to be delisted, delist them. No questions.** Deleting an
    entry only means it stops being findable — `toy install github:owner/repo` still
    installs it, and anyone who forks this file has a complete parallel index. When
    delisting costs that little, there is never a reason to argue with anyone.
+   **Delisting means two edits**: remove the entry, and add the repo to
+   `index/delisted.txt` -- otherwise the weekly discovery puts it back.
    A policy nobody can act on is not a policy, so there is a form for it:
    [Remove my project from the index](https://github.com/Cirraya-LLC/toy/issues/new?template=delist.yml).
    An entry going stale has its own form, because a stale inline entry is our
@@ -135,61 +201,16 @@ fix that entry in this JSON; **network** = retry, don't touch the index; **run**
 it installed but won't run (upstream's release is broken, or the in-package path on
 the right of `[bin]` was guessed wrong).
 
-## What's in this index right now (verified 2026-09-01)
+## What's in it
 
-**19 entries, all inlined.** The candidates were 20 repos (`index/repos.txt`), run
-through `toy-index gen --repos index/repos.txt --probe`, and then **every entry
-passed two gates**:
+The JSON file is the list, and https://toy.cirraya.com shows it with search. It
+started on 2026-09-01 as 19 hand-picked Rust and Go tools from `repos.txt`; that first
+round is where the two lessons below come from.
 
-1. **URLs**: compute each platform's download URL exactly the way toy does (the
-   host's release template + the highest semver tag from `git ls-remote --tags` +
-   expanding `{version}`/`{tag}`) and `curl -sSIL` every one of them —
-   **all 122 URLs returned 200**.
-   The computation has to match the client character for character or this check
-   proves nothing: **semver selection must ignore prereleases the same way the
-   client does** (`semver.Max`'s default), or you end up HEAD-ing a tag the client
-   would never install — tstack/lnav's highest semver tag is `v0.14.1-rc1`, while
-   the client installs `v0.14.0`.
-2. **Actually installing**: `scripts/index-check.sh` installed, ran, and uninstalled
-   all 19 on linux/amd64 (glibc) — **19 passed / 0 failed**.
-
-This round doubled as real-hardware acceptance for three things: stripping
-the top-level directory, glibc falling back to musl, and i686. The
-cargo-dist projects — ripgrep / fd / bat / delta / eza / zoxide — were all
-uninstallable last round; this round, **on a glibc machine, we installed the musl
-build and stripped that `ripgrep-15.2.0-x86_64-unknown-linux-musl/` layer**, and
-`rg --version` actually ran.
-
-### The 19 entries
-
-| Repo | Command | Platforms | Installed/ran locally |
-| --- | --- | --- | --- |
-| BurntSushi/ripgrep | `rg` | 6 | ✅ |
-| ClementTsang/bottom | `btm` | 9 | ✅ |
-| Peltoche/lsd | `lsd` | 9 | ✅ |
-| ajeetdsouza/zoxide | `zoxide` | 7 | ✅ |
-| bootandy/dust | `dust` | 9 | ✅ |
-| charmbracelet/glow | `glow` | 6 | ✅ |
-| chmln/sd | `sd` | 7 | ✅ |
-| dalance/procs | `procs` | 2 | ✅ |
-| dandavison/delta | `delta` | 6 | ✅ |
-| eza-community/eza | `eza` | 4 | ✅ |
-| jesseduffield/lazygit | `lazygit` | 5 | ✅ |
-| junegunn/fzf | `fzf` | 6 | ✅ |
-| mikefarah/yq | `yq` | 6 | ✅ |
-| muesli/duf | `duf` | 7 | ✅ |
-| sharkdp/bat | `bat` | 9 | ✅ |
-| sharkdp/fd | `fd` | 9 | ✅ |
-| sharkdp/hyperfine | `hyperfine` | 8 | ✅ |
-| tstack/lnav | `lnav` | 3 | ✅ |
-| wagoodman/dive | `dive` | 4 | ✅ |
-
-### Not listed: XAMPPRocky/tokei
-
-The latest release `v14.0.0` **has no assets at all** (a source-only release).
-GitHub's auto-attached source tarballs don't count as assets, and toy doesn't build
-from source (iron law 2), so this repo can't be listed right now — when it ships
-binaries again, rerun the generator. No code change needed.
+One from that round still applies to every check of an index: **compute URLs exactly
+the way the client does**, prereleases included. tstack/lnav's highest semver tag is
+`v0.14.1-rc1`; the client installs `v0.14.0`, so a check that HEADs the rc proves
+nothing.
 
 ### The names on the left of `[bin]`: a human looked
 

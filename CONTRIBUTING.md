@@ -80,9 +80,15 @@ index can be useful before anybody has adopted us, and it is also the part with
 real obligations attached.
 
 ```bash
-make index-gen ARGS="--repos repos.txt --probe --out index/toy-index.json"
+make index-gen ARGS="--repos index/repos.txt --probe --out index/toy-index.json"
 make index-check ARGS="--only owner/repo"
 ```
+
+Most new entries come from the weekly discovery run, which opens a pull request on
+its own (`index/README.md`, "Automatic discovery"). Reviewing that pull request is the
+same job as reviewing yours. Only repositories with a licence that allows
+redistribution get in; `index/licenses.txt`, `index/delisted.txt` and
+`index/declined.txt` are the three lists a person keeps.
 
 `--probe` is not optional. Without it the path on the right of `[bin]` is a guess,
 and for anything packaged by cargo-dist the guess is wrong.
@@ -99,7 +105,8 @@ Three obligations that come with listing other people's software:
    instructions came from the index and not from the author. That line is the
    only place a user can notice, so it does not get quieter.
 2. **If a maintainer asks to be delisted, delist them.** No conditions, no
-   discussion. There is a form for it.
+   discussion. There is a form for it. Remove the entry **and** add the repo to
+   `index/delisted.txt`, or the weekly discovery lists it again.
 3. **Someone reads the command names on the left of `[bin]`.** Reserved names and
    the PATH shadow check block the dangerous cases automatically, but a name that
    is not on PATH *yet* is available to take. This is the one step in the pipeline
