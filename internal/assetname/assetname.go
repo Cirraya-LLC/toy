@@ -454,7 +454,12 @@ func Infer(files []string, forceVersion string) Result {
 	}
 
 	seen := map[string]string{}
+	var universal []Asset
 	for _, h := range hits {
+		if h.Platform == darwinUniversal {
+			universal = append(universal, h)
+			continue
+		}
 		if first, dup := seen[h.Platform]; dup {
 			h.Skip = "same platform (" + h.Platform + ") as " + first +
 				"; only one can be kept, so the first one won. To keep this one instead, edit that line in [artifact] yourself"
@@ -473,6 +478,25 @@ func Infer(files []string, forceVersion string) Result {
 		}
 		res.Assets = append(res.Assets, h)
 		res.Artifact[h.Platform] = h.Template
+	}
+	// A universal macOS build fills each Mac architecture nothing more specific took:
+	// a build made for one architecture is the better match when both exist.
+	if len(universal) > 0 {
+		u := universal[0]
+		u.Template = u.File
+		if res.Version != "" {
+			u.Template = strings.ReplaceAll(u.Template, res.Version, "{version}")
+		}
+		for _, key := range []string{"darwin/amd64", "darwin/arm64"} {
+			if _, taken := seen[key]; taken {
+				continue
+			}
+			seen[key] = u.File
+			a := u
+			a.Platform = key
+			res.Assets = append(res.Assets, a)
+			res.Artifact[key] = u.Template
+		}
 	}
 	sort.Slice(res.Assets, func(i, j int) bool { return res.Assets[i].Platform < res.Assets[j].Platform })
 	res.Name = commonPrefix(res.Assets)
@@ -507,9 +531,17 @@ func looksLikeArchive(f string) bool {
 // Rust target triples (x86_64-unknown-linux-gnu / aarch64-apple-darwin) need no
 // special case: after tokenizing, every word we need is there, and the extra
 // segments like unknown / pc are simply not recognized.
+// darwinUniversal is a macOS universal binary: one file that holds both the arm64 and
+// the x86_64 build. It is never a key in a toy.toml -- Infer files it under
+// darwin/arm64 and darwin/amd64, wherever no build for that one architecture exists.
+// fastfetch 2.70.0 replaced its two macOS assets with fastfetch-macos-universal.tar.gz;
+// without this its entry pointed at files that no longer exist.
+const darwinUniversal = "darwin/universal"
+
 func detect(file string) (key, goos string) {
 	toks := tokens(file)
 	var arch, libc string
+	universal := false
 	for i, tok := range toks {
 		// Foreign systems first: android has to beat a linux already recognized
 		// in the same filename, not queue up behind it.
@@ -531,7 +563,12 @@ func detect(file string) (key, goos string) {
 		switch tok {
 		case "musl", "gnu":
 			libc = tok
+		case "universal", "universal2":
+			universal = true
 		}
+	}
+	if goos == "darwin" && arch == "" && universal {
+		return darwinUniversal, goos
 	}
 	if goos == "" || arch == "" {
 		return "", goos

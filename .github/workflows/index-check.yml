@@ -110,11 +110,12 @@ jobs:
           set -euo pipefail
           title="index-check failed ($(date -u +%F))"
           body=$(printf 'The scheduled index-check has failing entries.\n\nFull log (with the failure details, ready to copy): %s\n\nThe three categories are handled differently:\n- **entry** — fix that record in `index/toy-index.json` (upstream most likely changed its asset naming habit)\n- **network** — retry, leave the index alone\n- **runtime** — upstream'"'"'s release is broken, or the in-package path in `[bin]` was guessed wrong\n' "$RUN_URL")
-          # Not --search: it tokenizes, so punctuation such as the parentheses in the title
-          # can fail to match and we would open a duplicate issue every day. Pulling one
-          # page of open issues and comparing titles ourselves is short and exact.
+          # Match on the title's fixed prefix, not the whole title: the date in it
+          # changes daily, and matching it exactly opened a new issue every day the same
+          # entry stayed broken (five of them for one fastfetch rename in October 2026).
+          # Not --search: it tokenizes, and punctuation can fail to match.
           existing="$(gh issue list --state open --limit 100 --json number,title \
-                      --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
+                      --jq '[.[] | select(.title | startswith("index-check failed"))] | sort_by(.number) | .[0].number // empty')"
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else
