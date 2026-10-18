@@ -104,7 +104,8 @@ Three obligations that come with listing other people's software:
 1. **Never imply endorsement.** Every install prints that the packaging
    instructions came from the index and not from the author. That line is the
    only place a user can notice, so it does not get quieter.
-2. **If a maintainer asks to be delisted, delist them.** No conditions, no
+2. **If a maintainer -- or anyone with a claim to the project -- asks for it to be
+   delisted, delist it.** The index does not judge a project's provenance. No conditions, no
    discussion. There is a form for it. `go run ./cmd/toy-index delist --reason "..."
    owner/repo` removes the entry and records it, so the weekly discovery leaves it out.
 3. **Someone reads the command names on the left of `[bin]`.** Reserved names and
