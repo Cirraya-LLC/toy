@@ -297,3 +297,27 @@ func TestPlatformWord(t *testing.T) {
 		}
 	}
 }
+
+// A macOS universal binary runs on both Mac architectures, so it fills both keys --
+// but only where no build for that one architecture exists.
+func TestUniversalMacBuildFillsBothArchitectures(t *testing.T) {
+	r := Infer([]string{
+		"fastfetch-linux-amd64.tar.gz", "fastfetch-macos-universal.tar.gz", "fastfetch-windows-amd64.zip",
+	}, "")
+	for _, k := range []string{"darwin/amd64", "darwin/arm64"} {
+		if got := r.Artifact[k]; got != "fastfetch-macos-universal.tar.gz" {
+			t.Errorf("%s = %q, want the universal build", k, got)
+		}
+	}
+	if _, ok := r.Artifact[darwinUniversal]; ok {
+		t.Error("darwin/universal must never reach a toy.toml")
+	}
+
+	r = Infer([]string{"tool_1.0.0_darwin_arm64.tar.gz", "tool_1.0.0_darwin_universal.tar.gz"}, "")
+	if r.Artifact["darwin/arm64"] != "tool_{version}_darwin_arm64.tar.gz" {
+		t.Errorf("a build for arm64 itself should win over the universal one: %v", r.Artifact)
+	}
+	if r.Artifact["darwin/amd64"] != "tool_{version}_darwin_universal.tar.gz" {
+		t.Errorf("the universal build should fill darwin/amd64: %v", r.Artifact)
+	}
+}

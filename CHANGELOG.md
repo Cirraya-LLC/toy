@@ -5,6 +5,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **A universal macOS build is recognized** (`tool-macos-universal.tar.gz`): `toy init`
+  and the index generator file it under both `darwin/arm64` and `darwin/amd64`, unless a
+  build for one architecture exists, which wins. fastfetch switched to a single universal
+  build in 2.70.0, and its entry pointed at macOS files that no longer existed.
+
 ### Changed
 
 - **The example package is real again.** `Derrity/tinyserve`, the example in every

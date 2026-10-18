@@ -309,6 +309,11 @@ while IFS=$'\t' read -r ID SRC; do
   # index second.
   if [ -n "$SEED_CONFIG" ]; then cp "$SEED_CONFIG" "$HOME_DIR/config.toml"; fi
 
+  # Only the index under test. toy comes configured with the published one, and it is
+  # looked up first: without this, every entry already live was installed from the
+  # published copy rather than from the file being checked -- a PR changing an existing
+  # entry was checked against the old version (fastfetch, 2026-10-18).
+  "$TOY" index rm default >/dev/null 2>&1 </dev/null || true
   # Point the index at that local copy. toy expands a bare path into file:///absolute.
   if ! "$TOY" index add check "$LOCAL_INDEX" >"$LOG" 2>&1 </dev/null; then
     fail "network" "even configuring the index failed (cannot read a local file?)"; continue
