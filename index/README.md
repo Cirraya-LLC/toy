@@ -180,6 +180,10 @@ author has no idea we listed them. Therefore:
    entry only means it stops being findable — `toy install github:owner/repo` still
    installs it, and anyone who forks this file has a complete parallel index. When
    delisting costs that little, there is never a reason to argue with anyone.
+   **The same goes for a rights holder.** The index does not judge where a project came
+   from: a reimplementation, a fork with a disputed history, anything GitHub hosts in
+   public under an open licence is eligible. If someone with a claim to it objects, it
+   is delisted the same way, without an argument -- listing costs nothing to undo.
    **Delist with `go run ./cmd/toy-index delist --reason "..." owner/repo`**: it removes
    the entry and records the repo in `index/delisted.txt`, without which the weekly
    discovery would put it back.
