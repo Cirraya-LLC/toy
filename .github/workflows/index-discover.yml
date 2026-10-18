@@ -57,9 +57,9 @@ jobs:
             echo "skip=1" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.open.outputs.skip != '1'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: steps.open.outputs.skip != '1'
         with:
           go-version-file: go.mod
@@ -84,7 +84,7 @@ jobs:
           echo "ids=$ids" >> "$GITHUB_OUTPUT"
           echo "generated: ${ids:-nothing}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.open.outputs.skip != '1'
         with:
           name: discovered
@@ -99,11 +99,11 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: discovered
           path: out
@@ -113,7 +113,7 @@ jobs:
         run: |
           bash scripts/index-check.sh --index out/generated.json \
             --only "${{ needs.generate.outputs.ids }}" --results "out/results-${{ matrix.os }}.tsv" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: results-${{ matrix.os }}
           path: out/results-${{ matrix.os }}.tsv
@@ -127,11 +127,11 @@ jobs:
       pull-requests: write
       actions: write   # to approve the checks GitHub holds on a bot-opened pull request
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: out
           merge-multiple: true
