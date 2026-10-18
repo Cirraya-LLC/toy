@@ -33,7 +33,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Copies the index byte for byte and generates the three language pages; it
       # fails the job rather than publish an index the client cannot read.
@@ -49,9 +49,9 @@ jobs:
           cp -R site/. _site/
           rm _site/README.md _site/index.template.html _site/i18n.json
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
