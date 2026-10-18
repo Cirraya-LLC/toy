@@ -109,7 +109,8 @@ Two things it **deliberately does not do**. Don't remove them:
 ### Automatic discovery
 
 `index-discover.yml` runs every Monday (and on demand from the Actions tab, with a cap
-on how many repos):
+on how many repos). **One batch at a time**: while a discovery pull request is still open,
+the run skips -- review and merge (or close) it first. It goes:
 
 1. **`toy-index discover`** searches GitHub by topic (`cli`, `command-line`,
    `command-line-tool`, `tui`, `cli-app`), most stars first, at least 1000 stars,

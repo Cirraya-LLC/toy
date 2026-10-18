@@ -34,15 +34,38 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       ids: ${{ steps.gen.outputs.ids }}
     steps:
+      # One batch at a time. discover only knows what is on main, so with last week's
+      # pull request still open it would propose the same repositories again, and a
+      # second PR would sit next to one somebody may be half way through reviewing.
+      - name: wait for the open discovery pull request, if any
+        id: open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --state open --json number,headRefName \
+                 --jq '[.[] | select(.headRefName | startswith("index/discover-"))][0].number // empty')
+          if [ -n "$pr" ]; then
+            echo "#$pr is still open: review and merge (or close) it first; skipping this run."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.open.outputs.skip != '1'
       - uses: actions/setup-go@v5
+        if: steps.open.outputs.skip != '1'
         with:
           go-version-file: go.mod
 
       - name: discover and generate
+        if: steps.open.outputs.skip != '1'
         id: gen
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -62,6 +85,7 @@ jobs:
           echo "generated: ${ids:-nothing}"
 
       - uses: actions/upload-artifact@v4
+        if: steps.open.outputs.skip != '1'
         with:
           name: discovered
           path: out/
