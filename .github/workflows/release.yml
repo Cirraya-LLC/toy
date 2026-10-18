@@ -11,7 +11,7 @@ jobs:
   goreleaser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # goreleaser needs full history to build the changelog and to resolve .Version.
           fetch-depth: 0
