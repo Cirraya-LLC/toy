@@ -25,7 +25,7 @@ jobs:
       # (iron law 6). Check it one more time here.
       - run: make verify-toyfile
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
