@@ -252,7 +252,7 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 				// stripped: more than one top-level entry, or a path that itself spells out a
 				// version or a platform.
 				res.err = fmt.Errorf("the probed in-package path is %q: %s. "+
-					"Write this entry by hand (or get the author to add their own toy.toml)", hit, why)
+					"Write this entry by hand -- `toy-index add --toyfile <file> owner/repo` -- or get the author to add their own toy.toml", hit, why)
 				return res
 			}
 			p.binPath, p.binProbed = hit, true
@@ -276,7 +276,7 @@ func genOne(ctx context.Context, cfg genConfig, idx *index.Index, line string) g
 	if w := assetname.PlatformWord(p.binName); w != "" {
 		res.err = fmt.Errorf("the command name %q carries the platform word %q: the asset names fooled the "+
 			"inference, and under that name it would only ever be right on one kind of machine. "+
-			"Write this entry by hand (or get the author to add their own toy.toml)", p.binName, w)
+			"Write this entry by hand -- `toy-index add --toyfile <file> owner/repo` -- or get the author to add their own toy.toml", p.binName, w)
 		return res
 	}
 

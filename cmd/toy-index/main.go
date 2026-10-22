@@ -46,13 +46,14 @@ var errUsage = errors.New("usage")
 
 var usageLines = []string{
 	"Usage: toy-index gen --repos <file> [--out index/toy-index.json] [--update] [--probe] [--token <token>]",
-	"       toy-index discover --out <file> [--review <file>] [--topics a,b] [--min-stars 1000]",
+	"       toy-index discover --out <file> [--review <file>] [--topics a,b] [--lists owner/repo,...] [--min-stars 1000]",
 	"                          [--pushed-within 730] [--max 50] [--index index/toy-index.json]",
 	"       toy-index merge --from <generated.json> --results <tsv>[,<tsv>...] [--into index/toy-index.json]",
 	"                       [--report <pr-body.md>]",
 	"       toy-index decline --reason <why> owner/repo...   remove, and never propose again (index/declined.txt)",
 	"       toy-index delist  --reason <why> owner/repo...   its maintainer asked (index/delisted.txt)",
 	"       toy-index drop    owner/repo...                  remove for now; discovery may propose it again",
+	"       toy-index add --toyfile <toy.toml> [--update] owner/repo   a hand-written inline entry, held to gen's rules",
 	"",
 	"  --repos   Repo list, one owner/repo per line. # starts a comment (whole line or trailing); blank lines ignored",
 	"  --out     Index JSON to merge into (a new empty one is created if it does not exist)",
@@ -65,7 +66,8 @@ var usageLines = []string{
 	"  gen and discover both refuse a repo whose licence does not allow redistribution (cmd/toy-index/license.go),",
 	"  and anything in index/delisted.txt. index/licenses.txt records licences a person read by hand.",
 	"",
-	"  discover searches GitHub by topic (most stars first) and writes the repos gen would accept to --out,",
+	"  discover searches GitHub by topic and reads curated lists (awesome-cli-apps, modern-unix, awesome-tuis",
+	"  by default; --lists \"\" for none), most stars first, and writes the repos gen would accept to --out,",
 	"  up to --max of them; --review gets the ones whose licence file GitHub cannot identify.",
 	"",
 	"  merge moves into --into the generated entries that index-check (--results) passed somewhere and",
@@ -103,11 +105,13 @@ func run(ctx context.Context, args []string) error {
 		return runMerge(ctx, args[1:])
 	case "decline", "delist", "drop":
 		return runRemove(ctx, args[0], args[1:])
+	case "add":
+		return runAdd(ctx, args[1:])
 	case "-h", "--help", "help":
 		printUsage()
 		return nil
 	default:
-		return fmt.Errorf("unknown subcommand %q; the subcommands are gen, discover, merge, decline, delist and drop", args[0])
+		return fmt.Errorf("unknown subcommand %q; the subcommands are gen, discover, merge, add, decline, delist and drop", args[0])
 	}
 }
 

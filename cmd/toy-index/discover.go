@@ -33,17 +33,19 @@ import (
 var defaultTopics = []string{"cli", "command-line", "command-line-tool", "tui", "cli-app"}
 
 type searchItem struct {
-	FullName string    `json:"full_name"`
-	Desc     string    `json:"description"`
-	Stars    int       `json:"stargazers_count"`
-	PushedAt time.Time `json:"pushed_at"`
-	License  *struct {
+	FullName  string    `json:"full_name"`
+	Desc      string    `json:"description"`
+	Stars     int       `json:"stargazers_count"`
+	PushedAt  time.Time `json:"pushed_at"`
+	CreatedAt time.Time `json:"created_at"`
+	License   *struct {
 		SPDX string `json:"spdx_id"`
 	} `json:"license"`
 }
 
 type discoverConfig struct {
 	topics   []string
+	curated  []string // curated lists (owner/repo of an awesome-list) whose links are candidates too
 	minStars int
 	since    time.Time // last push no older than this
 	born     time.Time // created no later than this: a project needs a track record first
@@ -67,6 +69,7 @@ func runDiscover(ctx context.Context, args []string) error {
 	out := fs.String("out", "", "")
 	review := fs.String("review", "", "")
 	topics := fs.String("topics", strings.Join(defaultTopics, ","), "")
+	listsFlag := fs.String("lists", strings.Join(defaultLists, ","), "")
 	minStars := fs.Int("min-stars", 1000, "")
 	days := fs.Int("pushed-within", 730, "")
 	minAge := fs.Int("min-age", 180, "")
@@ -101,14 +104,22 @@ func runDiscover(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	var ts []string
+	var ts, lsrc []string
 	for _, t := range strings.Split(*topics, ",") {
 		if t = strings.TrimSpace(t); t != "" {
 			ts = append(ts, t)
 		}
 	}
+	for _, l := range strings.Split(*listsFlag, ",") {
+		if l = strings.TrimSpace(l); l != "" {
+			if _, err := listID(l); err != nil {
+				return fmt.Errorf("--lists: %w", err)
+			}
+			lsrc = append(lsrc, l)
+		}
+	}
 	return discover(ctx, discoverConfig{
-		topics: ts, minStars: *minStars, since: time.Now().AddDate(0, 0, -*days),
+		topics: ts, curated: lsrc, minStars: *minStars, since: time.Now().AddDate(0, 0, -*days),
 		born: time.Now().AddDate(0, 0, -*minAge), max: *max,
 		idx: idx, lists: ls, gh: newGitHub(*api, tok), host: gh, out: *out, review: *review,
 	})
@@ -118,6 +129,26 @@ func discover(ctx context.Context, cfg discoverConfig) error {
 	cands, err := searchAll(ctx, cfg)
 	if err != nil {
 		return err
+	}
+
+	// Repositories get renamed and GitHub redirects the old name (Peltoche/lsd is now
+	// lsd-rs/lsd), so "already in the index" has to compare current names: a list links
+	// to the new one while the index still says the old one, and comparing ids alone
+	// would list the same tool twice.
+	listed := map[string]bool{}
+	ids := make([]string, 0, len(cfg.idx.Packages))
+	for _, e := range cfg.idx.Packages {
+		listed[foldRepo(e.ID)] = true
+		ids = append(ids, e.ID)
+	}
+	if len(cfg.curated) > 0 {
+		current, err := cfg.gh.repoMeta(ctx, ids)
+		if err != nil {
+			return fmt.Errorf("looking up the current names of the index's repositories: %w", err)
+		}
+		for _, it := range current {
+			listed[foldRepo(it.FullName)] = true
+		}
 	}
 
 	why := map[string]int{}
@@ -130,7 +161,7 @@ func discover(ctx context.Context, cfg discoverConfig) error {
 			return err
 		}
 		id := it.FullName
-		if _, ok := cfg.idx.Find(id); ok {
+		if listed[foldRepo(id)] {
 			why["already in the index"]++
 			continue
 		}
@@ -216,6 +247,31 @@ func searchAll(ctx context.Context, cfg discoverConfig) ([]searchItem, error) {
 			}
 		}
 	}
+	// The curated lists: the same floors, applied here because no search applied them.
+	for _, list := range cfg.curated {
+		ids, err := cfg.gh.listRepos(ctx, list)
+		if err != nil {
+			return nil, err
+		}
+		var fresh []string
+		for _, id := range ids {
+			if !seen[foldRepo(id)] {
+				fresh = append(fresh, id)
+			}
+		}
+		items, err := cfg.gh.repoMeta(ctx, fresh)
+		if err != nil {
+			return nil, fmt.Errorf("looking up the repositories %s links to: %w", list, err)
+		}
+		for _, it := range items {
+			k := foldRepo(it.FullName)
+			if seen[k] || it.Stars < cfg.minStars || it.CreatedAt.After(cfg.born) || it.PushedAt.Before(cfg.since) {
+				continue
+			}
+			seen[k] = true
+			all = append(all, it)
+		}
+	}
 	sort.SliceStable(all, func(a, b int) bool { return all[a].Stars > all[b].Stars })
 	return all, nil
 }
@@ -266,8 +322,8 @@ func writePicks(path string, ps []pick, header string) error {
 
 func discoverReport(cfg discoverConfig, seen int, picked, toReview []pick, why map[string]int) {
 	ui.Info("")
-	ui.Info("Searched %d topics (stars >= %d, pushed since %s, created by %s): %d distinct repositories.",
-		len(cfg.topics), cfg.minStars, cfg.since.Format("2006-01-02"), cfg.born.Format("2006-01-02"), seen)
+	ui.Info("Searched %d topics and %d curated lists (stars >= %d, pushed since %s, created by %s): %d distinct repositories.",
+		len(cfg.topics), len(cfg.curated), cfg.minStars, cfg.since.Format("2006-01-02"), cfg.born.Format("2006-01-02"), seen)
 	keys := make([]string, 0, len(why))
 	for k := range why {
 		keys = append(keys, k)
