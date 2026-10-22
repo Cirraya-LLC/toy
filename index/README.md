@@ -88,7 +88,10 @@ Before writing anything it refuses a repo when:
   (a reviewer turned it down);
 - the **command name still carries a platform word** (`yt-dlp_linux_aarch64`,
   `gemini-darwin`): the asset names fooled the inference, and that name would only be
-  right on one machine. Write such an entry by hand.
+  right on one machine. Write such an entry by hand: put the toy.toml in a file and run
+  `go run ./cmd/toy-index add --toyfile tool.toml owner/repo`, which holds it to the same
+  rules (licence, no `[sha256]`, no platform words, no upstream toy.toml) and does the
+  JSON escaping. ast-grep went in that way.
 
 And when upstream already ships a `toy.toml` at its latest tag, it writes a **pointer
 entry** instead of inlining one. Only a definite 404 counts as "no toy.toml"; a 500
@@ -113,7 +116,10 @@ on how many repos). **One batch at a time**: while a discovery pull request is s
 the run skips -- review and merge (or close) it first. It goes:
 
 1. **`toy-index discover`** searches GitHub by topic (`cli`, `command-line`,
-   `command-line-tool`, `tui`, `cli-app`), most stars first, at least 1000 stars,
+   `command-line-tool`, `tui`, `cli-app`) **and reads curated lists**
+   (agarrharr/awesome-cli-apps, ibraheemdev/modern-unix, rothgar/awesome-tuis) for the
+   well-known tools that never tagged a topic -- opencode, OpenAI's codex, croc and gum
+   came in that way. Most stars first, at least 1000 stars,
    pushed in the last two years, and **created at least six months ago** -- a tool
    people install from here should have a public track record. (The first run's top
    AI agents were a few months old with star counts nobody could vouch for. Too new is
