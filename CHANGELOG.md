@@ -5,6 +5,8 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-25
+
 ### Added
 
 - **When the newest tag has no release file, toy installs the release the forge marks as
@@ -205,6 +207,7 @@ The rest of what was confirmed and fixed:
 - Dropped 613 lines of hand-written TOML parsing from `internal/store` (unnecessary
   once the dependency came back).
 
-[Unreleased]: https://github.com/Cirraya-LLC/toy/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Cirraya-LLC/toy/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Cirraya-LLC/toy/releases/tag/v0.1.2
 [0.1.1]: https://github.com/Cirraya-LLC/toy/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Cirraya-LLC/toy/releases/tag/v0.1.0
