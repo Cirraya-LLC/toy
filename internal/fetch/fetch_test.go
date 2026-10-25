@@ -625,3 +625,31 @@ func TestFileURLDirectory(t *testing.T) {
 	}
 	assertEmptyDir(t, cache)
 }
+
+func TestRedirectTargetDoesNotFollow(t *testing.T) {
+	followed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			http.Redirect(w, r, "/o/r/releases/tag/v1.2.3", http.StatusFound)
+		case "/o/r/releases/tag/v1.2.3":
+			followed = true
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+	got, err := RedirectTarget(context.Background(), srv.URL+"/latest")
+	if err != nil || !strings.HasSuffix(got, "/o/r/releases/tag/v1.2.3") {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if followed {
+		t.Fatal("the redirect was followed; only where it points is wanted")
+	}
+	if got, err := RedirectTarget(context.Background(), srv.URL+"/plain"); got != "" || err != nil {
+		t.Fatalf("no redirect should be \"\", got %q, %v", got, err)
+	}
+	if got, err := RedirectTarget(context.Background(), "file:///etc/passwd"); got != "" || err != nil {
+		t.Fatalf("a non-http URL should be \"\", got %q, %v", got, err)
+	}
+}

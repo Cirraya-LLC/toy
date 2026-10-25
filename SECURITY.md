@@ -39,7 +39,10 @@ This section matters more than the one above.
 - **`✓ signed` does not mean "signed by the repo owner".** See §4. This is the one
   thing here that most needs saying precisely.
 - **The host itself.** Installing via `github:owner/repo` means trusting GitHub's
-  account system and TLS.
+  account system and TLS. When the newest tag has no release file, toy also reads the
+  host's latest-release page to learn which release the author marked as latest. That
+  answer is accepted only if it names a tag `git ls-remote` already listed, so it can
+  move the install to another of the author's own releases and nowhere else.
 - **Write access to wherever an index is hosted.** An entry may inline a `toy.toml`
   (for upstreams that have not adopted toy yet), so whoever can edit that JSON
   **can change what you end up installing** while `source` stays byte-for-byte the same.

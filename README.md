@@ -186,6 +186,9 @@ goes through an index in the first place.
 
 Hosts are a config table, not three implementations, and version discovery uses
 `git ls-remote` — so toy depends on nobody's API and gets throttled by nobody's rate limit.
+If the newest tag has no release file (still uploading, or a tag that is not a release),
+toy installs the release the forge marks as latest — read from its public "latest
+release" page, and only if that names a tag git listed — and says so.
 
 ## Commands
 

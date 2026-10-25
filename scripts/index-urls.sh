@@ -30,6 +30,9 @@ TOY="$(mktemp -d)/toy"
 HOME_DIR="$(mktemp -d)"
 trap 'rm -rf "$HOME_DIR" "$(dirname "$TOY")"' EXIT
 export TOY_HOME="$HOME_DIR"
+# Only the index under test: toy comes configured with the published one, which would
+# otherwise answer first for every entry already live (same as index-check.sh).
+"$TOY" index rm default >/dev/null 2>&1 || true
 "$TOY" index add local "file://$INDEX" >/dev/null 2>&1
 
 TOY="$TOY" INDEX="$INDEX" ONLY="$ONLY" python3 - <<'PY'
@@ -64,12 +67,39 @@ for p in pkgs:
         continue
     tag, ver = info.get("tag", ""), info.get("version", "")
     owner, repo = p["source"].split(":", 1)[1].split("/", 1)
-    for plat, t in sorted(tmpl.items()):
-        asset = t.replace("{version}", ver).replace("{tag}", tag)
-        url = f"https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}"
-        code = subprocess.run(
-            ["curl", "-sSIL", "--max-time", "30", "-o", "/dev/null", "-w", "%{http_code}", url],
+
+    def check(tag, ver):
+        out = []
+        for plat, t in sorted(tmpl.items()):
+            asset = t.replace("{version}", ver).replace("{tag}", tag)
+            url = f"https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}"
+            code = subprocess.run(
+                ["curl", "-sSIL", "--max-time", "30", "-o", "/dev/null", "-w", "%{http_code}", url],
+                capture_output=True, text=True).stdout.strip()
+            out.append((plat, code, asset))
+        return out
+
+    results = check(tag, ver)
+    # The client's fallback, mirrored: when nothing the newest tag should have is there,
+    # it installs the release the forge marks as latest (insPerformOrPrevious). Check
+    # that release instead, or every repo that tags a line it never releases fails here
+    # while installing fine.
+    if results and all(code == "404" for _, code, _ in results):
+        loc = subprocess.run(
+            ["curl", "-s", "--max-time", "30", "-o", "/dev/null", "-w", "%{redirect_url}",
+             f"https://github.com/{owner}/{repo}/releases/latest"],
             capture_output=True, text=True).stdout.strip()
+        latest = loc.rstrip("/").rsplit("/", 1)[-1] if "/releases/tag/" in loc else ""
+        if latest and latest != tag:
+            r2 = subprocess.run([toy, "info", "--json", f'{p["id"]}@{latest}'], capture_output=True, text=True)
+            try:
+                v2 = json.loads(r2.stdout).get("version", "")
+            except Exception:
+                v2 = ""
+            if v2:
+                print(f"  {p['id']}: {tag} has no files; checking {latest}, the release GitHub marks as latest")
+                results = check(latest, v2)
+    for plat, code, asset in results:
         if code == "200":
             ok += 1
         else:
