@@ -18,6 +18,7 @@ import (
 
 	"github.com/Cirraya-LLC/toy/internal/archive"
 	"github.com/Cirraya-LLC/toy/internal/fetch"
+	"github.com/Cirraya-LLC/toy/internal/host"
 	"github.com/Cirraya-LLC/toy/internal/platform"
 	"github.com/Cirraya-LLC/toy/internal/ref"
 	"github.com/Cirraya-LLC/toy/internal/semver"
@@ -1288,7 +1289,7 @@ func insSingleTarget(tf *toyfile.Toyfile, it insItem, pkgDir string) (string, er
 }
 
 // insPerformOrPrevious installs res, and when that fails because res's release file
-// is not there, installs the release before it instead.
+// is not there, installs an earlier release instead.
 //
 // A tag routinely goes up before its release files do: the author pushes the tag and
 // CI spends the next hour building and uploading. rclone's v1.75.2 was tagged at 09:45
@@ -1298,25 +1299,41 @@ func insSingleTarget(tf *toyfile.Toyfile, it insItem, pkgDir string) (string, er
 // release is published (spec §2), so it cannot see this coming; it can only recover,
 // and say plainly that it did.
 //
-// Only when the version was picked rather than asked for (res.PrevTag is empty after
+// Which release then? The one the forge says its author marked as latest, when the
+// host has a latest page and that page names one of the tags git ls-remote listed;
+// otherwise the release before it. They are usually the same release. They differ when
+// the newest tags are not releases at all: opencode tags a v2 line it publishes
+// elsewhere, and its GitHub releases with binaries are v1.19.x -- falling back one tag
+// at a time would have walked 38 v2 tags with no files before giving up.
+//
+// Only when the version was picked rather than asked for (res.Tags is empty after
 // --version), and only on a definite 404: a 500 or a timeout is upstream having a bad
 // day, and moving someone to an older release over it would be wrong.
 func insPerformOrPrevious(ctx context.Context, st *store.Store, cfg store.Config, r ref.Ref, res *resolved, old *store.Manifest, force bool) error {
 	err := insPerform(ctx, st, cfg, res, old, force)
-	if err == nil || res.PrevTag == "" || !errors.Is(err, os.ErrNotExist) {
+	if err == nil || len(res.Tags) == 0 || !errors.Is(err, os.ErrNotExist) {
+		insWarnStale(res, err)
+		return err
+	}
+	fallback, which := res.PrevTag, "the release before it"
+	if t := insForgeLatest(ctx, res); t != "" && t != res.Tag {
+		fallback, which = t, "the release "+insHostLabel(res)+" marks as latest"
+	}
+	if fallback == "" {
 		insWarnStale(res, err)
 		return err
 	}
 	// The wording is read by scripts/index-check.sh to tell "still publishing" from
-	// "renamed"; keep "<name> <tag> is tagged, but its release file" intact.
+	// "renamed"; keep "<name> <tag> is tagged, but its release file" and "Installing <tag>,"
+	// intact.
 	ui.Warn("%s %s is tagged, but its release file is not there. Usually upstream is still publishing it -- "+
-		"tags often go up well before the files do -- though it can also mean the file was renamed. "+
-		"Installing %s, the release before it; `toy update` moves to %s once its files are up",
-		res.Repo, res.Tag, res.PrevTag, res.Tag)
-	r.Version = res.PrevTag
+		"tags often go up well before the files do -- though it can also mean the file was renamed, or that "+
+		"tag is not a release at all. Installing %s, %s; `toy update` moves to a newer release once it has files",
+		res.Repo, res.Tag, fallback, which)
+	r.Version = fallback
 	prev, perr := resolve(ctx, st, cfg, r)
 	if perr != nil {
-		return fmt.Errorf("%w (and the release before it, %s, did not resolve either: %v)", err, res.PrevTag, perr)
+		return fmt.Errorf("%w (and %s, %s, did not resolve either: %v)", err, which, fallback, perr)
 	}
 	if old != nil && old.ID == insPackageID(prev) && old.Tag == prev.Tag {
 		ui.Info("%s is already at %s, nothing to do", old.Name, old.Tag)
@@ -1327,9 +1344,40 @@ func insPerformOrPrevious(ctx context.Context, st *store.Store, cfg store.Config
 	return err
 }
 
-// insWarnStale prints the "this index entry is probably out of date" note when err is
-// the kind of failure it describes. It runs once the fallback has had its chance: a
-// missing file for a release that is merely still being published is not stale.
+// insForgeLatest asks the host's latest-release page which release the author marked
+// as latest. It is a web redirect, not an API (spec §2 holds: versions still come from
+// git ls-remote), and its answer is used only if it is one of res.Tags. "" when the
+// host has no such page or anything about the answer is off.
+func insForgeLatest(ctx context.Context, res *resolved) string {
+	u := res.Host.LatestURL(res.Owner, res.Repo)
+	if u == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	loc, err := fetch.RedirectTarget(ctx, u)
+	if err != nil || loc == "" {
+		return ""
+	}
+	tag := host.TagFromLatest(loc)
+	for _, t := range res.Tags {
+		if t == tag {
+			return t
+		}
+	}
+	return ""
+}
+
+// insHostLabel is how the host is named in a sentence: its web host, else its name.
+func insHostLabel(res *resolved) string {
+	if w := res.Host.WebURL(res.Owner, res.Repo); w != "" {
+		if u, err := url.Parse(w); err == nil && u.Host != "" {
+			return u.Host
+		}
+	}
+	return res.HostName
+}
+
 func insWarnStale(res *resolved, err error) {
 	if note := insStaleEntryNote(res, err); note != "" {
 		ui.Warn("%s", note)

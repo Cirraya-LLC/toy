@@ -38,6 +38,9 @@ type resolved struct {
 	// PrevTag is the release before Tag, set only when Tag was picked rather than
 	// named with --version. It is what to fall back to when Tag's files are not up yet.
 	PrevTag string
+	// Tags is every tag git ls-remote listed, set only when Tag was picked. A forge's
+	// latest-release page is only believed when it names one of them.
+	Tags    []string
 	Toyfile *toyfile.Toyfile
 	Raw     []byte       // the verbatim bytes of toy.toml — what the author's signature covers (see autSignMessage)
 	Entry   *index.Entry // set only when this came through an index, nil otherwise
@@ -339,7 +342,9 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string)
 	// When the version was picked rather than asked for, remember the one before it:
 	// a tag routinely goes up before its release files do (insPerformOrPrevious).
 	prevTag := ""
+	var picked []string
 	if r.Version == "" {
+		picked = tags
 		if p, err := semver.Max(rsvWithout(tags, v.Raw), false, r.Repo); err == nil {
 			prevTag = p.Raw
 		}
@@ -383,6 +388,7 @@ func rsvViaHost(ctx context.Context, cfg store.Config, r ref.Ref, inline string)
 		Tag:      v.Raw,
 		Version:  v,
 		PrevTag:  prevTag,
+		Tags:     picked,
 		Toyfile:  tf,
 		Raw:      raw,
 		Trust:    trust,

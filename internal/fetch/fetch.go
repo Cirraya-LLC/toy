@@ -123,6 +123,39 @@ var client = &http.Client{
 	},
 }
 
+// RedirectTarget makes one request to u and returns where it redirects to, without
+// following it. "" with no error means u answered without a redirect. Only http(s):
+// anything else is "" too. The answer is remote content; callers check it against
+// something they already trust (a forge's latest-release page names a tag, and only a
+// tag git ls-remote listed is used).
+func RedirectTarget(ctx context.Context, u string) (string, error) {
+	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+		return "", nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	c := &http.Client{
+		Transport:     client.Transport,
+		Timeout:       30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("asking %s: %v", redactURL(u), err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return "", nil
+	}
+	loc, err := resp.Location()
+	if err != nil {
+		return "", nil
+	}
+	return loc.String(), nil
+}
+
 // nopSink saves every call site from a nil check when Options.Sink is unset.
 type nopSink struct{}
 

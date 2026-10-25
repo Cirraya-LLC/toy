@@ -357,7 +357,8 @@ while IFS=$'\t' read -r ID SRC; do
     if [ "$(release_state "$SRC" "$newtag")" = renamed ]; then
       fail "entry" "the newest release $newtag has been published for hours, but has no file the entry names — upstream renamed its assets; regenerate this entry"; continue
     fi
-    pending="  [$newtag is tagged but its files are not up yet; checked the release before it]"
+    got=$(sed -n 's/.*Installing \([^ ,]*\),.*/\1/p' "$LOG" | head -n 1)
+    pending="  [$newtag has no release files (still publishing, or not a release); installed ${got:-an earlier release}]"
   fi
 
   # Symlinks: this TOY_HOME is brand new, so everything in bin/ came from the entry we

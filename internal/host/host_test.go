@@ -711,3 +711,29 @@ func TestTagsPropagatesContextError(t *testing.T) {
 		t.Errorf("it timed out but does not say so: %v", err)
 	}
 }
+
+func TestTagFromLatest(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/anomalyco/opencode/releases/tag/v1.19.4": "v1.19.4",
+		"https://codeberg.org/forgejo/forgejo/releases/tag/v17.0.0":  "v17.0.0",
+		"https://gitlab.com/gitlab-org/cli/-/releases/v1.124.0":      "v1.124.0",
+		"https://github.com/BurntSushi/ripgrep/releases/tag/15.2.0":  "15.2.0",
+		"https://github.com/octocat/Hello-World/releases":            "releases", // no release: callers reject it
+		"/a/b/releases/tag/jq-1.8.2/":                                "jq-1.8.2",
+		"::not a url":                                                "",
+	}
+	for in, want := range cases {
+		if got := TagFromLatest(in); got != want {
+			t.Errorf("TagFromLatest(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBuiltinHostsHaveALatestPage(t *testing.T) {
+	for _, name := range []string{"github", "gitlab", "codeberg"} {
+		h, err := Lookup(name, nil)
+		if err != nil || !strings.Contains(h.LatestURL("o", "r"), "/o/r/") {
+			t.Errorf("%s: latest page %q, %v", name, h.LatestURL("o", "r"), err)
+		}
+	}
+}

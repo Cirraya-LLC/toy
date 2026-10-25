@@ -7,6 +7,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **When the newest tag has no release file, toy installs the release the forge marks as
+  latest**, instead of only trying the tag before it. opencode tags a v2 line it
+  publishes elsewhere, and its GitHub releases with binaries are v1.19.x: the one-step
+  fallback reached v2.1.3 and gave up. toy reads the forge's public latest-release page
+  (`/releases/latest` on GitHub, Gitea and Forgejo, `/-/releases/permalink/latest` on
+  GitLab; a new optional `latest` host template) and uses its answer only if it is a
+  tag `git ls-remote` listed. Without one, the old fallback still applies.
+
 - **A universal macOS build is recognized** (`tool-macos-universal.tar.gz`): `toy init`
   and the index generator file it under both `darwin/arm64` and `darwin/amd64`, unless a
   build for one architecture exists, which wins. fastfetch switched to a single universal

@@ -26,6 +26,11 @@ type Host struct {
 	Clone   string `toml:"clone"`   // what git ls-remote gets pointed at
 	Release string `toml:"release"` // release asset download URL
 	Web     string `toml:"web"`     // the repo page a human would open
+	// Latest is the forge's "latest release" page, which redirects to the release the
+	// author marked as latest. Optional. It is only ever consulted when the newest tag
+	// has no release file (insPerformOrPrevious): versions are still discovered with
+	// git ls-remote, and what this page names is only used if it is one of those tags.
+	Latest string `toml:"latest"`
 }
 
 // placeholderOrigin is the domain used by the entries in the built-in table that
@@ -44,6 +49,7 @@ func giteaPaths(origin string) Host {
 		Clone:   origin + "/{owner}/{repo}",
 		Release: origin + "/{owner}/{repo}/releases/download/{tag}/{asset}",
 		Web:     origin + "/{owner}/{repo}",
+		Latest:  origin + "/{owner}/{repo}/releases/latest",
 	}
 }
 
@@ -78,12 +84,14 @@ func Builtin() map[string]Host {
 			Clone:   "https://github.com/{owner}/{repo}",
 			Release: "https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}",
 			Web:     "https://github.com/{owner}/{repo}",
+			Latest:  "https://github.com/{owner}/{repo}/releases/latest",
 		},
 		"gitlab": {
 			Raw:     "https://gitlab.com/{owner}/{repo}/-/raw/{ref}/{path}",
 			Clone:   "https://gitlab.com/{owner}/{repo}",
 			Release: "https://gitlab.com/{owner}/{repo}/-/releases/{tag}/downloads/{asset}",
 			Web:     "https://gitlab.com/{owner}/{repo}",
+			Latest:  "https://gitlab.com/{owner}/{repo}/-/releases/permalink/latest",
 		},
 		"codeberg": giteaPaths("https://codeberg.org"),
 		"gitea":    giteaPaths(placeholderOrigin),
@@ -110,7 +118,8 @@ func selfHostedHint(name string) string {
 	const tmpl = `hosts.%s = { raw = "https://your.host/{owner}/{repo}/raw/tag/{ref}/{path}", ` +
 		`clone = "https://your.host/{owner}/{repo}", ` +
 		`release = "https://your.host/{owner}/{repo}/releases/download/{tag}/{asset}", ` +
-		`web = "https://your.host/{owner}/{repo}" }`
+		`web = "https://your.host/{owner}/{repo}", ` +
+		`latest = "https://your.host/{owner}/{repo}/releases/latest" }`
 	return "Add this line to ~/.toy/config.toml (copy the whole line): " + fmt.Sprintf(tmpl, name)
 }
 
@@ -213,6 +222,28 @@ func (h Host) ReleaseURL(owner, repo, tag, asset string) string {
 
 func (h Host) WebURL(owner, repo string) string {
 	return expand(h.Web, "{owner}", owner, "{repo}", repo)
+}
+
+func (h Host) LatestURL(owner, repo string) string {
+	return expand(h.Latest, "{owner}", owner, "{repo}", repo)
+}
+
+// TagFromLatest reads the tag out of where a latest-release page redirected to: the
+// last path segment on GitHub (/releases/tag/v1.2.3), Gitea and Forgejo (the same) and
+// GitLab (/-/releases/v1.2.3). A repository with no release redirects to /releases,
+// which yields "releases" -- callers only trust an answer that is one of the tags git
+// ls-remote listed.
+func TagFromLatest(location string) string {
+	u, err := url.Parse(location)
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimRight(u.Path, "/")
+	t, err := url.PathUnescape(p[strings.LastIndex(p, "/")+1:])
+	if err != nil {
+		return ""
+	}
+	return t
 }
 
 // —— resolving git to an absolute path ————————————————————————————
