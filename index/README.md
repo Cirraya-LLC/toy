@@ -130,14 +130,20 @@ the run skips -- review and merge (or close) it first. It goes:
 3. **`index-check`** installs, runs and uninstalls each one on Linux and on macOS.
 4. **`toy-index merge`** keeps what passed somewhere and failed nowhere, and the run
    opens a pull request. Its description lists every entry, **flags the command names
-   to look at** (already taken in the index, a common system command, a generic word,
-   two characters or less), and lists popular repos whose licence a person has to read.
+   to look at**, and lists popular repos whose licence a person has to read.
+5. **It merges itself when no name could take another's**: a name already in the index,
+   a common system command or a generic word holds the PR for a person (it says so in a
+   comment); a short name (`gh`, `jc`, `hl` -- what upstream calls them) is shown but holds
+   nothing up. The run waits for the PR's four required checks, merges, and starts the
+   site deploy itself (a merge made with the workflow's token starts no push workflows).
+   An unreviewed PR therefore no longer stops the index from growing.
 
 GitHub holds the checks of a pull request opened by `github-actions[bot]` until a
 maintainer approves them; the discovery run approves its own right after opening it,
 and if that ever fails the PR shows **Approve and run** -- one click. The run that
-opened it is linked at the top, with every index-check log. **Review it like any other**: check out its branch, take out what you do not
-want, push, merge.
+opened it is linked at the top, with every index-check log. **A PR that waits for you**:
+check out its branch, take out what you do not want, push, merge. A merged one can still
+be corrected afterwards with the same commands on a new branch.
 
 ```bash
 go run ./cmd/toy-index decline --reason "a GUI app" owner/repo   # never proposed again

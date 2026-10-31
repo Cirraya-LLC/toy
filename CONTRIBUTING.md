@@ -85,8 +85,8 @@ make index-check ARGS="--only owner/repo"
 ```
 
 Most new entries come from the weekly discovery run, which opens a pull request on
-its own (`index/README.md`, "Automatic discovery"). Reviewing that pull request is the
-same job as reviewing yours. Only repositories with a licence that allows
+its own and merges it when no command name needs a person (`index/README.md`,
+"Automatic discovery"). Reviewing one that waits is the same job as reviewing yours. Only repositories with a licence that allows
 redistribution get in; `index/licenses.txt`, `index/delisted.txt` and
 `index/declined.txt` are the three lists a person keeps.
 
