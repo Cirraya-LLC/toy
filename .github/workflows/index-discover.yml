@@ -8,11 +8,12 @@
 #   gen       entries for them, with --probe: a real archive is unpacked for each
 #   check     index-check on both runners; --results says which installed and ran
 #   merge     passed somewhere and failed nowhere -> into index/toy-index.json
-#   pr        a pull request a person merges
+#   pr        a pull request, merged by this run when no command name needs a person
 #
-# Merging stays a person's click. Every check here is automatic except one: whether the
-# command name an entry puts on PATH is one it should have (a name not on a machine yet
-# can be claimed). The pull request flags the doubtful ones at the top.
+# Every check here is automatic except one: whether the command name an entry puts on
+# PATH is one it should have (a name not on a machine yet can be claimed). A name that
+# could take another's -- already in the index, a common system command, a generic word
+# -- holds the PR for a person; with none of those it merges itself (owner, 2026-10-31).
 name: index-discover
 
 on:
@@ -122,10 +123,11 @@ jobs:
     needs: [generate, check]
     if: needs.generate.outputs.ids != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 120   # most of it is waiting for the PR's own required checks
     permissions:
       contents: write
       pull-requests: write
-      actions: write   # to approve the checks GitHub holds on a bot-opened pull request
+      actions: write   # to approve the PR's held checks, and to start the site deploy
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -140,7 +142,7 @@ jobs:
         run: |
           go run ./cmd/toy-index merge --from out/generated.json \
             --results out/results-ubuntu-latest.tsv,out/results-macos-latest.tsv \
-            --review out/review.txt --report out/pr.md \
+            --review out/review.txt --report out/pr.md --flagged out/flagged.txt \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: open the pull request
@@ -160,8 +162,13 @@ jobs:
           git add index/toy-index.json
           git commit -q -m "index: add $n entries found by discovery"
           git push -q origin "$branch"
-          gh pr create --base main --head "$branch" \
-            --title "index: $n entries found by discovery ($(date -u +%F))" --body-file out/pr.md
+          # The number comes from create's own output, never from a listing: something
+          # else (Dependabot) can open a pull request in between.
+          url=$(gh pr create --base main --head "$branch" \
+            --title "index: $n entries found by discovery ($(date -u +%F))" --body-file out/pr.md)
+          num="${url##*/}"
+          echo "opened #$num"
+          echo "PR_NUMBER=$num" >> "$GITHUB_ENV"
           # GitHub creates the pull request's own checks (ci, index-check) but holds them
           # for a maintainer's approval, because github-actions[bot] opened it. Approve
           # them here; if GitHub refuses, the PR shows "Approve and run" instead.
@@ -171,3 +178,38 @@ jobs:
             gh api -X POST "repos/${{ github.repository }}/actions/runs/$id/approve" \
               || echo "could not approve run $id; approve it on the pull request"
           done
+
+      # The owner's call (2026-10-31): a batch with nothing that could take another
+      # command's name merges itself, so an unreviewed PR no longer stops the index from
+      # growing (one batch at a time). A blocking flag -- a name already in the index, a
+      # common system command, a generic word -- still waits for a person.
+      #
+      # Merged here, synchronously, rather than with GitHub's auto-merge: a merge done
+      # with GITHUB_TOKEN starts no push workflows, so pages.yml would never publish the
+      # index. This job merges, then starts the deploy by hand.
+      - name: merge it, unless a name needs a person
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -n "${PR_NUMBER:-}" ] || exit 0
+          if [ -s out/flagged.txt ]; then
+            gh pr comment "$PR_NUMBER" --body "Not merged automatically: a command name needs a person (see \"Command names to look at\")."
+            echo "flagged, waiting for a person:"; cat out/flagged.txt
+            exit 0
+          fi
+          # The four required checks (main's branch protection) appear once the runs
+          # approved above start; wait for them to exist, then for them to finish.
+          for _ in $(seq 1 60); do
+            have=$(gh pr checks "$PR_NUMBER" --required --json name --jq 'length' 2>/dev/null || echo 0)
+            [ "$have" -ge 4 ] && break
+            sleep 15
+          done
+          if ! gh pr checks "$PR_NUMBER" --required --watch --interval 30; then
+            gh pr comment "$PR_NUMBER" --body "Not merged automatically: a required check failed."
+            exit 1
+          fi
+          gh pr merge "$PR_NUMBER" --rebase
+          gh workflow run pages.yml --ref main
+          echo "merged #$PR_NUMBER and started the site deploy"
+
