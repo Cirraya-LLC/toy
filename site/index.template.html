@@ -1,32 +1,4 @@
-<!doctype html>
-<html lang="{{lang}}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{title}}</title>
-<meta name="description" content="{{desc}}">
-<meta name="color-scheme" content="light dark">
-<link rel="stylesheet" href="{{a}}style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🧸</text></svg>">
-{{hreflang}}
-</head>
-<body data-i18n="{{jsdata}}">
-<a class="skip" href="#main">{{skip}}</a>
-
-<header class="topbar">
-  <div class="wrap bar">
-    <a class="brand" href="/">toy</a>
-    <nav aria-label="{{nav_label}}">
-      <a href="#why">{{nav_why}}</a>
-      <a href="#packages">{{nav_packages}}</a>
-      <a href="#trust">{{nav_trust}}</a>
-      <a href="#install">{{nav_install}}</a>
-      <a href="https://github.com/Cirraya-LLC/toy">{{nav_source}}</a>
-    </nav>
-    {{langnav}}
-  </div>
-</header>
-
+{{>head}}
 <main id="main">
 
 <section class="hero wrap">
@@ -81,17 +53,8 @@ tinyserve = "tinyserve"
   <p class="lede">{{pkg_lede_html}}</p>
   <pre class="cmd"><code>toy index add default https://toy.cirraya.com/index.json</code><button class="copy" aria-label="{{pkg_copy_aria}}">{{js_copy}}</button></pre>
 
-  <div class="pkg-toolbar">
-    <label class="sr-only" for="q">{{pkg_filter_label}}</label>
-    <input id="q" type="search" placeholder="{{pkg_filter_ph}}" autocomplete="off" spellcheck="false">
-    <span id="count" class="fine" aria-live="polite"></span>
-  </div>
-
-  <div id="packages-out">
-    <noscript>
-      <p class="fallback">{{pkg_noscript_html}}</p>
-    </noscript>
-  </div>
+  {{pkgtop}}
+  <p class="pkg-all"><a href="{{pkgs}}">{{pkg_all}}</a></p>
 
   <p class="fine">{{pkg_inline_fine_html}}</p>
 </section>
@@ -163,16 +126,4 @@ toy doctor</code><button class="copy" aria-label="{{inst_after_aria}}">{{js_copy
 
 </main>
 
-<footer class="wrap">
-  <p>
-    MIT ·
-    <a href="https://github.com/Cirraya-LLC/toy">GitHub</a> ·
-    <a href="https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md">{{foot_security}}</a> ·
-    <a href="/index.json">index.json</a>
-  </p>
-  <p class="fine">{{foot_fine}}</p>
-</footer>
-
-<script src="{{a}}app.js" defer></script>
-</body>
-</html>
+{{>foot}}

@@ -1,6 +1,5 @@
 {
   "_note": "一份内容，三种语言。key 以 _html 结尾的值原样插入 HTML（那是我们自己写的可信内容），其余一律转义。改文案的规矩见 site/README.md。",
-
   "lang": {
     "zh-Hans": "zh-Hans",
     "zh-Hant": "zh-Hant",
@@ -16,16 +15,46 @@
     "zh-Hant": "toy 安裝那些沒人幫你打包的小工具。安裝過程不執行任何一行指令碼：沒有 install、postinstall、build、hook。發布只要 8 行 toml，不必求任何人批准。",
     "en": "toy installs the small tools nobody packaged for you. Nothing runs at install time: no install, postinstall, build or hook scripts. Publishing takes 8 lines of TOML and nobody's approval."
   },
-
-  "skip": { "zh-Hans": "跳到正文", "zh-Hant": "跳至內文", "en": "Skip to content" },
-  "nav_label": { "zh-Hans": "站内导航", "zh-Hant": "站內導覽", "en": "Site navigation" },
-  "nav_why": { "zh-Hans": "为什么", "zh-Hant": "為什麼", "en": "Why" },
-  "nav_packages": { "zh-Hans": "包", "zh-Hant": "套件", "en": "Packages" },
-  "nav_trust": { "zh-Hans": "信任", "zh-Hant": "信任", "en": "Trust" },
-  "nav_install": { "zh-Hans": "装 toy", "zh-Hant": "安裝 toy", "en": "Get toy" },
-  "nav_source": { "zh-Hans": "源码", "zh-Hant": "原始碼", "en": "Source" },
-  "langnav_label": { "zh-Hans": "切换语言", "zh-Hant": "切換語言", "en": "Change language" },
-
+  "skip": {
+    "zh-Hans": "跳到正文",
+    "zh-Hant": "跳至內文",
+    "en": "Skip to content"
+  },
+  "nav_label": {
+    "zh-Hans": "站内导航",
+    "zh-Hant": "站內導覽",
+    "en": "Site navigation"
+  },
+  "nav_why": {
+    "zh-Hans": "为什么",
+    "zh-Hant": "為什麼",
+    "en": "Why"
+  },
+  "nav_packages": {
+    "zh-Hans": "包",
+    "zh-Hant": "套件",
+    "en": "Packages"
+  },
+  "nav_trust": {
+    "zh-Hans": "信任",
+    "zh-Hant": "信任",
+    "en": "Trust"
+  },
+  "nav_install": {
+    "zh-Hans": "装 toy",
+    "zh-Hant": "安裝 toy",
+    "en": "Get toy"
+  },
+  "nav_source": {
+    "zh-Hans": "源码",
+    "zh-Hant": "原始碼",
+    "en": "Source"
+  },
+  "langnav_label": {
+    "zh-Hans": "切换语言",
+    "zh-Hant": "切換語言",
+    "en": "Change language"
+  },
   "h1_html": {
     "zh-Hans": "装那些没人给你打包的小工具。<br><em>装的时候一行脚本都不跑。</em>",
     "zh-Hant": "安裝那些沒人幫你打包的小工具。<br><em>安裝過程不執行任何一行指令碼。</em>",
@@ -36,8 +65,11 @@
     "zh-Hant": "沒有 install、沒有 postinstall、沒有 build、沒有 hook，一個都沒有。toy 只會下載、驗雜湊、解壓縮、建立符號連結。",
     "en": "No install, postinstall, build or hook scripts. Not disabled by default &mdash; they have no representation in the code at all. toy downloads, checks the hash, unpacks, and symlinks. That is the whole install path."
   },
-
-  "fig_install": { "zh-Hans": "装一个", "zh-Hant": "安裝一個", "en": "Install one" },
+  "fig_install": {
+    "zh-Hans": "装一个",
+    "zh-Hant": "安裝一個",
+    "en": "Install one"
+  },
   "fig_publish_html": {
     "zh-Hans": "发一个 —— 仓库根上放 8 行 <code>toy.toml</code>，打个 tag，完事",
     "zh-Hant": "發布一個 —— 在儲存庫根目錄放 8 行 <code>toy.toml</code>，打個 tag，就這樣",
@@ -53,9 +85,11 @@
     "zh-Hant": "沒有 URL、沒有版本號、沒有代管方名稱 —— 所以下次發版這個檔案一個字都不用改。已經在用 goreleaser 的話連寫都不用寫：<code>toy init</code> 讀 <code>./dist</code> 裡的檔名反推出來。",
     "en": "No URLs, no version numbers, no forge name &mdash; so your next release needs zero edits to this file. Already using goreleaser? Don't even write it: <code>toy init</code> reads the asset filenames in <code>./dist</code> and infers the whole thing."
   },
-
-  "why_h2": { "zh-Hans": "三件事", "zh-Hant": "三件事", "en": "Three things" },
-
+  "why_h2": {
+    "zh-Hans": "三件事",
+    "zh-Hant": "三件事",
+    "en": "Three things"
+  },
   "why1_h3": {
     "zh-Hans": "一、装的时候不跑任何代码",
     "zh-Hant": "一、安裝時不執行任何程式碼",
@@ -71,7 +105,6 @@
     "zh-Hant": "邊界也說清楚：<strong>「安裝時不執行」不等於「這個套件永遠拿不到執行機會」。</strong>一個套件宣告 <code>[bin] git = \"payload\"</code>，裝完 <code>~/.toy/bin/git</code> 就在 PATH 上，而 toy 自己靠 <code>git ls-remote</code> 找版本。所以 <code>git</code> 是保留名稱，<strong>無條件拒絕，連 <code>--force</code> 也不放行</strong> —— 全專案唯一一條這樣的檢查。",
     "en": "Where the line actually is: <strong>&ldquo;nothing runs at install&rdquo; is not &ldquo;this package never gets to execute&rdquo;.</strong> A package declaring <code>[bin] git = \"payload\"</code> puts <code>~/.toy/bin/git</code> on your PATH &mdash; and toy discovers versions by shelling out to <code>git ls-remote</code>. So <code>git</code> is a reserved link name, <strong>refused unconditionally, not even <code>--force</code> gets past it</strong>. It is the only check in the project that <code>--force</code> cannot override."
   },
-
   "why2_h3": {
     "zh-Hans": "二、8 行 toml，零审批",
     "zh-Hant": "二、8 行 toml，零審批",
@@ -82,7 +115,6 @@
     "zh-Hant": "不必註冊、不必等審核、不必求任何人。打個 tag 發個 release，別人就能 <code>toy install github:你的帳號/你的工具</code>。想被搜尋到再把一行條目提進索引，跑一次 <code>toy keygen</code> 就能替自己的條目簽章 —— <strong>這兩步都是可選的</strong>。強制簽章 = 強制註冊 = 又一道門檻。",
     "en": "No registration, no review queue, nobody to ask. Push a tag, cut a release, and anyone can run <code>toy install github:you/your-tool</code>. Want to be searchable? Send one line to an index. Want a signature? Run <code>toy keygen</code>. <strong>Both are optional.</strong> Mandatory signing is mandatory registration wearing a security badge."
   },
-
   "why3_h3": {
     "zh-Hans": "三、下架无害，索引可自建",
     "zh-Hant": "三、下架無害，索引可自建",
@@ -98,8 +130,11 @@
     "zh-Hant": "所以維護者要求下架就下架，不問理由：既然代價這麼低，就沒有任何理由跟人爭。",
     "en": "Which is why a maintainer who asks to be delisted gets delisted, no questions. When the cost is this low there is nothing worth arguing about."
   },
-
-  "pkg_h2": { "zh-Hans": "索引里现在有什么", "zh-Hant": "索引裡現在有什麼", "en": "What's in the index" },
+  "pkg_h2": {
+    "zh-Hans": "索引里现在有什么",
+    "zh-Hant": "索引裡現在有什麼",
+    "en": "What's in the index"
+  },
   "pkg_lede_html": {
     "zh-Hans": "这份索引就挂在 <a href=\"/index.json\"><code>/index.json</code></a>，客户端整份下载后本地搜索。toy 装好就带着它（名字叫 <code>default</code>），<code>toy search</code> 直接就能搜。toy 0.1.0 写出来的配置里没有它，补上：",
     "zh-Hant": "這份索引就掛在 <a href=\"/index.json\"><code>/index.json</code></a>，用戶端整份下載後在本機搜尋。toy 裝好就帶著它（名稱是 <code>default</code>），<code>toy search</code> 直接就能搜。toy 0.1.0 寫出來的設定裡沒有它，補上：",
@@ -110,23 +145,21 @@
     "zh-Hant": "複製 toy index add 指令",
     "en": "Copy the toy index add command"
   },
-  "pkg_filter_label": { "zh-Hans": "过滤包", "zh-Hant": "篩選套件", "en": "Filter packages" },
+  "pkg_filter_label": {
+    "zh-Hans": "过滤包",
+    "zh-Hant": "篩選套件",
+    "en": "Filter packages"
+  },
   "pkg_filter_ph": {
     "zh-Hans": "过滤：名字、描述、命令名…",
     "zh-Hant": "篩選：名稱、描述、指令名稱…",
     "en": "Filter: name, description, command…"
   },
-  "pkg_noscript_html": {
-    "zh-Hans": "这一块要 JavaScript 才能渲染 —— 索引本身是一个静态 JSON，<a href=\"/index.json\">直接看 /index.json</a> 是一样的。",
-    "zh-Hant": "這一塊要 JavaScript 才能算繪 —— 索引本身就是一份靜態 JSON，<a href=\"/index.json\">直接看 /index.json</a> 是一樣的。",
-    "en": "This list needs JavaScript to render. The index is a plain static JSON file, so <a href=\"/index.json\">reading /index.json directly</a> gets you exactly the same thing."
-  },
   "pkg_inline_fine_html": {
-    "zh-Hans": "<strong>这里每一条都是内联条目。</strong>装出来是第三档信任等级（<code>index-toyfile</code>）：二进制取自作者自己的 release（下载地址由托管方模板 + tag 拼出来，索引说了不算），但<strong>装哪个资产、软链成什么命令名由索引提供 —— 作者本人没写过 toy.toml</strong>，多半也不知道我们收录了他。收录只说明「这个包装得上」，不说明我们审计过它的代码，也不说明作者和我们有任何关系。安装时客户端会如实打印这一档。",
-    "zh-Hant": "<strong>這裡每一條都是內嵌條目。</strong>裝出來是第三檔信任等級（<code>index-toyfile</code>）：二進位檔取自作者自己的 release（下載位址由代管方樣板 + tag 拼出來，索引說了不算），但<strong>要裝哪個檔案、符號連結取什麼指令名稱是由索引提供 —— 作者本人沒寫過 toy.toml</strong>，多半也不知道我們收錄了他。收錄只代表「這個套件裝得起來」，不代表我們稽核過它的程式碼，也不代表作者和我們有任何關係。安裝時用戶端會如實印出這一檔。",
-    "en": "<strong>Every entry below is an inline entry.</strong> It installs at the third trust level (<code>index-toyfile</code>): the binary comes from the author's own release &mdash; the download URL is built from the forge template plus the tag, and the index has no say in it &mdash; but <strong>which asset gets installed and what the command is called comes from the index. The author never wrote a toy.toml</strong> and most likely doesn't know we listed them. Listing means &ldquo;this installs cleanly&rdquo;. It does not mean we audited the code, and it does not imply any relationship between the author and us. The client prints this level honestly at install time."
+    "en": "<strong>Entries marked ⚠ are inline entries.</strong> They install at the third trust level (<code>index-toyfile</code>): the binary comes from the author's own release &mdash; the download URL is built from the forge template plus the tag, and the index has no say in it &mdash; but <strong>which asset gets installed and what the command is called comes from the index, because the author never wrote a toy.toml</strong> and most likely doesn't know the project is listed. Listing means &ldquo;this installs cleanly&rdquo;. It does not mean we audited the code, and it does not imply any relationship between the author and us. The client prints the level honestly at install time.",
+    "zh-Hans": "<strong>标着 ⚠ 的是内联条目。</strong>装出来是第三档信任等级（<code>index-toyfile</code>）：二进制取自作者自己的 release（下载地址由托管方模板 + tag 拼出来，索引说了不算），但<strong>装哪个资产、软链成什么命令名由索引提供 —— 因为作者没写过 toy.toml</strong>，多半也不知道这个项目被收录了。收录只说明「这个包装得上」，不说明我们审计过它的代码，也不说明作者和我们有任何关系。安装时客户端会如实打印这一档。",
+    "zh-Hant": "<strong>標著 ⚠ 的是內嵌條目。</strong>裝出來是第三檔信任等級（<code>index-toyfile</code>）：二進位檔取自作者自己的 release（下載位址由代管方樣板 + tag 拼出來，索引說了不算），但<strong>要裝哪個檔案、符號連結取什麼指令名稱是由索引提供 —— 因為作者沒寫過 toy.toml</strong>，多半也不知道這個專案被收錄了。收錄只代表「這個套件裝得起來」，不代表我們稽核過它的程式碼，也不代表作者和我們有任何關係。安裝時用戶端會如實印出這一檔。"
   },
-
   "trust_h2": {
     "zh-Hans": "你在信任谁，toy 会告诉你",
     "zh-Hant": "你在信任誰，toy 會告訴你",
@@ -147,13 +180,16 @@
     "zh-Hant": "安裝完成那一行",
     "en": "What the install prints"
   },
-  "th2": { "zh-Hans": "你信的是", "zh-Hant": "你信的是", "en": "What you're trusting" },
+  "th2": {
+    "zh-Hans": "你信的是",
+    "zh-Hant": "你信的是",
+    "en": "What you're trusting"
+  },
   "th3": {
     "zh-Hans": "它证明不了什么",
     "zh-Hant": "它證明不了什麼",
     "en": "What it does not prove"
   },
-
   "t1_who_html": {
     "zh-Hans": "索引里登记的那把 ed25519 公钥",
     "zh-Hant": "索引裡登記的那把 ed25519 公開金鑰",
@@ -164,7 +200,6 @@
     "zh-Hant": "<strong>不證明是儲存庫主人簽的。</strong>簽章訊息是 <code>id + source + toy.toml 原文</code>，三樣都公開可讀，<strong>裡面沒有一個位元組把這把公開金鑰和儲存庫的 owner 綁在一起</strong>。索引誰都能 fork、誰都能提 PR，抄一把公開金鑰零成本 —— 有人完全可以 fork 一份、用自己的金鑰替同一個 <code>id</code> 重簽一條、把 <code>source</code> 指向自己的儲存庫。它保證的是<strong>連續性</strong>（公開金鑰首次安裝即釘住，換了就拒絕安裝），不是身分。<strong>第一次安裝該看的是 <code>source</code> 指向哪裡，不是有沒有那個勾。</strong>",
     "en": "<strong>It does not prove the repo owner signed it.</strong> The signed message is <code>id + source + the toy.toml text</code>. All three are public, and <strong>not one byte of it binds that key to the repo's owner</strong>. Anyone can fork the index and open a PR; copying a public key costs nothing. Someone can fork it, re-sign the same <code>id</code> with their own key, and point <code>source</code> at their own repo. What the check buys you is <strong>continuity</strong> &mdash; the key is pinned on first install and a swap is refused &mdash; not identity. <strong>On a first install, read <code>source</code>. Not the checkmark.</strong>"
   },
-
   "t2_who_html": {
     "zh-Hans": "托管方的账号体系：GitHub 说这个仓库属于这个账号，TLS 说你连到的是 GitHub",
     "zh-Hant": "代管方的帳號體系：GitHub 說這個儲存庫屬於這個帳號，TLS 說你連到的是 GitHub",
@@ -175,7 +210,6 @@
     "zh-Hant": "沒有作者簽章，也不需要 —— 這是絕大多數套件的預設狀態，而且它是一個誠實的狀態，不是一種降級。",
     "en": "No author signature, and none is needed. This is the default state for almost every package, and it is an honest state rather than a downgrade."
   },
-
   "t3_who_html": {
     "zh-Hans": "字节是作者的，打包说明不是",
     "zh-Hant": "位元組是作者的，打包說明不是",
@@ -186,7 +220,6 @@
     "zh-Hant": "作者沒寫過 <code>toy.toml</code>，索引條目裡內嵌了一份。索引能改的是「裝哪個檔案、符號連結取什麼指令名稱」，改不了下載位址。<strong>內嵌的 toyfile 永遠到不了那個勾</strong> —— 簽章的人是提交索引紀錄的人，不是作者。",
     "en": "The author never wrote a <code>toy.toml</code>; the index entry inlines one. What the index can change is which asset gets installed and what the command is called &mdash; not the download URL. <strong>An inlined toyfile can never reach the checkmark</strong>, because the signer is whoever submitted the index record, not the author."
   },
-
   "t4_who_html": {
     "zh-Hans": "裸 URL：<strong>你什么都没信</strong>",
     "zh-Hant": "裸 URL：<strong>你什麼都沒信</strong>",
@@ -197,14 +230,16 @@
     "zh-Hant": "但內容變了會被攔下來。TOFU 的第一次就是無條件信任 —— 第一次裝到的如果本來就是壞的，toy 會忠實地把它釘住。",
     "en": "A later change to the bytes will be caught. But the first use in trust-on-first-use is unconditional: if what you got the first time was already malicious, toy will faithfully pin it."
   },
-
   "trust_fine_html": {
     "zh-Hans": "有 <code>[sha256]</code> 就强制校验，没有则首次安装钉住，之后变了拒绝安装（模型抄的是 SSH 的 <code>known_hosts</code>）。<code>--reinstall</code> 和 <code>--force</code> 是两件事：前者只是「我知道已经装了这一版，再装一次」，<strong>不放行任何安全检查</strong>；后者才是「我看过了，接受这些变化」，而且会逐条打印自己放行了什么。完整的威胁模型 —— 包括 <strong>toy 不防的那一栏</strong> —— 在 <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>。<span class=\"fine\">上表左栏是客户端实际打印的原文（英文）；右边两栏是说明，不是输出。</span>",
     "zh-Hant": "有 <code>[sha256]</code> 就強制驗證，沒有則首次安裝釘住，之後變了就拒絕安裝（模型抄的是 SSH 的 <code>known_hosts</code>）。<code>--reinstall</code> 和 <code>--force</code> 是兩回事：前者只是「我知道已經裝過這一版，再裝一次」，<strong>不放行任何安全檢查</strong>；後者才是「我看過了，接受這些變化」，而且會逐條印出自己放行了什麼。完整的威脅模型 —— 包括 <strong>toy 不防的那一欄</strong> —— 在 <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>。<span class=\"fine\">上表左欄是用戶端實際印出的原文（英文）；右邊兩欄是說明，不是輸出。</span>",
     "en": "With a <code>[sha256]</code> block the hash is enforced; without one it is pinned on first install and a later change is refused &mdash; the model is SSH's <code>known_hosts</code>, deliberately not something new. <code>--reinstall</code> and <code>--force</code> are different things: the first only means &ldquo;I know this version is installed, do it again&rdquo; and <strong>waives no security check at all</strong>; the second means &ldquo;I looked, I accept these changes&rdquo;, and it prints every check it waived. The full threat model &mdash; including <strong>the column of things toy does not defend against</strong> &mdash; is in <a href=\"https://github.com/Cirraya-LLC/toy/blob/main/SECURITY.md\">SECURITY.md</a>. <span class=\"fine\">The left column above is the literal string the client prints; the other two columns are commentary, not output.</span>"
   },
-
-  "inst_h2": { "zh-Hans": "装 toy 自己", "zh-Hant": "安裝 toy 本身", "en": "Installing toy itself" },
+  "inst_h2": {
+    "zh-Hans": "装 toy 自己",
+    "zh-Hant": "安裝 toy 本身",
+    "en": "Installing toy itself"
+  },
   "inst_lede_html": {
     "zh-Hans": "先把话说在前面：<strong>第一个包管理器总得靠别的方式装。</strong>toy 存在的理由是让你不必 <code>curl | bash</code>，而它自己没法用 toy 装 —— 这个循环没有出路，凡是说自己解决了的都是把它挪了个地方。所以下面两种方式都不完美，区别只在于<strong>你在信谁</strong>。",
     "zh-Hant": "先把話說在前面：<strong>第一個套件管理器總得靠別的方式安裝。</strong>toy 存在的理由是讓你不必 <code>curl | bash</code>，而它自己沒辦法用 toy 安裝 —— 這個循環沒有出路，凡是宣稱自己解決了的，都只是把它搬了個地方。所以下面兩種方式都不完美，差別只在於<strong>你在信誰</strong>。",
@@ -250,7 +285,11 @@
     "zh-Hant": "<strong>這裡不會有 <code>curl | bash</code> 安裝指令碼。</strong>那正是這個專案要反對的東西 —— 把整台機器交給一份沒人看過的指令碼。",
     "en": "<strong>There is no <code>curl | bash</code> installer here, and there will not be one.</strong> Handing your whole machine to a script nobody read is precisely the thing this project exists to argue against."
   },
-  "inst_after_h3": { "zh-Hans": "装完之后", "zh-Hant": "裝完之後", "en": "After installing" },
+  "inst_after_h3": {
+    "zh-Hans": "装完之后",
+    "zh-Hant": "裝完之後",
+    "en": "After installing"
+  },
   "inst_after_comment": {
     "zh-Hans": "写进 ~/.bashrc / ~/.zshrc",
     "zh-Hant": "寫進 ~/.bashrc / ~/.zshrc",
@@ -266,8 +305,11 @@
     "zh-Hant": "toy 裝好就帶著本站的索引，所以 <code>toy search</code> 馬上能用，<code>toy doctor</code> 也會檢查它連不連得上。要是 doctor 說「no index configured」（toy 0.1.0 寫的設定就是這樣），沒有壞掉，它會給出加上的那一行。沒有索引也從來不影響安裝：<code>toy install github:owner/repo</code> 那條路本來就不經過索引。",
     "en": "toy comes configured with the index on this site, so <code>toy search</code> works right away and <code>toy doctor</code> checks it is reachable. If doctor says &ldquo;no index configured&rdquo; (a config written by toy 0.1.0), nothing is broken &mdash; it prints the line that adds it. And no index never meant no installs: <code>toy install github:owner/repo</code> does not go through one."
   },
-
-  "arch_h2": { "zh-Hans": "底下的架构", "zh-Hant": "底下的架構", "en": "How it's put together" },
+  "arch_h2": {
+    "zh-Hans": "底下的架构",
+    "zh-Hant": "底下的架構",
+    "en": "How it's put together"
+  },
   "arch_p1_html": {
     "zh-Hans": "<strong>索引是去中心化的，这是架构不是卖点。</strong>它就是一个 JSON 文件，客户端整份下载后本地搜索；里面只存指针，<code>source</code> 那个 git 地址永远是真相。删一条只是不再被搜到，fork 一份就是一个平行索引。<span class=\"fine\">（把「去中心化」当宣传语的 Entropic —— npm 前 CTO 2019 年在 JSConf EU 发布 —— 10 个月后归档了。所以我们只讲上面那两件事。）</span>",
     "zh-Hant": "<strong>索引是去中心化的，這是架構不是賣點。</strong>它就是一份 JSON 檔案，用戶端整份下載後在本機搜尋；裡面只存指標，<code>source</code> 那個 git 位址永遠是真相。刪一條只是不再被搜尋到，fork 一份就是一個平行索引。<span class=\"fine\">（把「去中心化」當宣傳語的 Entropic —— npm 前 CTO 於 2019 年在 JSConf EU 發表 —— 10 個月後就封存了。所以我們只講上面那兩件事。）</span>",
@@ -288,18 +330,36 @@
     "zh-Hant": "不做的事：不從原始碼建置、不做套件相依、不做 P2P/DHT、不做 Windows（暫時）。套件與套件之間沒有相依關係 —— 每個 toy 都是一個自包含的二進位檔或單一指令碼檔，所以不存在「我審了直接相依，但它的第 47 個間接相依被下毒了」這回事。",
     "en": "Deliberately absent: no building from source, no inter-package dependencies, no P2P/DHT, no Windows (for now). Each toy is a self-contained binary or a single script file, so there is no such thing as &ldquo;I reviewed my direct dependencies, and their 47th transitive dependency was poisoned&rdquo;."
   },
-
-  "foot_security": { "zh-Hans": "安全说明", "zh-Hant": "安全說明", "en": "Security" },
+  "foot_security": {
+    "zh-Hans": "安全说明",
+    "zh-Hant": "安全說明",
+    "en": "Security"
+  },
   "foot_fine": {
     "zh-Hans": "这个站是 HTML + CSS + 一个 app.js；三种语言由一份模板加一份 i18n.json 在构建时生成（python3，几十行）。没有 npm、没有框架、没有字体 CDN、没有第三方请求。",
     "zh-Hant": "這個站是 HTML + CSS 加一支 app.js；三種語言由一份樣板加一份 i18n.json 在建置時產生（python3，幾十行）。沒有 npm、沒有框架、沒有字型 CDN、沒有第三方請求。",
     "en": "This site is HTML, CSS and one app.js. The three languages are generated at build time from one template plus one i18n.json (a few dozen lines of python3). No npm, no framework, no font CDN, no third-party requests."
   },
-
-  "js_copy": { "zh-Hans": "复制", "zh-Hant": "複製", "en": "Copy" },
-  "js_copied": { "zh-Hans": "已复制", "zh-Hant": "已複製", "en": "Copied" },
-  "js_copy_failed": { "zh-Hans": "复制失败", "zh-Hant": "複製失敗", "en": "Copy failed" },
-  "js_copy_aria": { "zh-Hans": "复制 ", "zh-Hant": "複製 ", "en": "Copy " },
+  "js_copy": {
+    "zh-Hans": "复制",
+    "zh-Hant": "複製",
+    "en": "Copy"
+  },
+  "js_copied": {
+    "zh-Hans": "已复制",
+    "zh-Hant": "已複製",
+    "en": "Copied"
+  },
+  "js_copy_failed": {
+    "zh-Hans": "复制失败",
+    "zh-Hant": "複製失敗",
+    "en": "Copy failed"
+  },
+  "js_copy_aria": {
+    "zh-Hans": "复制 ",
+    "zh-Hant": "複製 ",
+    "en": "Copy "
+  },
   "js_inline_tag": {
     "zh-Hans": "⚠ 打包说明来自索引",
     "zh-Hant": "⚠ 打包說明來自索引",
@@ -310,18 +370,94 @@
     "zh-Hant": "內嵌條目：二進位檔取自作者的 release，但要裝哪個檔案、指令叫什麼名字是由索引提供，作者本人沒寫過 toy.toml。裝出來是第三檔信任等級（index-toyfile）。",
     "en": "Inline entry: the binary comes from the author's own release, but which asset to install and what to call the command comes from the index. The author never wrote a toy.toml. Installs at the third trust level (index-toyfile)."
   },
-  "js_count_all": { "zh-Hans": "{n} 个包", "zh-Hant": "{n} 個套件", "en": "{n} packages" },
-  "js_count_some": { "zh-Hans": "{n} / {all}", "zh-Hant": "{n} / {all}", "en": "{n} / {all}" },
-  "js_none": { "zh-Hans": "没有匹配的包。", "zh-Hant": "沒有相符的套件。", "en": "No packages match." },
-  "js_err": {
-    "zh-Hans": "索引没拉到（{msg}）。它就是一个静态 JSON，",
-    "zh-Hant": "索引沒抓到（{msg}）。它就是一份靜態 JSON，",
-    "en": "Couldn't load the index ({msg}). It's a plain static JSON file, so "
+  "js_count_all": {
+    "zh-Hans": "{n} 个包",
+    "zh-Hant": "{n} 個套件",
+    "en": "{n} packages"
   },
-  "js_err_link": {
-    "zh-Hans": "直接看 /index.json",
-    "zh-Hant": "直接看 /index.json",
-    "en": "read /index.json directly"
+  "js_count_some": {
+    "zh-Hans": "{n} / {all}",
+    "zh-Hant": "{n} / {all}",
+    "en": "{n} / {all}"
   },
-  "js_err_tail": { "zh-Hans": "。", "zh-Hant": "。", "en": "." }
+  "js_none": {
+    "zh-Hans": "没有匹配的包。",
+    "zh-Hant": "沒有相符的套件。",
+    "en": "No packages match."
+  },
+  "pkgs_title": {
+    "en": "All {n} packages · toy",
+    "zh-Hans": "全部 {n} 个包 · toy",
+    "zh-Hant": "全部 {n} 個套件 · toy"
+  },
+  "pkgs_desc": {
+    "en": "Every one of the {n} command-line tools in toy's index: what each installs, on which platforms, under which licence, and the one command that installs it. No install scripts run, ever.",
+    "zh-Hans": "toy 索引里全部 {n} 个命令行工具：每个装的是什么、支持哪些平台、什么许可证，以及装它的那一条命令。安装时从不执行任何脚本。",
+    "zh-Hant": "toy 索引中全部 {n} 個命令列工具：每個裝的是什麼、支援哪些平台、什麼授權，以及安裝它的那一行指令。安裝時從不執行任何指令碼。"
+  },
+  "pkgs_h1": {
+    "en": "Every package in the index",
+    "zh-Hans": "索引里的全部包",
+    "zh-Hant": "索引中的全部套件"
+  },
+  "pkgs_lede_html": {
+    "en": "These are the {n} tools in the index toy comes configured with &mdash; <code>toy search</code> reads exactly this list, and <a href=\"/index.json\">/index.json</a> is the same data as a file. Each one installs from its author's own release. A <span class=\"tag-inline\">⚠</span> marks packaging the index wrote because the author has no <code>toy.toml</code>; the rest point at the author's own.",
+    "zh-Hans": "这是 toy 默认带着的索引里的全部 {n} 个工具 &mdash;&mdash; <code>toy search</code> 搜的就是这份清单，<a href=\"/index.json\">/index.json</a> 是同一份数据的文件形式。每个都从作者自己的 release 安装。标着 <span class=\"tag-inline\">⚠</span> 的，是作者没写 <code>toy.toml</code>、由索引代写的打包说明；其余的指向作者自己的那份。",
+    "zh-Hant": "這是 toy 預設帶著的索引中的全部 {n} 個工具 &mdash;&mdash; <code>toy search</code> 搜尋的就是這份清單，<a href=\"/index.json\">/index.json</a> 是同一份資料的檔案形式。每個都從作者自己的 release 安裝。標著 <span class=\"tag-inline\">⚠</span> 的，是作者沒寫 <code>toy.toml</code>、由索引代寫的打包說明；其餘的指向作者自己的那份。"
+  },
+  "pkgs_os_label": {
+    "en": "Platform",
+    "zh-Hans": "平台",
+    "zh-Hant": "平台"
+  },
+  "pkgs_os_all": {
+    "en": "All platforms",
+    "zh-Hans": "全部平台",
+    "zh-Hant": "全部平台"
+  },
+  "pkgs_os_linux": {
+    "en": "Linux",
+    "zh-Hans": "Linux",
+    "zh-Hant": "Linux"
+  },
+  "pkgs_os_macos": {
+    "en": "macOS",
+    "zh-Hans": "macOS",
+    "zh-Hant": "macOS"
+  },
+  "pkgs_os_unknown": {
+    "en": "platforms: in its toy.toml",
+    "zh-Hans": "平台：见它的 toy.toml",
+    "zh-Hant": "平台：見它的 toy.toml"
+  },
+  "pkgs_sort_label": {
+    "en": "Sort",
+    "zh-Hans": "排序",
+    "zh-Hant": "排序"
+  },
+  "pkgs_sort_stars": {
+    "en": "Most stars",
+    "zh-Hans": "星数最多",
+    "zh-Hant": "星數最多"
+  },
+  "pkgs_sort_name": {
+    "en": "Name A–Z",
+    "zh-Hans": "按名字",
+    "zh-Hant": "依名稱"
+  },
+  "pkgs_own_tag": {
+    "en": "author's toy.toml",
+    "zh-Hans": "作者自己的 toy.toml",
+    "zh-Hant": "作者自己的 toy.toml"
+  },
+  "pkgs_own_title": {
+    "en": "The author ships their own toy.toml; the index only points at the repository. Installs at the host trust level.",
+    "zh-Hans": "作者自己提供了 toy.toml，索引只指向这个仓库。装出来是托管方这一档信任等级。",
+    "zh-Hant": "作者自己提供了 toy.toml，索引只指向這個儲存庫。裝出來是代管方這一檔信任等級。"
+  },
+  "pkg_all_link": {
+    "en": "Browse all {n} packages →",
+    "zh-Hans": "查看全部 {n} 个包 →",
+    "zh-Hant": "查看全部 {n} 個套件 →"
+  }
 }

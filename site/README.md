@@ -6,8 +6,12 @@ The entire build step is one python3 heredoc (inside `scripts/build-site.sh`).
 It does two things, and **the first one is a feature, not decoration**:
 
 1. **Hosts the index** — `/index.json` is the address the client actually fetches
-2. **Landing page + package browsing** — discovery is this product's differentiator,
-   and that section reads the same `/index.json` at runtime
+2. **Landing page + every package** — discovery is this product's differentiator. The
+   home page shows the twelve most-starred and links to `/packages/`, which lists all of
+   them with search, a platform filter and sorting. Both are **written at build time
+   from `site/index.json`** — the bytes the same build copies, checks and publishes — so
+   the list cannot drift from the index, works without JavaScript, and search engines
+   see every package name. `app.js` only filters and sorts what is already there
 
 Three languages: `en` (site root) / `zh-Hans` (`/zh-Hans/`) / `zh-Hant` (`/zh-Hant/`).
 
@@ -19,7 +23,7 @@ Live at **https://toy.cirraya.com** (GitHub Pages).
 
 `.github/workflows/pages.yml` does it on every push to `main` that touches `site/`, the
 index, or the build script: it runs `scripts/build-site.sh`, drops the sources
-(`README.md`, `index.template.html`, `i18n.json`) and publishes the rest to GitHub Pages.
+(`README.md`, the two templates, `partials/`, `i18n.json`) and publishes the rest to GitHub Pages.
 The repository's Pages source is "GitHub Actions" and its custom domain is
 `toy.cirraya.com`, a DNS `CNAME` to `cirraya-llc.github.io`. If that DNS sits behind
 Cloudflare it must stay **DNS only**: proxied, GitHub cannot issue the certificate.
@@ -40,23 +44,28 @@ The build script does two things:
    After copying, the script `cmp`s them byte for byte and fails the entire build on
    a mismatch: better not to publish at all than to publish an index that blows up
    when a client pulls it.
-2. Generates three pages from `index.template.html` + `i18n.json` (next section).
+2. Generates two pages per language, the home page from `index.template.html` and the
+   package list from `packages.template.html`, both with `i18n.json` (next section).
+   Shared markup lives once in `partials/` (`{{>head}}`, `{{>foot}}`). It needs Python
+   3.11+ (`tomllib`, to read each entry's platforms and licence).
 
 **Everything generated is in `.gitignore`**: `site/index.json`, `site/index.html`,
-`site/zh-Hans/`, `site/zh-Hant/`. What's maintained by hand in the repo is only
-`index.template.html`, `i18n.json`, `style.css`, `app.js`, `404.html`.
+`site/packages/`, `site/zh-Hans/`, `site/zh-Hant/`. What's maintained by hand in the repo is only
+the two templates, `partials/`, `i18n.json`, `style.css`, `app.js`, `404.html`.
 
 ---
 
 ## How the three languages work
 
 ```
-site/index.template.html   one template, copy slots written as {{key}}
-site/i18n.json             one content file, one key in three languages
+site/index.template.html      the home page, copy slots written as {{key}}
+site/packages.template.html   every package
+site/partials/*.html          header and footer, pulled in with {{>name}}
+site/i18n.json                one content file, one key in three languages
         ↓  the python3 block in scripts/build-site.sh
-site/index.html            en (default, site root)
-site/zh-Hans/index.html
-site/zh-Hant/index.html
+site/index.html               en (default, site root)    site/packages/index.html
+site/zh-Hans/index.html                                   site/zh-Hans/packages/index.html
+site/zh-Hant/index.html                                   site/zh-Hant/packages/index.html
 ```
 
 **We do not hand-maintain three HTML files** — they will drift, and this site carries
