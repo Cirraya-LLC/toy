@@ -253,6 +253,28 @@ pre.cmd { padding-right: 4.25rem; margin-bottom: .85rem; }
   padding: .22rem .5rem; white-space: nowrap;
 }
 
+.pkg-toolbar select {
+  font: 400 .85rem/1.4 var(--mono);
+  color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: .5rem .55rem;
+}
+.pkg-meta { display: flex; gap: .4rem; flex-wrap: wrap; margin: 0 0 .5rem; }
+.pkg-meta span {
+  font: 400 .72rem/1 var(--mono); color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 3px; padding: .2rem .4rem;
+}
+.tag-own {
+  font: 400 .72rem/1 var(--mono);
+  color: var(--ok);
+  border: 1px solid currentColor; border-radius: 999px;
+  padding: .22rem .5rem; white-space: nowrap;
+}
+.pkg-all { margin: .25rem 0 1rem; font: 400 .95rem/1.4 var(--mono); }
+.pkgs-page h1 { font-size: 1.75rem; }
+/* An author `display` beats the [hidden] attribute, so say it again for the two we hide. */
+.pkg[hidden], .pkg-toolbar[hidden] { display: none; }
+
 .fallback, .pkg-error {
   border: 1px solid var(--line); border-left: 3px solid var(--warn);
   background: var(--panel); padding: .8rem .95rem; border-radius: 4px;

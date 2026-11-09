@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           mkdir _site
           cp -R site/. _site/
-          rm _site/README.md _site/index.template.html _site/i18n.json
+          rm -r _site/README.md _site/index.template.html _site/packages.template.html _site/i18n.json _site/partials
 
       - uses: actions/upload-pages-artifact@v5
         with:

@@ -1,0 +1,34 @@
+{{>head}}
+<main id="main">
+
+<section class="wrap pkgs-page">
+  <h1>{{pkgs_h1}}</h1>
+  <p class="lede">{{pkgs_lede_html}}</p>
+
+  <!-- Hidden until app.js runs: without JS the whole list is already on the page,
+       most stars first, and controls that do nothing would only mislead. -->
+  <div class="pkg-toolbar" id="pkg-tools" hidden>
+    <label class="sr-only" for="q">{{pkg_filter_label}}</label>
+    <input id="q" type="search" placeholder="{{pkg_filter_ph}}" autocomplete="off" spellcheck="false">
+    <label class="sr-only" for="os">{{pkgs_os_label}}</label>
+    <select id="os">
+      <option value="">{{pkgs_os_all}}</option>
+      <option value="linux">{{pkgs_os_linux}}</option>
+      <option value="macos">{{pkgs_os_macos}}</option>
+    </select>
+    <label class="sr-only" for="sort">{{pkgs_sort_label}}</label>
+    <select id="sort">
+      <option value="stars">{{pkgs_sort_stars}}</option>
+      <option value="name">{{pkgs_sort_name}}</option>
+    </select>
+  </div>
+  <p id="count" class="fine" aria-live="polite">{{pkg_count}}</p>
+
+  {{pkgrows}}
+
+  <p class="fine">{{pkg_inline_fine_html}}</p>
+</section>
+
+</main>
+
+{{>foot}}
