@@ -54,6 +54,7 @@ var usageLines = []string{
 	"       toy-index delist  --reason <why> owner/repo...   its maintainer asked (index/delisted.txt)",
 	"       toy-index drop    owner/repo...                  remove for now; discovery may propose it again",
 	"       toy-index add --toyfile <toy.toml> [--update] owner/repo   a hand-written inline entry, held to gen's rules",
+	"       toy-index dead --state <file> [--results <tsv>[,<tsv>...]] [--days 3] [--apply] [--report <pr-body.md>]",
 	"",
 	"  --repos   Repo list, one owner/repo per line. # starts a comment (whole line or trailing); blank lines ignored",
 	"  --out     Index JSON to merge into (a new empty one is created if it does not exist)",
@@ -72,6 +73,10 @@ var usageLines = []string{
 	"",
 	"  merge moves into --into the generated entries that index-check (--results) passed somewhere and",
 	"  failed nowhere, and writes the pull request text, flagging command names a person should check.",
+	"",
+	"  dead finds entries whose GitHub repository is gone or has no releases left, and that index-check",
+	"  (--results) failed and passed nowhere. --state counts the daily runs in a row that found each one;",
+	"  at --days, --apply drops it from the index and --report gets the pull request text.",
 	"",
 	"Flags go before positional arguments: Go's flag package stops parsing at the first non-flag argument.",
 }
@@ -107,11 +112,13 @@ func run(ctx context.Context, args []string) error {
 		return runRemove(ctx, args[0], args[1:])
 	case "add":
 		return runAdd(ctx, args[1:])
+	case "dead":
+		return runDead(ctx, args[1:])
 	case "-h", "--help", "help":
 		printUsage()
 		return nil
 	default:
-		return fmt.Errorf("unknown subcommand %q; the subcommands are gen, discover, merge, add, decline, delist and drop", args[0])
+		return fmt.Errorf("unknown subcommand %q; the subcommands are gen, discover, merge, add, dead, decline, delist and drop", args[0])
 	}
 }
 

@@ -232,6 +232,22 @@ fix that entry in this JSON; **network** = retry, don't touch the index; **run**
 it installed but won't run (upstream's release is broken, or the in-package path on
 the right of `[bin]` was guessed wrong).
 
+A failing scheduled run opens an `index-check failed` issue (or comments on the open
+one), and the first green run closes it.
+
+**One kind of failure removes itself**: an upstream with nothing left to install --
+the repository deleted or made private, or every release gone. No edit to the entry
+can fix that, so when the daily run fails it and GitHub confirms it on **three daily
+runs in a row**, `toy-index dead` drops the entry, and the run opens a pull request and
+merges it the way discovery does. It is a `drop`, not a `decline`: if releases come
+back, discovery may propose the repo again. Anything else that fails -- a renamed
+asset, a release that went out without some of its builds -- still has a release in
+place and stays on the issue for a person.
+
+```bash
+GITHUB_TOKEN=$(gh auth token) go run ./cmd/toy-index dead --state /tmp/dead.tsv --days 1   # who looks dead right now
+```
+
 ## What's in it
 
 The JSON file is the list, and https://toy.cirraya.com shows it with search. It
