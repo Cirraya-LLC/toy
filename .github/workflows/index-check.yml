@@ -78,7 +78,18 @@ jobs:
         # for the rate limit.
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: bash scripts/index-check.sh
+        run: |
+          mkdir -p out
+          bash scripts/index-check.sh --results "out/results-${{ matrix.os }}.tsv"
+
+      # For the dead job below. Kept even when entries fail, which is when it matters.
+      - uses: actions/upload-artifact@v7
+        if: always() && github.event_name != 'pull_request'
+        with:
+          name: results-${{ matrix.os }}
+          path: out/results-${{ matrix.os }}.tsv
+          if-no-files-found: ignore
+          retention-days: 7
 
       # index-check above installs and runs, which it can only do for the platform
       # of this runner. This one HEADs every platform an entry declares, and it is
@@ -123,4 +134,122 @@ jobs:
             gh issue comment "$existing" --body "$body"
           else
             gh issue create --title "$title" --body "$body"
+          fi
+
+  # A green scheduled run closes what the red ones opened, so an open issue always means
+  # something is broken today.
+  resolved:
+    needs: check
+    if: success() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: close the open index-check issue, if any
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list --state open --limit 100 --json number,title \
+                       --jq '.[] | select(.title | startswith("index-check failed")) | .number'); do
+            gh issue close "$n" --comment "Today's scheduled run passed: $RUN_URL"
+          done
+
+  # An entry whose upstream has nothing left to install -- the repository deleted or made
+  # private, every release gone -- fails above every day, and no edit to the entry can
+  # help. When today's results and GitHub agree on that for three daily runs in a row
+  # (cmd/toy-index/dead.go), the entry is dropped by a pull request this job merges, the
+  # same way a discovery batch is. Every other failure stays on the issue for a person.
+  dead:
+    needs: check
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # most of it is waiting for the PR's own required checks
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write   # the count's cache, the PR's held checks, the site deploy
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: results-*
+          path: out
+          merge-multiple: true
+
+      # The count of days in a row lives in the Actions cache, one entry per run; the
+      # newest is restored. An evicted cache starts the count again, which only delays.
+      - uses: actions/cache/restore@v6
+        with:
+          path: state
+          key: index-dead-${{ github.run_id }}
+          restore-keys: index-dead-
+
+      - name: count the dead, and drop the ones dead for three days
+        id: count
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A day one leg left no results is no evidence either way: the count stays as
+          # it was, neither advanced nor reset.
+          for os in ubuntu-latest macos-latest; do
+            [ -s "out/results-$os.tsv" ] || { echo "the $os leg left no results; not counting today"; exit 0; }
+          done
+          go run ./cmd/toy-index dead --state state/dead.tsv --days 3 --apply --report out/drop.md \
+            --results out/results-ubuntu-latest.tsv,out/results-macos-latest.tsv
+          echo "counted=1" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache/save@v6
+        if: steps.count.outputs.counted == '1'
+        with:
+          path: state
+          key: index-dead-${{ github.run_id }}
+
+      - name: open the pull request, and merge it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- index/toy-index.json; then
+            echo "nothing has been dead for three days"
+            exit 0
+          fi
+          open=$(gh pr list --state open --json number,headRefName \
+                   --jq '[.[] | select(.headRefName | startswith("index/drop-"))][0].number // empty')
+          if [ -n "$open" ]; then
+            echo "#$open is still open; not opening a second one"
+            exit 0
+          fi
+          ids=$(git diff -U0 -- index/toy-index.json \
+                  | { grep -oE '^-[[:space:]]*"id"[[:space:]]*:[[:space:]]*"[^"]+"' || true; } \
+                  | sed 's/.*"\([^"]*\)"$/\1/' | paste -sd' ' -)
+          n=$(wc -w <<<"$ids" | tr -d ' ')
+          printf '\nFound by the daily index-check: %s\n' "$RUN_URL" >> out/drop.md
+          branch="index/drop-$(date -u +%F)-${{ github.run_number }}"
+          git config user.name Cirraya
+          git config user.email tech@cirraya.com
+          git switch -c "$branch"
+          git add index/toy-index.json
+          git commit -q -m "index: drop $n entries whose upstream has nothing left to install" -m "$ids"
+          git push -q origin "$branch"
+          # The number comes from create's own output, never from a listing.
+          url=$(gh pr create --base main --head "$branch" \
+            --title "index: drop $n entries whose upstream has nothing left to install" --body-file out/drop.md)
+          num="${url##*/}"
+          echo "opened #$num: $ids"
+          bash scripts/automerge.sh "$num" "$branch"
+          # Say so where people are already looking.
+          issue=$(gh issue list --state open --limit 100 --json number,title \
+                    --jq '[.[] | select(.title | startswith("index-check failed"))] | sort_by(.number) | .[0].number // empty')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "Dropped in #$num, upstream has nothing left to install: $ids"
           fi

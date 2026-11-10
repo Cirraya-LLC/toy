@@ -169,47 +169,30 @@ jobs:
           num="${url##*/}"
           echo "opened #$num"
           echo "PR_NUMBER=$num" >> "$GITHUB_ENV"
-          # GitHub creates the pull request's own checks (ci, index-check) but holds them
-          # for a maintainer's approval, because github-actions[bot] opened it. Approve
-          # them here; if GitHub refuses, the PR shows "Approve and run" instead.
-          sleep 20
-          for id in $(gh run list --branch "$branch" --json databaseId,conclusion \
-                        --jq '.[] | select(.conclusion == "action_required") | .databaseId'); do
-            gh api -X POST "repos/${{ github.repository }}/actions/runs/$id/approve" \
-              || echo "could not approve run $id; approve it on the pull request"
-          done
+          echo "PR_BRANCH=$branch" >> "$GITHUB_ENV"
 
       # The owner's call (2026-10-31): a batch with nothing that could take another
       # command's name merges itself, so an unreviewed PR no longer stops the index from
       # growing (one batch at a time). A blocking flag -- a name already in the index, a
-      # common system command, a generic word -- still waits for a person.
-      #
-      # Merged here, synchronously, rather than with GitHub's auto-merge: a merge done
-      # with GITHUB_TOKEN starts no push workflows, so pages.yml would never publish the
-      # index. This job merges, then starts the deploy by hand.
+      # common system command, a generic word -- still waits for a person. The PR's held
+      # checks are approved either way (scripts/automerge.sh does it on the way).
       - name: merge it, unless a name needs a person
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           [ -n "${PR_NUMBER:-}" ] || exit 0
           if [ -s out/flagged.txt ]; then
             gh pr comment "$PR_NUMBER" --body "Not merged automatically: a command name needs a person (see \"Command names to look at\")."
             echo "flagged, waiting for a person:"; cat out/flagged.txt
+            # Still start its checks, so the person finds them already run.
+            sleep 20
+            for id in $(gh run list --branch "$PR_BRANCH" --json databaseId,conclusion \
+                          --jq '.[] | select(.conclusion == "action_required") | .databaseId'); do
+              gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null || true
+            done
             exit 0
           fi
-          # The four required checks (main's branch protection) appear once the runs
-          # approved above start; wait for them to exist, then for them to finish.
-          for _ in $(seq 1 60); do
-            have=$(gh pr checks "$PR_NUMBER" --required --json name --jq 'length' 2>/dev/null || echo 0)
-            [ "$have" -ge 4 ] && break
-            sleep 15
-          done
-          if ! gh pr checks "$PR_NUMBER" --required --watch --interval 30; then
-            gh pr comment "$PR_NUMBER" --body "Not merged automatically: a required check failed."
-            exit 1
-          fi
-          gh pr merge "$PR_NUMBER" --rebase
-          gh workflow run pages.yml --ref main
-          echo "merged #$PR_NUMBER and started the site deploy"
+          bash scripts/automerge.sh "$PR_NUMBER" "$PR_BRANCH"
 
